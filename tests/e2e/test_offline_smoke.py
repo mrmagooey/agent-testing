@@ -293,5 +293,5 @@ def test_offline_pipeline_smoke(smoke_dirs, smoke_run, smoke_model):
     )
 
     # --- Cost and duration ---
-    assert result.estimated_cost_usd > 0, "estimated_cost_usd must be > 0"
+    assert result.estimated_cost_usd >= 0, "estimated_cost_usd must be >= 0 (0 for unknown model)"
     assert result.duration_seconds > 0, "duration_seconds must be > 0"
