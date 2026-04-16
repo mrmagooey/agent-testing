@@ -1,0 +1,8 @@
+default_cap: 4
+
+per_model:
+  gpt-4o: 6
+  claude-opus-4: 3
+  gemini-2.0-pro: 4
+  mistral-large: 4
+  command-r-plus: 4

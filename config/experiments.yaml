@@ -1,0 +1,80 @@
+batch_id: "batch_example"
+dataset:
+  name: "django-cms-cve-2021-mixed"
+  version: "1.3.0"
+
+models:
+  - id: "gpt-4o"
+  - id: "claude-opus-4"
+  - id: "gemini-2.0-pro"
+  - id: "mistral-large"
+  - id: "command-r-plus"
+
+strategies:
+  - name: "single_agent"
+    config:
+      max_turns: 80
+
+  - name: "per_file"
+    config:
+      max_turns_per_file: 20
+      skip_patterns: ["**/test_*", "**/*.min.js", "**/vendor/**"]
+
+  - name: "per_vuln_class"
+    config:
+      max_turns_per_class: 40
+      vuln_classes:
+        - sqli
+        - xss
+        - ssrf
+        - rce
+        - auth_bypass
+        - crypto_misuse
+        - hardcoded_secret
+        - path_traversal
+        - logic_bug
+        - deserialization
+
+  - name: "sast_first"
+    config:
+      max_turns_per_file: 25
+      semgrep_config: "p/owasp-top-ten"
+
+  - name: "diff_review"
+    config:
+      max_turns: 60
+
+tool_variants:
+  - "with_tools"
+  - "without_tools"
+
+# Optional dimensions — omit or single-element list to hold constant
+review_profiles:
+  - "default"
+
+verification_variants:
+  - "none"
+  - "with_verification"
+
+parallel_modes:
+  - false
+
+# Repetitions — run each matrix cell N times for statistical significance
+num_repetitions: 1                # increase to 3-5 for significance testing
+
+# Cross-model verification — optional
+# verifier_model_id: "claude-opus-4"  # uncomment to use a different model for verification
+
+# Spend control — coordinator auto-cancels remaining jobs when exceeded
+max_batch_cost_usd: 500.00
+
+# Global cap on concurrent experiment runs across all models.
+# Per-model caps in concurrency.yaml further constrain this.
+max_parallel_runs: 10
+
+# Evidence quality assessment
+evaluation:
+  evidence_assessor: "heuristic"      # or "llm_judge"
+  # evidence_judge_model: "claude-opus-4"  # only used when evidence_assessor = llm_judge
+
+output_root: "outputs/"

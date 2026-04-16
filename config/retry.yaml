@@ -1,0 +1,39 @@
+# config/retry.yaml — per-provider retry policies
+
+defaults:
+  max_retries: 3
+  base_delay: 1.0
+  max_delay: 60.0
+  jitter: true
+  retryable_status_codes: [429, 503, 529]
+
+providers:
+  openai:
+    max_retries: 5
+    base_delay: 1.0
+    max_delay: 32.0
+    # 429 carries Retry-After header; honoured via exc.retry_after
+
+  anthropic:
+    max_retries: 4
+    base_delay: 2.0
+    max_delay: 60.0
+    retryable_status_codes: [429, 529]
+    # 529 = overloaded; treat same as rate-limit
+
+  gemini:
+    max_retries: 4
+    base_delay: 1.5
+    max_delay: 45.0
+
+  mistral:
+    max_retries: 3
+    base_delay: 1.0
+    max_delay: 30.0
+
+  cohere:
+    max_retries: 3
+    base_delay: 2.0
+    max_delay: 30.0
+    jitter: false
+    # Cohere rate limits are quota-based; jitter is less effective

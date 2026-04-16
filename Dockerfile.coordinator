@@ -1,0 +1,23 @@
+# Stage 1: Build the React/Vite frontend
+FROM node:22-slim AS frontend-build
+
+WORKDIR /frontend
+COPY frontend/ .
+RUN npm ci
+RUN npm run build
+
+# Stage 2: Python coordinator image
+FROM python:3.14-slim
+
+WORKDIR /app
+
+COPY pyproject.toml .
+COPY src/ src/
+RUN pip install --no-cache-dir ".[coordinator]"
+
+# Copy the built frontend static assets
+COPY --from=frontend-build /frontend/dist /app/frontend/dist
+
+EXPOSE 8080
+
+ENTRYPOINT ["uvicorn", "sec_review_framework.coordinator:app", "--host", "0.0.0.0", "--port", "8080"]

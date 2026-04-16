@@ -1,0 +1,11 @@
+FROM python:3.14-slim
+
+# Install framework with worker extras (includes semgrep)
+COPY pyproject.toml .
+COPY src/ src/
+RUN pip install --no-cache-dir ".[worker]" && semgrep --version
+
+# Download offline Semgrep rules (no cloud dependency at runtime)
+RUN semgrep --config p/owasp-top-ten --dry-run /dev/null 2>/dev/null || true
+
+ENTRYPOINT ["python", "-m", "sec_review_framework.worker"]

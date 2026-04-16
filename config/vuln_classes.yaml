@@ -1,0 +1,80 @@
+vuln_classes:
+  sqli:
+    display_name: "SQL Injection"
+    cwe_ids: ["CWE-89"]
+    owasp_category: "A03:2021"
+
+  xss:
+    display_name: "Cross-Site Scripting"
+    cwe_ids: ["CWE-79"]
+    owasp_category: "A03:2021"
+
+  ssrf:
+    display_name: "Server-Side Request Forgery"
+    cwe_ids: ["CWE-918"]
+    owasp_category: "A10:2021"
+
+  rce:
+    display_name: "Remote Code Execution"
+    cwe_ids: ["CWE-78", "CWE-94"]
+    owasp_category: "A03:2021"
+
+  idor:
+    display_name: "Insecure Direct Object Reference"
+    cwe_ids: ["CWE-639", "CWE-284"]
+    owasp_category: "A01:2021"
+
+  auth_bypass:
+    display_name: "Authentication Bypass"
+    cwe_ids: ["CWE-287", "CWE-306"]
+    owasp_category: "A07:2021"
+
+  crypto_misuse:
+    display_name: "Cryptographic Misuse"
+    cwe_ids: ["CWE-326", "CWE-327", "CWE-328", "CWE-330"]
+    owasp_category: "A02:2021"
+
+  hardcoded_secret:
+    display_name: "Hardcoded Secret"
+    cwe_ids: ["CWE-798", "CWE-259"]
+    owasp_category: "A02:2021"
+
+  path_traversal:
+    display_name: "Path Traversal"
+    cwe_ids: ["CWE-22"]
+    owasp_category: "A01:2021"
+
+  supply_chain:
+    display_name: "Supply Chain / Dependency Risk"
+    cwe_ids: ["CWE-1104"]
+    owasp_category: "A06:2021"
+
+  memory_safety:
+    display_name: "Memory Safety"
+    cwe_ids: ["CWE-119", "CWE-120", "CWE-416", "CWE-476"]
+    owasp_category: null
+
+  logic_bug:
+    display_name: "Logic Bug"
+    cwe_ids: ["CWE-840", "CWE-754"]
+    owasp_category: "A04:2021"
+
+  deserialization:
+    display_name: "Insecure Deserialization"
+    cwe_ids: ["CWE-502"]
+    owasp_category: "A08:2021"
+
+  xxe:
+    display_name: "XML External Entity"
+    cwe_ids: ["CWE-611"]
+    owasp_category: "A05:2021"
+
+  open_redirect:
+    display_name: "Open Redirect"
+    cwe_ids: ["CWE-601"]
+    owasp_category: "A01:2021"
+
+  other:
+    display_name: "Other"
+    cwe_ids: []
+    owasp_category: null

@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: coordinator
+  namespace: sec-review
+  labels:
+    app: sec-review-coordinator
+spec:
+  type: ClusterIP
+  selector:
+    app: sec-review-coordinator
+  ports:
+    - port: 8080
+      targetPort: 8080

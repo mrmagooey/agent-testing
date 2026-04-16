@@ -1,0 +1,20 @@
+models:
+  gpt-4o:
+    input_per_million: 5.00
+    output_per_million: 15.00
+
+  claude-opus-4:
+    input_per_million: 15.00
+    output_per_million: 75.00
+
+  gemini-2.0-pro:
+    input_per_million: 3.50
+    output_per_million: 10.50
+
+  mistral-large:
+    input_per_million: 4.00
+    output_per_million: 12.00
+
+  command-r-plus:
+    input_per_million: 3.00
+    output_per_million: 15.00

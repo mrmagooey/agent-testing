@@ -1,0 +1,31 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: dataset-builder-egress
+  namespace: sec-review
+spec:
+  podSelector:
+    matchLabels:
+      role: dataset-builder
+  policyTypes:
+    - Egress
+  egress:
+    # GitHub HTTPS
+    - ports:
+        - protocol: TCP
+          port: 443
+      to:
+        - ipBlock:
+            cidr: 140.82.112.0/20   # github.com (verify current ranges)
+        - ipBlock:
+            cidr: 192.30.252.0/22
+    # DNS
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # NFS/EFS
+    - ports:
+        - protocol: TCP
+          port: 2049

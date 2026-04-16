@@ -1,0 +1,35 @@
+providers:
+  gpt-4o:
+    provider_class: "OpenAIProvider"
+    model_name: "gpt-4o"
+    temperature: 0.2
+    max_tokens: 8192
+    api_key_env: "OPENAI_API_KEY"
+
+  claude-opus-4:
+    provider_class: "AnthropicProvider"
+    model_name: "claude-opus-4"
+    temperature: 0.2
+    max_tokens: 8192
+    api_key_env: "ANTHROPIC_API_KEY"
+
+  gemini-2.0-pro:
+    provider_class: "GeminiProvider"
+    model_name: "gemini-2.0-pro"
+    temperature: 0.2
+    max_tokens: 8192
+    api_key_env: "GEMINI_API_KEY"
+
+  mistral-large:
+    provider_class: "MistralProvider"
+    model_name: "mistral-large-latest"
+    temperature: 0.2
+    max_tokens: 8192
+    api_key_env: "MISTRAL_API_KEY"
+
+  command-r-plus:
+    provider_class: "CohereProvider"
+    model_name: "command-r-plus"
+    temperature: 0.2
+    max_tokens: 8192
+    api_key_env: "COHERE_API_KEY"

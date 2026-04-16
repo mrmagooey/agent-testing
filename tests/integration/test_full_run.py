@@ -1,0 +1,359 @@
+"""Integration tests for BatchCoordinator-level operations.
+
+Replaces the original placeholder. Tests use a real BatchCoordinator backed
+by a temp SQLite database and temp storage root. K8s is set to None so no
+cluster is required.
+"""
+
+from __future__ import annotations
+
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from unittest.mock import MagicMock
+
+import pytest
+
+from sec_review_framework.coordinator import BatchCoordinator, BatchCostTracker
+from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
+from sec_review_framework.data.experiment import (
+    ExperimentMatrix,
+    ExperimentRun,
+    PromptSnapshot,
+    ReviewProfileName,
+    RunResult,
+    RunStatus,
+    StrategyName,
+    ToolVariant,
+    VerificationVariant,
+)
+from sec_review_framework.data.findings import StrategyOutput
+from sec_review_framework.db import Database
+from sec_review_framework.reporting.markdown import MarkdownReportGenerator
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+async def db(tmp_path: Path) -> Database:
+    database = Database(tmp_path / "test.db")
+    await database.init()
+    return database
+
+
+@pytest.fixture
+def cost_calc() -> CostCalculator:
+    return CostCalculator(
+        pricing={
+            "gpt-4o": ModelPricing(input_per_million=5.0, output_per_million=15.0),
+            "claude-opus-4": ModelPricing(input_per_million=15.0, output_per_million=75.0),
+        }
+    )
+
+
+@pytest.fixture
+async def coordinator(tmp_path: Path, db: Database, cost_calc: CostCalculator) -> BatchCoordinator:
+    storage = tmp_path / "storage"
+    storage.mkdir()
+    return BatchCoordinator(
+        k8s_client=None,       # no K8s needed
+        storage_root=storage,
+        concurrency_caps={},
+        worker_image="worker:latest",
+        namespace="default",
+        db=db,
+        reporter=MarkdownReportGenerator(),
+        cost_calculator=cost_calc,
+        default_cap=4,
+    )
+
+
+def _minimal_matrix(batch_id: str = "test-batch") -> ExperimentMatrix:
+    return ExperimentMatrix(
+        batch_id=batch_id,
+        dataset_name="test-dataset",
+        dataset_version="1.0.0",
+        model_ids=["gpt-4o"],
+        strategies=[StrategyName.SINGLE_AGENT],
+        tool_variants=[ToolVariant.WITH_TOOLS],
+        review_profiles=[ReviewProfileName.DEFAULT],
+        verification_variants=[VerificationVariant.NONE],
+        parallel_modes=[False],
+    )
+
+
+def _run_result_json(run: ExperimentRun) -> str:
+    """Build a minimal RunResult JSON that passes model_validate_json."""
+    result = RunResult(
+        experiment=run,
+        status=RunStatus.COMPLETED,
+        findings=[],
+        strategy_output=StrategyOutput(
+            findings=[], pre_dedup_count=0, post_dedup_count=0, dedup_log=[]
+        ),
+        prompt_snapshot=PromptSnapshot.capture(
+            system_prompt="sys",
+            user_message_template="usr",
+            finding_output_format="fmt",
+        ),
+        tool_call_count=0,
+        total_input_tokens=100,
+        total_output_tokens=50,
+        verification_tokens=0,
+        estimated_cost_usd=0.01,
+        duration_seconds=10.0,
+        completed_at=datetime(2026, 4, 16, tzinfo=timezone.utc),
+    )
+    return result.model_dump_json(indent=2)
+
+
+# ---------------------------------------------------------------------------
+# Test 1: submit_batch creates batch + runs in DB
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_submit_batch_creates_db_records(coordinator, db):
+    matrix = _minimal_matrix("batch-001")
+    batch_id = await coordinator.submit_batch(matrix)
+
+    assert batch_id == "batch-001"
+
+    batch_row = await db.get_batch("batch-001")
+    assert batch_row is not None
+    assert batch_row["total_runs"] == 1
+    assert batch_row["status"] == "pending"
+
+    runs = await db.list_runs("batch-001")
+    assert len(runs) == 1
+    assert runs[0]["model_id"] == "gpt-4o"
+    assert runs[0]["strategy"] == "single_agent"
+
+
+@pytest.mark.asyncio
+async def test_submit_batch_multi_dim_expands_correctly(coordinator, db):
+    matrix = ExperimentMatrix(
+        batch_id="batch-multi",
+        dataset_name="ds",
+        dataset_version="1.0",
+        model_ids=["gpt-4o", "claude-opus-4"],
+        strategies=[StrategyName.SINGLE_AGENT, StrategyName.PER_FILE],
+        tool_variants=[ToolVariant.WITH_TOOLS],
+        review_profiles=[ReviewProfileName.DEFAULT],
+        verification_variants=[VerificationVariant.NONE],
+        parallel_modes=[False],
+    )
+    await coordinator.submit_batch(matrix)
+
+    runs = await db.list_runs("batch-multi")
+    assert len(runs) == 4  # 2 models * 2 strategies
+
+
+# ---------------------------------------------------------------------------
+# Test 2: get_batch_status returns correct counts
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_get_batch_status_counts(coordinator, db):
+    matrix = _minimal_matrix("batch-status")
+    await coordinator.submit_batch(matrix)
+
+    status = await coordinator.get_batch_status("batch-status")
+    assert status.batch_id == "batch-status"
+    assert status.total == 1
+    # K8s is None so the run stays pending
+    assert status.pending + status.running + status.completed + status.failed == 1
+
+
+@pytest.mark.asyncio
+async def test_get_batch_status_404_for_unknown(coordinator):
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as exc_info:
+        await coordinator.get_batch_status("no-such-batch")
+    assert exc_info.value.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Test 3: collect_results reads run_result.json files
+# ---------------------------------------------------------------------------
+
+def test_collect_results_reads_result_files(coordinator, tmp_path):
+    """Write a synthetic run_result.json and verify collect_results picks it up."""
+    matrix = _minimal_matrix("batch-cr")
+    runs = matrix.expand()
+    run = runs[0]
+
+    batch_dir = coordinator.storage_root / "outputs" / "batch-cr" / run.id
+    batch_dir.mkdir(parents=True)
+    (batch_dir / "run_result.json").write_text(_run_result_json(run))
+
+    results = coordinator.collect_results("batch-cr")
+    assert len(results) == 1
+    assert results[0].experiment.id == run.id
+    assert results[0].status == RunStatus.COMPLETED
+
+
+def test_collect_results_empty_when_no_outputs(coordinator):
+    results = coordinator.collect_results("batch-nonexistent")
+    assert results == []
+
+
+def test_collect_results_skips_malformed_json(coordinator):
+    batch_dir = coordinator.storage_root / "outputs" / "batch-bad" / "run-xyz"
+    batch_dir.mkdir(parents=True)
+    (batch_dir / "run_result.json").write_text("NOT VALID JSON {{{{")
+
+    results = coordinator.collect_results("batch-bad")
+    assert results == []
+
+
+# ---------------------------------------------------------------------------
+# Test 4: finalize_batch generates matrix reports
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_finalize_batch_writes_matrix_report(coordinator, db):
+    matrix = _minimal_matrix("batch-fin")
+    await coordinator.submit_batch(matrix)
+
+    # Seed a result file so finalize has something to render
+    runs = matrix.expand()
+    run = runs[0]
+    batch_dir = coordinator.storage_root / "outputs" / "batch-fin" / run.id
+    batch_dir.mkdir(parents=True)
+    (batch_dir / "run_result.json").write_text(_run_result_json(run))
+
+    await coordinator.finalize_batch("batch-fin")
+
+    # matrix_report.md should exist
+    report = coordinator.storage_root / "outputs" / "batch-fin" / "matrix_report.md"
+    assert report.exists()
+    assert len(report.read_text()) > 0
+
+    # DB status updated to completed
+    batch_row = await db.get_batch("batch-fin")
+    assert batch_row["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_finalize_batch_no_results_still_completes(coordinator, db):
+    """finalize_batch with no result files should not crash and marks DB completed."""
+    matrix = _minimal_matrix("batch-empty-fin")
+    await coordinator.submit_batch(matrix)
+    await coordinator.finalize_batch("batch-empty-fin")
+
+    batch_row = await db.get_batch("batch-empty-fin")
+    assert batch_row["status"] == "completed"
+
+
+# ---------------------------------------------------------------------------
+# Test 5: BatchCostTracker.record_job_cost returns True when cap exceeded
+# ---------------------------------------------------------------------------
+
+def test_batch_cost_tracker_cap_exceeded():
+    tracker = BatchCostTracker(batch_id="batch-cap", cap_usd=1.00)
+    assert not tracker.record_job_cost(0.50)
+    assert tracker.spent_usd == pytest.approx(0.50)
+    assert not tracker._cancelled
+
+    # Next call pushes us over the cap
+    exceeded = tracker.record_job_cost(0.60)
+    assert exceeded is True
+    assert tracker._cancelled is True
+    assert tracker.spent_usd == pytest.approx(1.10)
+
+
+def test_batch_cost_tracker_no_cap_never_triggers():
+    tracker = BatchCostTracker(batch_id="batch-nocap", cap_usd=None)
+    for _ in range(10):
+        result = tracker.record_job_cost(100.0)
+        assert result is False
+    assert tracker.spent_usd == pytest.approx(1000.0)
+    assert tracker._cancelled is False
+
+
+def test_batch_cost_tracker_exact_cap_triggers():
+    tracker = BatchCostTracker(batch_id="batch-exact", cap_usd=1.00)
+    result = tracker.record_job_cost(1.00)
+    assert result is True
+    assert tracker._cancelled is True
+
+
+def test_batch_cost_tracker_already_cancelled_returns_false():
+    """Once cancelled, subsequent calls should not re-trigger (idempotent guard)."""
+    tracker = BatchCostTracker(batch_id="batch-idem", cap_usd=0.50)
+    tracker.record_job_cost(1.00)  # triggers cancellation
+    assert tracker._cancelled is True
+    # Second call — cap already marked, should not re-cancel
+    result = tracker.record_job_cost(0.01)
+    assert result is False
+
+
+# ---------------------------------------------------------------------------
+# Test 6: cancel_batch marks batch cancelled in DB (no K8s required)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_cancel_batch_updates_db_status(coordinator, db):
+    matrix = _minimal_matrix("batch-cancel")
+    await coordinator.submit_batch(matrix)
+
+    cancelled_count = await coordinator.cancel_batch("batch-cancel")
+    # No K8s client, so no jobs to cancel
+    assert cancelled_count == 0
+
+    batch_row = await db.get_batch("batch-cancel")
+    assert batch_row["status"] == "cancelled"
+
+
+# ---------------------------------------------------------------------------
+# Test 7: reconcile is idempotent (calling twice doesn't crash or duplicate)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_reconcile_is_idempotent(coordinator, db):
+    # Submit a batch so reconcile has something to look at
+    matrix = _minimal_matrix("batch-reconcile")
+    await coordinator.submit_batch(matrix)
+
+    # Mark the run as completed so reconcile finalizes rather than re-dispatches
+    runs = await db.list_runs("batch-reconcile")
+    for run in runs:
+        await db.update_run(run["id"], status="completed")
+
+    # Seed result file so finalize doesn't fail
+    run_id = runs[0]["id"]
+    run_obj = matrix.expand()[0]
+    batch_dir = coordinator.storage_root / "outputs" / "batch-reconcile" / run_id
+    batch_dir.mkdir(parents=True)
+    (batch_dir / "run_result.json").write_text(_run_result_json(run_obj))
+
+    # First reconcile
+    await coordinator.reconcile()
+    batch_row_1 = await db.get_batch("batch-reconcile")
+
+    # Second reconcile — should be a no-op on completed batch
+    await coordinator.reconcile()
+    batch_row_2 = await db.get_batch("batch-reconcile")
+
+    assert batch_row_1["status"] == batch_row_2["status"]
+
+
+# ---------------------------------------------------------------------------
+# Test 8: delete_batch removes output directory
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_delete_batch_removes_output_dir(coordinator, db):
+    matrix = _minimal_matrix("batch-del")
+    await coordinator.submit_batch(matrix)
+
+    # Create an output dir to be cleaned up
+    output_dir = coordinator.storage_root / "outputs" / "batch-del"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "dummy.json").write_text("{}")
+
+    assert output_dir.exists()
+    await coordinator.delete_batch("batch-del")
+    assert not output_dir.exists()

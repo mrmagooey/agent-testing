@@ -1,0 +1,54 @@
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: secreviewjobimage
+spec:
+  crd:
+    spec:
+      names:
+        kind: SecReviewJobImage
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            allowedImages:
+              type: array
+              items:
+                type: string
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package secreviewjobimage
+
+        violation[{"msg": msg}] {
+          input.review.kind.kind == "Job"
+          containers := array.concat(
+            object.get(input.review.object.spec.template.spec, "containers", []),
+            object.get(input.review.object.spec.template.spec, "initContainers", [])
+          )
+          container := containers[_]
+          image := container.image
+          not image_is_allowed(image)
+          msg := sprintf("Image %q not permitted in sec-review namespace", [image])
+        }
+
+        image_is_allowed(image) {
+          image == input.parameters.allowedImages[_]
+        }
+---
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: SecReviewJobImage
+metadata:
+  name: restrict-sec-review-job-images
+spec:
+  enforcementAction: deny
+  match:
+    kinds:
+      - apiGroups: ["batch"]
+        kinds: ["Job"]
+    namespaces:
+      - sec-review
+  parameters:
+    allowedImages:
+      - "ghcr.io/myorg/sec-review/worker:v1.0.0"
+      - "ghcr.io/myorg/sec-review/dataset-builder:v1.0.0"

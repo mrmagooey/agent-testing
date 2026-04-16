@@ -17,8 +17,9 @@
 13. [Exfiltration Risk Documentation](#13-exfiltration-risk-documentation)
 14. [Configuration Format](#14-configuration-format)
 15. [Deployment Architecture](#15-deployment-architecture)
-16. [Extension Points](#16-extension-points)
-17. [Future Work: Iterative Review](#17-future-work-iterative-review)
+16. [Web Frontend](#16-web-frontend)
+17. [Extension Points](#17-extension-points)
+18. [Future Work: Iterative Review](#18-future-work-iterative-review)
 
 ---
 
@@ -30,7 +31,8 @@
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │  COORDINATOR SERVICE (K8s Deployment, 1 replica)                            │
 │                                                                             │
-│  HTTP API — the single management interface for the entire framework        │
+│  Serves: React SPA at / + REST API at /api/*                               │
+│  Single image, single port — web UI and API in one deployment              │
 │                                                                             │
 │  Batches:                                                                   │
 │    POST /batches                      — submit new batch (config as body)   │
@@ -41,16 +43,24 @@
 │    GET  /batches/{id}/runs            — list all runs                      │
 │    GET  /batches/{id}/runs/{run_id}   — single run result + findings       │
 │    POST /batches/{id}/cancel          — cancel remaining jobs              │
+│    GET  /batches/{id}/results/download — download reports as .zip          │
+│    GET  /batches/{id}/compare-runs    — side-by-side run comparison        │
 │                                                                             │
 │  Findings:                                                                  │
 │    POST /batches/{id}/runs/{run_id}/reclassify — reclassify a finding      │
 │    GET  /batches/{id}/runs/{run_id}/tool-audit — tool call audit report    │
+│    GET  /batches/{id}/findings/search — free-text search across findings   │
 │                                                                             │
 │  Datasets:                                                                  │
 │    GET  /datasets                     — list available datasets            │
-│    POST /datasets/import-cve          — import a CVE-patched repo          │
+│    POST /datasets/discover-cves       — auto-discover CVEs by criteria     │
+│    POST /datasets/resolve-cve         — resolve a CVE ID to repo+commit   │
+│    POST /datasets/import-cve          — import (auto-resolve or full spec) │
+│    POST /datasets/{name}/inject/preview — dry-run: show diff before inject │
 │    POST /datasets/{name}/inject       — inject a vuln from template        │
 │    GET  /datasets/{name}/labels       — view ground truth labels           │
+│    GET  /datasets/{name}/tree         — repo file tree                    │
+│    GET  /datasets/{name}/file         — read file content (syntax-ready)  │
 │                                                                             │
 │  Feedback:                                                                  │
 │    POST /feedback/compare             — compare two batches                │
@@ -175,10 +185,33 @@ class ModelResponse:
     model_id: str
     raw: dict[str, Any]  # full provider response, for debugging
 
-class ModelProvider(ABC):
-    """Unified interface over any LLM API."""
+@dataclass
+class RetryPolicy:
+    """Per-provider retry configuration. Loaded from config/retry.yaml."""
+    max_retries: int = 3
+    base_delay: float = 1.0          # seconds
+    max_delay: float = 60.0          # seconds
+    jitter: bool = True              # randomize delay to avoid thundering herd
+    retryable_status_codes: list[int] = field(
+        default_factory=lambda: [429, 529, 503]
+    )
 
-    @abstractmethod
+    def compute_delay(self, attempt: int, retry_after: float | None = None) -> float:
+        if retry_after is not None:
+            delay = retry_after          # honour provider's Retry-After header
+        else:
+            delay = min(self.base_delay * (2 ** attempt), self.max_delay)
+        if self.jitter:
+            delay *= (0.5 + random.random() * 0.5)
+        return delay
+
+class ModelProvider(ABC):
+    """Unified interface over any LLM API. Includes retry wrapping."""
+
+    def __init__(self, retry_policy: RetryPolicy | None = None):
+        self.retry_policy = retry_policy or RetryPolicy()
+        self.token_log: list[ModelResponse] = []
+
     def complete(
         self,
         messages: list[Message],
@@ -187,6 +220,46 @@ class ModelProvider(ABC):
         max_tokens: int = 8192,
         temperature: float = 0.2,
     ) -> ModelResponse:
+        """Calls _do_complete() with retry logic around provider rate limits."""
+        policy = self.retry_policy
+        last_exc: Exception | None = None
+
+        for attempt in range(policy.max_retries + 1):
+            try:
+                response = self._do_complete(
+                    messages, tools, system_prompt, max_tokens, temperature
+                )
+                self.token_log.append(response)
+                return response
+            except ProviderRateLimitError as exc:
+                last_exc = exc
+                if attempt == policy.max_retries:
+                    break
+                delay = policy.compute_delay(attempt, retry_after=exc.retry_after)
+                time.sleep(delay)
+            except ProviderError as exc:
+                if exc.status_code not in policy.retryable_status_codes:
+                    raise
+                last_exc = exc
+                if attempt == policy.max_retries:
+                    break
+                delay = policy.compute_delay(attempt)
+                time.sleep(delay)
+
+        raise MaxRetriesExceeded(
+            f"Provider failed after {policy.max_retries} retries"
+        ) from last_exc
+
+    @abstractmethod
+    def _do_complete(
+        self,
+        messages: list[Message],
+        tools: list[ToolDefinition] | None,
+        system_prompt: str | None,
+        max_tokens: int,
+        temperature: float,
+    ) -> ModelResponse:
+        """Provider-specific implementation. Called by complete() with retry wrapping."""
         ...
 
     @abstractmethod
@@ -199,7 +272,7 @@ class ModelProvider(ABC):
         return True
 ```
 
-The five concrete providers (`OpenAIProvider`, `AnthropicProvider`, `GeminiProvider`, `MistralProvider`, `CohereProvider`) each implement this interface. The `complete()` method handles provider-specific message formatting internally. No strategy code touches provider-specific APIs.
+The five concrete providers (`OpenAIProvider`, `AnthropicProvider`, `GeminiProvider`, `MistralProvider`, `CohereProvider`) each implement `_do_complete()`. The base class handles retry logic, token logging, and rate limit backoff. Retry policies are loaded from `config/retry.yaml` and differ per provider (e.g., Anthropic uses 529 for overload, OpenAI returns Retry-After headers on 429).
 
 ### 2.2 Strategy
 
@@ -357,7 +430,18 @@ agent-testing-framework/
 ├── pyproject.toml
 ├── ARCHITECTURE.md
 ├── Dockerfile.worker             # worker container image
-├── Dockerfile.coordinator        # coordinator service image
+├── Dockerfile.coordinator        # coordinator + frontend image (multi-stage build)
+├── Dockerfile.dataset-builder    # dataset builder image (git + import tools)
+│
+├── frontend/                     # React SPA — lightweight web UI
+│   ├── package.json
+│   ├── vite.config.ts
+│   ├── src/
+│   │   ├── pages/                # Dashboard, BatchNew, BatchDetail, CVEDiscovery, etc.
+│   │   ├── components/           # MatrixTable, FindingsExplorer, CostEstimate, etc.
+│   │   ├── api/                  # auto-generated typed client from OpenAPI spec
+│   │   └── hooks/                # useBatch (polling), useEstimate (debounced)
+│   └── dist/                     # built output, bundled into coordinator image
 │
 ├── k8s/                          # Kubernetes manifests
 │   ├── namespace.yaml
@@ -366,6 +450,9 @@ agent-testing-framework/
 │   ├── shared-pvc.yaml           # PersistentVolumeClaim for shared storage
 │   ├── network-policy.yaml       # egress rules for worker pods
 │   ├── secrets.yaml              # placeholder — actual keys via sealed-secrets or external
+│   ├── network-policy-dataset-builder.yaml  # egress for dataset-builder pods
+│   ├── gatekeeper-constraint.yaml  # image restriction for Jobs
+│   ├── fluentd-config.yaml       # Fluentd ConfigMap for worker log shipping
 │   ├── servicemonitor.yaml       # Prometheus ServiceMonitor for coordinator
 │   └── grafana-dashboard.json    # pre-built dashboard
 │
@@ -373,9 +460,13 @@ agent-testing-framework/
 │   ├── experiments.yaml          # primary experiment definition
 │   ├── models.yaml               # model provider credentials/settings
 │   ├── concurrency.yaml          # per-model concurrency caps
+│   ├── retry.yaml                # per-provider retry policies
 │   ├── pricing.yaml              # per-model token pricing for cost estimates
+│   ├── coordinator.yaml          # retention, cleanup, job TTL settings
 │   ├── review_profiles.yaml      # pre-canned review profile definitions
-│   └── vuln_classes.yaml         # canonical vulnerability class definitions
+│   ├── vuln_classes.yaml         # canonical vulnerability class definitions
+│   └── prompts/                  # versioned prompt snapshots (auto-populated)
+│       └── {strategy}/{snapshot_id}.yaml
 │
 ├── datasets/
 │   ├── targets/                  # checked-out target codebases (gitignored)
@@ -447,13 +538,15 @@ agent-testing-framework/
 │       │   ├── __init__.py
 │       │   ├── models.py         # GroundTruthLabel, TargetCodebase, LabelStore
 │       │   ├── cve_importer.py   # CVEImporter
-│       │   └── vuln_injector.py  # VulnInjector, InjectionTemplate
+│       │   ├── vuln_injector.py  # VulnInjector, InjectionTemplate
+│       │   └── diff_generator.py # DiffDatasetGenerator
 │       │
 │       ├── evaluation/
 │       │   ├── __init__.py
-│       │   ├── evaluator.py      # Evaluator ABC, FileLevelEvaluator
+│       │   ├── evaluator.py      # Evaluator ABC, FileLevelEvaluator (bipartite matching)
 │       │   ├── metrics.py        # precision/recall/FP computation
-│       │   └── evidence.py       # EvidenceQualityAssessor
+│       │   ├── evidence.py       # EvidenceQualityAssessor + LLMEvidenceAssessor
+│       │   └── statistics.py     # StatisticalAnalyzer, wilson_ci, mcnemar_test
 │       │
 │       ├── reporting/
 │       │   ├── __init__.py
@@ -473,9 +566,13 @@ agent-testing-framework/
 │       │   ├── __init__.py
 │       │   └── review_profiles.py  # ReviewProfile, BUILTIN_PROFILES
 │       │
+│       ├── prompts/
+│       │   ├── __init__.py
+│       │   └── registry.py       # PromptSnapshot, PromptRegistry
+│       │
 │       └── data/                 # Shared Pydantic/dataclass models
 │           ├── __init__.py
-│           ├── findings.py       # Finding, Severity, VulnClass
+│           ├── findings.py       # Finding, FindingIdentity, Severity, VulnClass
 │           ├── experiment.py     # ExperimentRun, RunResult, ExperimentMatrix
 │           └── evaluation.py     # EvaluationResult, MatchedFinding
 │
@@ -496,7 +593,68 @@ agent-testing-framework/
 
 ## 4. Data Models
 
-### 4.1 Finding
+### 4.1 PromptSnapshot
+
+Every experiment run captures the exact prompts used, so batch comparisons can distinguish "prompt changed" from "model behaved differently."
+
+```python
+import hashlib
+
+class PromptSnapshot(BaseModel):
+    """Immutable record of every prompt surface used in a single experiment run."""
+    snapshot_id: str              # sha256[:16] of all fields concatenated
+    captured_at: datetime
+    system_prompt: str
+    user_message_template: str
+    review_profile_modifier: str | None = None
+    finding_output_format: str
+    verification_prompt: str | None = None
+
+    @classmethod
+    def capture(cls, **kwargs) -> "PromptSnapshot":
+        blob = "".join(str(v) for v in kwargs.values() if v)
+        snap_id = hashlib.sha256(blob.encode()).hexdigest()[:16]
+        return cls(snapshot_id=snap_id, captured_at=datetime.utcnow(), **kwargs)
+```
+
+Strategies call `PromptSnapshot.capture()` at the start of `run()` and attach it to the `RunResult`. The `PromptRegistry` persists snapshots to `config/prompts/{name}/{snapshot_id}.yaml` for version tracking across batches.
+
+### 4.2 FindingIdentity
+
+Defines what makes "the same finding" across runs for cross-batch comparison and stability measurement.
+
+```python
+from typing import NamedTuple
+
+LINE_BUCKET_SIZE = 10
+
+class FindingIdentity(NamedTuple):
+    """
+    Canonical key for deduplication and cross-run matching.
+    Line numbers are bucketed to 10-line windows so minor formatting
+    changes don't produce false negatives.
+    """
+    file_path: str
+    vuln_class: str
+    line_bucket: int        # floor(line_start / LINE_BUCKET_SIZE)
+
+    @classmethod
+    def from_finding(cls, finding: "Finding") -> "FindingIdentity":
+        bucket = (finding.line_start or 0) // LINE_BUCKET_SIZE
+        return cls(
+            file_path=finding.file_path,
+            vuln_class=finding.vuln_class,
+            line_bucket=bucket,
+        )
+
+    def __str__(self) -> str:
+        lo = self.line_bucket * LINE_BUCKET_SIZE
+        return f"{self.file_path}:{self.vuln_class}:L{lo}-{lo + LINE_BUCKET_SIZE - 1}"
+```
+
+Used by `FeedbackTracker` to match findings across batches: two findings from different runs refer to the same underlying issue if their `FindingIdentity` matches.
+
+### 4.3 Finding
 
 ```python
 from pydantic import BaseModel
@@ -552,7 +710,7 @@ class Finding(BaseModel):
 
 `description` and `raw_llm_output` are preserved verbatim. Report generation renders them as-is.
 
-### 4.2 Ground Truth Label
+### 4.4 Ground Truth Label
 
 ```python
 class GroundTruthSource(str, Enum):
@@ -580,7 +738,7 @@ class GroundTruthLabel(BaseModel):
 
 Labels are stored in `datasets/targets/{dataset_name}/labels.jsonl`, one JSON object per line.
 
-### 4.3 Strategy Output
+### 4.5 Strategy Output
 
 ```python
 class StrategyOutput(BaseModel):
@@ -598,7 +756,7 @@ class DedupEntry(BaseModel):
 
 Strategies that don't deduplicate (SingleAgent, SASTFirst) return `pre_dedup_count == post_dedup_count` with an empty `dedup_log`.
 
-### 4.4 Verification Result
+### 4.6 Verification Result
 
 ```python
 class VerificationOutcome(str, Enum):
@@ -620,7 +778,7 @@ class VerificationResult(BaseModel):
     verification_tokens: int       # tokens used by the verification pass
 ```
 
-### 4.5 Experiment Configuration and Run
+### 4.7 Experiment Configuration and Run
 
 ```python
 class ToolVariant(str, Enum):
@@ -647,12 +805,18 @@ class ExperimentRun(BaseModel):
     tool_variant: ToolVariant
     review_profile: "ReviewProfileName"
     verification_variant: VerificationVariant
+    verifier_model_id: str | None = None  # if None, uses model_id for verification
     dataset_name: str
     dataset_version: str
     strategy_config: dict          # strategy-specific params
     model_config: dict             # temperature, max_tokens, etc.
     parallel: bool = False         # whether subagents run in parallel
+    repetition_index: int = 0     # which repetition this is (0-indexed)
     created_at: datetime | None = None
+
+    @property
+    def effective_verifier_model(self) -> str:
+        return self.verifier_model_id or self.model_id
 
 class RunStatus(str, Enum):
     PENDING = "pending"
@@ -668,6 +832,7 @@ class RunResult(BaseModel):
     verification_result: "VerificationResult | None"
     evaluation: "EvaluationResult | None"
     strategy_output: StrategyOutput            # includes dedup metrics
+    prompt_snapshot: PromptSnapshot             # exact prompts used in this run
 
     # Token and cost tracking
     tool_call_count: int
@@ -681,7 +846,7 @@ class RunResult(BaseModel):
     completed_at: datetime | None = None
 ```
 
-### 4.6 Evaluation Result
+### 4.8 Evaluation Result
 
 ```python
 class MatchStatus(str, Enum):
@@ -750,13 +915,21 @@ class ExperimentMatrix(BaseModel):
     strategy_configs: dict[str, dict]
     model_configs: dict[str, dict]
 
+    # Repetitions — run each cell N times for statistical significance
+    num_repetitions: int = 1
+
+    # Spend control — coordinator cancels remaining jobs when exceeded
+    max_batch_cost_usd: float | None = None
+
+    # Cross-model verification — optional, defaults to same model
+    verifier_model_id: str | None = None
+
     def expand(self) -> list[ExperimentRun]:
         """
-        Cartesian product of all active dimensions.
+        Cartesian product of all active dimensions × num_repetitions.
 
         Default: 5 models × 5 strategies × 2 tool variants × 2 verification = 100 runs
-        With all dimensions active:
-          5 models × 5 strategies × 2 tool × 5 profiles × 2 verification = 500 runs
+        With 3 repetitions: 300 runs.
         Use single-element lists to fix dimensions you don't want to vary.
         """
         runs = []
@@ -766,23 +939,27 @@ class ExperimentMatrix(BaseModel):
                     for profile in self.review_profiles:
                         for verif in self.verification_variants:
                             for parallel in self.parallel_modes:
-                                run_id = (
-                                    f"{self.batch_id}_{model_id}_{strategy}"
-                                    f"_{tool_variant}_{profile}_{verif}"
-                                )
-                                runs.append(ExperimentRun(
-                                    id=run_id,
-                                    batch_id=self.batch_id,
-                                    model_id=model_id,
-                                    strategy=strategy,
-                                    tool_variant=tool_variant,
-                                    review_profile=profile,
-                                    verification_variant=verif,
-                                    parallel=parallel,
-                                    dataset_name=self.dataset_name,
-                                    dataset_version=self.dataset_version,
-                                    strategy_config=self.strategy_configs.get(strategy, {}),
-                                    model_config=self.model_configs.get(model_id, {}),
+                                for rep in range(self.num_repetitions):
+                                    rep_suffix = f"_rep{rep}" if self.num_repetitions > 1 else ""
+                                    run_id = (
+                                        f"{self.batch_id}_{model_id}_{strategy}"
+                                        f"_{tool_variant}_{profile}_{verif}{rep_suffix}"
+                                    )
+                                    runs.append(ExperimentRun(
+                                        id=run_id,
+                                        batch_id=self.batch_id,
+                                        model_id=model_id,
+                                        strategy=strategy,
+                                        tool_variant=tool_variant,
+                                        review_profile=profile,
+                                        verification_variant=verif,
+                                        verifier_model_id=self.verifier_model_id,
+                                        parallel=parallel,
+                                        repetition_index=rep,
+                                        dataset_name=self.dataset_name,
+                                        dataset_version=self.dataset_version,
+                                        strategy_config=self.strategy_configs.get(strategy, {}),
+                                        model_config=self.model_configs.get(model_id, {}),
                                 ))
         return runs
 ```
@@ -1025,7 +1202,40 @@ def cancel_batch(batch_id: str) -> dict:
     cancelled = coordinator.cancel_batch(batch_id)
     return {"cancelled_jobs": cancelled}
 
+@app.get("/batches/{batch_id}/results/download")
+def download_reports(batch_id: str) -> FileResponse:
+    """Download matrix_report.md, matrix_report.json, and all run reports as a .zip."""
+    zip_path = coordinator.package_reports(batch_id)
+    return FileResponse(zip_path, media_type="application/zip",
+                        filename=f"{batch_id}_reports.zip")
+
+@app.get("/batches/{batch_id}/compare-runs")
+def compare_runs(batch_id: str, run_a: str, run_b: str) -> dict:
+    """
+    Side-by-side comparison of two runs. Returns findings matched
+    by FindingIdentity: which were found by both, only by A, only by B.
+    """
+    return coordinator.compare_runs(batch_id, run_a, run_b)
+    # Returns:
+    # {
+    #   "run_a": {"id": "...", "model": "...", "strategy": "...", "metrics": {...}},
+    #   "run_b": {"id": "...", "model": "...", "strategy": "...", "metrics": {...}},
+    #   "both": [{"identity": "src/auth.py:sqli:L40-49", "finding_a": {...}, "finding_b": {...}}],
+    #   "only_a": [{"identity": "...", "finding": {...}}],
+    #   "only_b": [{"identity": "...", "finding": {...}}],
+    #   "metric_deltas": {"precision": +0.12, "recall": -0.05, "f1": +0.04}
+    # }
+
 # --- Findings ---
+
+@app.get("/batches/{batch_id}/findings/search")
+def search_findings(batch_id: str, q: str, run_id: str | None = None) -> list[dict]:
+    """
+    Free-text search across all finding descriptions in a batch.
+    Searches: title, description, recommendation, raw_llm_output.
+    Optional run_id filter to scope to a single run.
+    """
+    return coordinator.search_findings(batch_id, q, run_id)
 
 class ReclassifyRequest(BaseModel):
     finding_id: str
@@ -1055,6 +1265,32 @@ def import_cve(spec: CVEImportSpec) -> dict:
     labels = coordinator.import_cve(spec)
     return {"dataset_name": spec.dataset_name, "labels_created": len(labels)}
 
+@app.post("/datasets/{dataset_name}/inject/preview")
+def preview_injection(dataset_name: str, req: "InjectionRequest") -> dict:
+    """
+    Dry-run injection: returns the unified diff and affected line range
+    without modifying any files. Used by the frontend to show a preview
+    before the user commits the injection.
+    """
+    return coordinator.preview_injection(dataset_name, req)
+    # Returns:
+    # {
+    #   "template_id": "sqli_string_format_python",
+    #   "target_file": "src/api/users.py",
+    #   "anchor_line": 42,
+    #   "unified_diff": "--- a/src/api/users.py\n+++ b/src/api/users.py\n@@ ...",
+    #   "before_snippet": "lines 38-46 of original file",
+    #   "after_snippet": "lines 38-49 after injection",
+    #   "label_preview": {
+    #     "file_path": "src/api/users.py",
+    #     "line_start": 43,
+    #     "line_end": 45,
+    #     "vuln_class": "sqli",
+    #     "cwe_id": "CWE-89",
+    #     "severity": "high"
+    #   }
+    # }
+
 @app.post("/datasets/{dataset_name}/inject", status_code=201)
 def inject_vuln(dataset_name: str, req: "InjectionRequest") -> dict:
     """Inject a vulnerability from a template into a dataset."""
@@ -1065,6 +1301,28 @@ def inject_vuln(dataset_name: str, req: "InjectionRequest") -> dict:
 def get_labels(dataset_name: str, version: str | None = None) -> list[dict]:
     """View ground truth labels for a dataset."""
     return coordinator.get_labels(dataset_name, version)
+
+@app.get("/datasets/{dataset_name}/tree")
+def get_file_tree(dataset_name: str) -> dict:
+    """Repo file tree. Returns nested structure: {name, type, children, size, language}."""
+    return coordinator.get_file_tree(dataset_name)
+
+@app.get("/datasets/{dataset_name}/file")
+def get_file_content(dataset_name: str, path: str) -> dict:
+    """
+    Read a file from the dataset repo. Returns content with metadata
+    for the frontend code viewer.
+    """
+    return coordinator.get_file_content(dataset_name, path)
+    # Returns:
+    # {
+    #   "path": "src/api/users.py",
+    #   "content": "...",
+    #   "language": "python",       # detected from extension, for syntax highlighting
+    #   "line_count": 142,
+    #   "size_bytes": 4821,
+    #   "labels": [...]             # ground truth labels in this file, if any
+    # }
 
 # --- Feedback ---
 
@@ -1109,6 +1367,137 @@ def list_templates() -> list[dict]:
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
+
+# --- Spend Controls ---
+
+class EstimateRequest(BaseModel):
+    matrix: ExperimentMatrix
+    target_kloc: float            # estimated KLOC of target codebase
+
+AVG_TOKENS_PER_KLOC = 1400       # prompt + completion, calibrated empirically
+
+@app.post("/batches/estimate")
+def estimate_batch(req: EstimateRequest) -> dict:
+    """Pre-flight cost estimate. Call before submit to avoid expensive mistakes."""
+    runs = req.matrix.expand()
+    estimates_by_model = {}
+    for run in runs:
+        tokens = int(req.target_kloc * AVG_TOKENS_PER_KLOC)
+        cost = coordinator.cost_calculator.compute(run.model_id, tokens, tokens // 3)
+        estimates_by_model.setdefault(run.model_id, 0.0)
+        estimates_by_model[run.model_id] += cost
+    total = sum(estimates_by_model.values())
+    return {
+        "total_runs": len(runs),
+        "estimated_cost_usd": round(total, 2),
+        "by_model": {k: round(v, 2) for k, v in estimates_by_model.items()},
+        "warning": "Estimates based on avg tokens/KLOC. Actual cost varies with strategy and model."
+    }
+
+# --- Retention ---
+
+@app.delete("/batches/{batch_id}", status_code=204)
+def delete_batch(batch_id: str):
+    """Delete a batch and all its outputs from shared storage."""
+    coordinator.delete_batch(batch_id)
+```
+
+#### Spend Cap Enforcement
+
+The coordinator tracks running cost per batch and auto-cancels remaining jobs when the cap is reached.
+
+```python
+class BatchCostTracker:
+    """Tracks running spend per batch. Thread-safe."""
+
+    def __init__(self, batch_id: str, cap_usd: float | None):
+        self.batch_id = batch_id
+        self.cap_usd = cap_usd
+        self._spent = 0.0
+        self._lock = threading.Lock()
+        self._cancelled = False
+
+    def record_job_cost(self, cost_usd: float) -> bool:
+        """Returns True if cap exceeded and batch should halt."""
+        with self._lock:
+            self._spent += cost_usd
+            if self.cap_usd and not self._cancelled and self._spent >= self.cap_usd:
+                self._cancelled = True
+                return True   # caller cancels remaining K8s jobs
+        return False
+
+    @property
+    def spent_usd(self) -> float:
+        return self._spent
+```
+
+When a worker completes, the coordinator reads `estimated_cost_usd` from its `run_result.json` and calls `record_job_cost()`. If the cap is hit, all pending Jobs for that batch are deleted.
+
+#### Reconciliation on Startup
+
+```python
+def reconcile(self) -> None:
+    """
+    Called once at coordinator startup. Scans for batches in non-terminal
+    states, identifies runs that were never dispatched as K8s Jobs, and
+    creates their Jobs. Idempotent — safe to call multiple times.
+    """
+    active_batches = self._get_active_batches()
+    for batch in active_batches:
+        label_selector = f"batch={batch.id}"
+        existing_jobs = self.k8s_client.list_namespaced_job(
+            self.namespace, label_selector=label_selector
+        )
+        dispatched_run_ids = {
+            job.metadata.labels.get("run-id")
+            for job in existing_jobs.items
+            if job.metadata.labels
+        }
+        pending_runs = self._get_pending_runs(batch.id)
+        orphaned = [r for r in pending_runs if r.id not in dispatched_run_ids]
+        if orphaned:
+            logger.warning(f"Batch {batch.id}: {len(orphaned)} orphaned runs — dispatching")
+            for run in orphaned:
+                try:
+                    self._create_k8s_job(batch.id, run)
+                except kubernetes.client.ApiException as e:
+                    if e.status == 409:
+                        pass  # Job already exists — race condition, safe to ignore
+                    else:
+                        logger.error(f"Failed to dispatch orphaned run {run.id}: {e}")
+
+    # Also check for completed batches that never got their matrix report
+    for batch in active_batches:
+        status = self.get_batch_status(batch.id)
+        if status.running == 0 and status.pending == 0:
+            self.finalize_batch(batch.id)
+```
+
+Wired into FastAPI startup:
+
+```python
+@app.on_event("startup")
+async def startup():
+    await asyncio.get_event_loop().run_in_executor(None, coordinator.reconcile)
+```
+
+#### Retention Cleanup
+
+```python
+async def retention_cleanup_loop(
+    storage_root: Path, retention_days: int, interval_s: int = 3600
+):
+    """Background task: deletes batch directories older than retention_days."""
+    while True:
+        await asyncio.sleep(interval_s)
+        cutoff = datetime.utcnow() - timedelta(days=retention_days)
+        for batch_dir in (storage_root / "outputs").iterdir():
+            if not batch_dir.is_dir():
+                continue
+            mtime = datetime.utcfromtimestamp(batch_dir.stat().st_mtime)
+            if mtime < cutoff:
+                shutil.rmtree(batch_dir, ignore_errors=True)
+                logger.info(f"Retention cleanup: deleted {batch_dir.name}")
 ```
 
 ### 5.3 Experiment Worker
@@ -1204,6 +1593,7 @@ class ExperimentWorker:
         (output_dir / "run_result.json").write_text(result.model_dump_json(indent=2))
         self._write_jsonl(output_dir / "findings.jsonl", findings)
         self._write_jsonl(output_dir / "tool_calls.jsonl", tools.audit_log.entries)
+        self._write_jsonl(output_dir / "conversation.jsonl", model.conversation_log)
         if findings_pre_verification:
             self._write_jsonl(output_dir / "findings_pre_verification.jsonl",
                               findings_pre_verification)
@@ -1249,7 +1639,8 @@ The global `max_parallel_runs` in `experiments.yaml` sets an overall cap across 
     findings_pre_verification.jsonl   — candidates before verification (if verification enabled)
     verification_log.jsonl            — verify/reject decisions with evidence
     tool_calls.jsonl                  — one ToolCallRecord per line from audit log
-    run_result.json                   — full RunResult including EvaluationResult
+    conversation.jsonl                — full message-by-message LLM transcript (for debugging)
+    run_result.json                   — full RunResult including EvaluationResult + PromptSnapshot
     report.md                         — human-readable run report
     report.json                       — machine-readable run report
 ```
@@ -1284,56 +1675,470 @@ class LabelStore:
                 f.write(label.model_dump_json() + "\n")
 ```
 
-### 6.2 CVE Importer
+### 6.2 CVE Selection Pipeline
 
-The CVE importer handles two tasks: fetching the before-fix state of a repository, and translating patch metadata into ground truth labels.
+Two modes: **automatic discovery** (query advisory databases, filter by criteria, surface candidates) and **manual resolve** (user provides a CVE ID, framework finds the repo and fix commit automatically).
+
+#### Data Sources
+
+The pipeline queries multiple sources and merges results:
+
+| Source | What it provides | API |
+|--------|-----------------|-----|
+| **NVD** (NIST) | CVE metadata, CWE mapping, severity (CVSS), affected products | `services.nvd.nist.gov/rest/json/cves/2.0` |
+| **GitHub Advisory Database** | GHSA records, linked repos, fix commit SHAs, affected version ranges | `api.github.com/advisories` |
+| **OSV.dev** | Cross-ecosystem vuln data, Git commit ranges for fixes | `api.osv.dev/v1/query` |
+
+GitHub Advisory DB is the most valuable because it directly links CVEs to repositories and fix commits. NVD provides the canonical severity and CWE classification. OSV fills gaps for ecosystems GitHub doesn't cover well.
+
+#### Selection Criteria
+
+```python
+class CVESelectionCriteria(BaseModel):
+    """Configurable filters for automatic CVE discovery."""
+
+    # Language / ecosystem
+    languages: list[str] = ["python", "javascript", "go", "java", "ruby"]
+
+    # Vulnerability classification
+    vuln_classes: list[VulnClass] | None = None   # None = all classes
+    cwe_ids: list[str] | None = None              # e.g. ["CWE-89", "CWE-79"]
+    min_severity: Severity = Severity.MEDIUM       # skip low/info
+    max_severity: Severity = Severity.CRITICAL
+
+    # Patch characteristics (proxy for "detectable from source")
+    max_files_changed: int = 5           # large patches are refactors, not bug fixes
+    max_lines_changed: int = 200         # small patches = localized, testable vulns
+    min_lines_changed: int = 2           # trivial 1-line version bumps aren't interesting
+
+    # Repository characteristics
+    max_repo_kloc: float = 50.0          # keep within context window feasibility
+    min_repo_kloc: float = 1.0           # too tiny = synthetic, not realistic
+
+    # Temporal
+    published_after: str | None = None   # ISO date, e.g. "2022-01-01"
+    published_before: str | None = None
+
+    # Must have a resolvable fix commit on GitHub
+    require_github_fix: bool = True
+```
+
+#### CVE Resolver (Manual Mode)
+
+Given a CVE ID, automatically find the GitHub repo and fix commit. The user provides only the CVE ID — everything else is resolved.
+
+```python
+class ResolvedCVE(BaseModel):
+    """A CVE with all metadata resolved from advisory databases."""
+    cve_id: str
+    ghsa_id: str | None = None
+    description: str
+    cwe_ids: list[str]
+    vuln_class: VulnClass             # mapped from primary CWE
+    severity: Severity                # from CVSS score
+    cvss_score: float | None = None
+    repo_url: str                     # GitHub repo URL
+    fix_commit_sha: str               # commit that fixed the vulnerability
+    affected_files: list[str]         # files changed in the fix commit
+    lines_changed: int                # total lines added + removed in fix
+    language: str                     # primary language of the repo
+    repo_kloc: float | None = None   # estimated repo size
+    published_date: str
+    source: str                       # "ghsa" | "nvd" | "osv"
+
+class CVEResolver:
+    """Resolves a CVE ID to a ResolvedCVE with repo + fix commit info."""
+
+    CWE_TO_VULN_CLASS: dict[str, VulnClass] = {
+        "CWE-89": VulnClass.SQLI,
+        "CWE-79": VulnClass.XSS,
+        "CWE-918": VulnClass.SSRF,
+        "CWE-78": VulnClass.RCE,
+        "CWE-22": VulnClass.PATH_TRAVERSAL,
+        "CWE-327": VulnClass.CRYPTO_MISUSE,
+        "CWE-798": VulnClass.HARDCODED_SECRET,
+        "CWE-502": VulnClass.DESERIALIZATION,
+        "CWE-611": VulnClass.XXE,
+        "CWE-601": VulnClass.OPEN_REDIRECT,
+        # ... complete mapping
+    }
+
+    def __init__(self, github_token: str):
+        self.github_token = github_token
+
+    def resolve(self, cve_id: str) -> ResolvedCVE | None:
+        """
+        Resolution order:
+        1. Query GitHub Advisory DB for the CVE → get GHSA record with repo + references
+        2. From GHSA references, extract fix commit SHA (tagged as "patch" type)
+        3. If no fix commit in GHSA, query OSV.dev for git commit ranges
+        4. If still no fix, query NVD references for GitHub commit URLs
+        5. Validate: clone repo, verify fix commit exists, parse diff for patch stats
+        6. Map CWE → VulnClass, extract severity from CVSS
+        """
+        # Step 1: GitHub Advisory DB
+        ghsa = self._query_ghsa(cve_id)
+        if ghsa and ghsa.get("references"):
+            fix_commit = self._extract_fix_commit(ghsa["references"])
+            repo_url = self._extract_repo_url(ghsa["references"])
+            if fix_commit and repo_url:
+                return self._build_resolved(cve_id, ghsa, repo_url, fix_commit)
+
+        # Step 2: OSV.dev fallback
+        osv = self._query_osv(cve_id)
+        if osv:
+            fix_commit = self._extract_osv_fix(osv)
+            repo_url = self._extract_osv_repo(osv)
+            if fix_commit and repo_url:
+                return self._build_resolved(cve_id, osv, repo_url, fix_commit)
+
+        # Step 3: NVD reference URLs fallback
+        nvd = self._query_nvd(cve_id)
+        if nvd:
+            for ref in nvd.get("references", []):
+                if "github.com" in ref["url"] and "/commit/" in ref["url"]:
+                    repo_url, fix_commit = self._parse_github_commit_url(ref["url"])
+                    return self._build_resolved(cve_id, nvd, repo_url, fix_commit)
+
+        return None  # could not resolve
+
+    def _query_ghsa(self, cve_id: str) -> dict | None:
+        """Query GitHub Advisory Database: GET /advisories?cve_id={cve_id}"""
+        resp = requests.get(
+            "https://api.github.com/advisories",
+            params={"cve_id": cve_id},
+            headers={"Authorization": f"token {self.github_token}"},
+        )
+        if resp.ok and resp.json():
+            return resp.json()[0]
+        return None
+
+    def _extract_fix_commit(self, references: list[dict]) -> str | None:
+        """Extract commit SHA from GHSA references tagged as 'PATCH'."""
+        for ref in references:
+            url = ref.get("url", "")
+            if "/commit/" in url:
+                return url.rstrip("/").split("/")[-1]
+        return None
+
+    def _validate_patch(self, repo_url: str, fix_sha: str) -> dict:
+        """
+        Clone repo, parse diff, return patch stats.
+        Runs inside dataset-builder pod (has GitHub egress).
+        """
+        # git clone --depth=10 repo_url, git diff fix_sha~1 fix_sha --stat
+        ...
+```
+
+#### CVE Discovery (Automatic Mode)
+
+Queries advisory databases with selection criteria, filters candidates, and returns ranked results for review before import.
+
+```python
+class CVECandidate(BaseModel):
+    """A CVE that passed selection criteria, ready for user review."""
+    resolved: ResolvedCVE
+    score: float                       # 0-1, how well it fits the criteria
+    score_breakdown: dict[str, float]  # {"patch_size": 0.9, "language": 1.0, ...}
+    importable: bool                   # all required fields resolved?
+    rejection_reason: str | None = None
+
+class CVEDiscovery:
+    """Discovers and ranks CVE candidates matching selection criteria."""
+
+    def __init__(self, resolver: CVEResolver):
+        self.resolver = resolver
+
+    def discover(
+        self,
+        criteria: CVESelectionCriteria,
+        max_results: int = 50,
+    ) -> list[CVECandidate]:
+        """
+        1. Query GitHub Advisory DB with ecosystem + severity filters
+        2. For each advisory, resolve to get repo + fix commit
+        3. Filter by patch size, repo size, language
+        4. Score remaining candidates
+        5. Return top N ranked by score
+        """
+        raw_advisories = self._search_advisories(criteria)
+        candidates = []
+
+        for advisory in raw_advisories:
+            cve_id = advisory.get("cve_id")
+            if not cve_id:
+                continue
+
+            resolved = self.resolver.resolve(cve_id)
+            if not resolved:
+                continue
+
+            candidate = self._evaluate(resolved, criteria)
+            if candidate.score > 0:
+                candidates.append(candidate)
+
+        candidates.sort(key=lambda c: c.score, reverse=True)
+        return candidates[:max_results]
+
+    def _search_advisories(self, criteria: CVESelectionCriteria) -> list[dict]:
+        """
+        Query GitHub Advisory DB:
+        GET /advisories?ecosystem={lang}&severity={sev}&type=reviewed
+        Also queries NVD for CWE-specific searches when cwe_ids specified.
+        """
+        ecosystems = self._languages_to_ecosystems(criteria.languages)
+        results = []
+        for ecosystem in ecosystems:
+            resp = requests.get(
+                "https://api.github.com/advisories",
+                params={
+                    "ecosystem": ecosystem,
+                    "severity": criteria.min_severity.value,
+                    "type": "reviewed",
+                    "per_page": 100,
+                },
+                headers={"Authorization": f"token {self.github_token}"},
+            )
+            if resp.ok:
+                results.extend(resp.json())
+        return results
+
+    def _evaluate(self, resolved: ResolvedCVE, criteria: CVESelectionCriteria) -> CVECandidate:
+        """Score a resolved CVE against selection criteria."""
+        scores = {}
+        rejection = None
+
+        # Hard filters (pass/fail)
+        if criteria.require_github_fix and not resolved.fix_commit_sha:
+            return CVECandidate(resolved=resolved, score=0, score_breakdown={},
+                                importable=False, rejection_reason="No fix commit found")
+
+        if resolved.lines_changed > criteria.max_lines_changed:
+            rejection = f"Patch too large ({resolved.lines_changed} lines)"
+        if resolved.lines_changed < criteria.min_lines_changed:
+            rejection = f"Patch too small ({resolved.lines_changed} lines)"
+        if len(resolved.affected_files) > criteria.max_files_changed:
+            rejection = f"Too many files changed ({len(resolved.affected_files)})"
+
+        if rejection:
+            return CVECandidate(resolved=resolved, score=0, score_breakdown={},
+                                importable=False, rejection_reason=rejection)
+
+        # Soft scores (0-1)
+        # Patch size: prefer small, focused patches
+        patch_score = 1.0 - (resolved.lines_changed / criteria.max_lines_changed)
+        scores["patch_size"] = max(0, patch_score)
+
+        # Language match
+        scores["language"] = 1.0 if resolved.language in criteria.languages else 0.0
+
+        # Vuln class match (if specified)
+        if criteria.vuln_classes:
+            scores["vuln_class"] = 1.0 if resolved.vuln_class in criteria.vuln_classes else 0.3
+        else:
+            scores["vuln_class"] = 1.0
+
+        # Severity preference: prefer high/critical over medium
+        severity_order = {Severity.CRITICAL: 1.0, Severity.HIGH: 0.8,
+                          Severity.MEDIUM: 0.5, Severity.LOW: 0.2}
+        scores["severity"] = severity_order.get(resolved.severity, 0.3)
+
+        # Repo size (if known): prefer repos in the target range
+        if resolved.repo_kloc:
+            if criteria.min_repo_kloc <= resolved.repo_kloc <= criteria.max_repo_kloc:
+                scores["repo_size"] = 1.0
+            else:
+                scores["repo_size"] = 0.3
+
+        total = sum(scores.values()) / len(scores)
+        return CVECandidate(
+            resolved=resolved,
+            score=total,
+            score_breakdown=scores,
+            importable=True,
+        )
+
+    @staticmethod
+    def _languages_to_ecosystems(languages: list[str]) -> list[str]:
+        """Map programming languages to GitHub Advisory DB ecosystem names."""
+        mapping = {
+            "python": "pip",
+            "javascript": "npm",
+            "go": "go",
+            "java": "maven",
+            "ruby": "rubygems",
+            "rust": "crates.io",
+            "php": "composer",
+            "dotnet": "nuget",
+        }
+        return [mapping[l] for l in languages if l in mapping]
+```
+
+#### CVE Importer (Unified)
+
+Accepts either a full `CVEImportSpec` (manual, all fields provided) or just a CVE ID (auto-resolved).
 
 ```python
 @dataclass
 class CVEImportSpec:
-    cve_id: str                      # e.g. "CVE-2021-44228"
-    repo_url: str                    # GitHub or similar
-    fix_commit_sha: str              # the commit that patched the vuln
-    dataset_name: str                # name for the local dataset directory
-    cwe_id: str                      # manually provided
+    """Full spec — used when user provides all details, or after resolution."""
+    cve_id: str
+    repo_url: str
+    fix_commit_sha: str
+    dataset_name: str
+    cwe_id: str
     vuln_class: VulnClass
     severity: Severity
     description: str
     affected_files: list[str] | None = None
 
 class CVEImporter:
-    def __init__(self, datasets_root: Path):
+    def __init__(self, datasets_root: Path, resolver: CVEResolver):
         self.datasets_root = datasets_root
+        self.resolver = resolver
 
-    def import_cve(self, spec: CVEImportSpec) -> list[GroundTruthLabel]:
+    def import_from_id(self, cve_id: str, dataset_name: str | None = None) -> list[GroundTruthLabel]:
         """
+        Resolve-and-import: user provides only the CVE ID.
+        Framework resolves repo, fix commit, metadata automatically.
+        """
+        resolved = self.resolver.resolve(cve_id)
+        if not resolved:
+            raise ValueError(f"Could not resolve {cve_id} to a GitHub repo + fix commit")
+
+        spec = CVEImportSpec(
+            cve_id=resolved.cve_id,
+            repo_url=resolved.repo_url,
+            fix_commit_sha=resolved.fix_commit_sha,
+            dataset_name=dataset_name or f"cve-{cve_id.lower().replace('-', '_')}",
+            cwe_id=resolved.cwe_ids[0] if resolved.cwe_ids else "CWE-unknown",
+            vuln_class=resolved.vuln_class,
+            severity=resolved.severity,
+            description=resolved.description,
+            affected_files=resolved.affected_files,
+        )
+        return self.import_from_spec(spec)
+
+    def import_from_spec(self, spec: CVEImportSpec) -> list[GroundTruthLabel]:
+        """
+        Full-spec import: user provides all details.
         1. Clone repo at fix_commit_sha~1 (the vulnerable state).
-        2. Run `git diff fix_commit_sha~1 fix_commit_sha` to get changed files.
-        3. Parse diff to extract file paths and line ranges of removed lines
-           (removed lines in the fix = the vulnerable code locations).
-        4. Create GroundTruthLabel records.
-        5. Copy repo into datasets/targets/{dataset_name}/repo/.
-        6. Append labels to datasets/targets/{dataset_name}/labels.jsonl.
+        2. Parse diff to extract file paths and line ranges.
+        3. Create GroundTruthLabel records.
+        4. Install repo and labels.
         """
         repo_path = self._clone_at_parent(spec.repo_url, spec.fix_commit_sha)
         affected = spec.affected_files or self._parse_diff(repo_path, spec.fix_commit_sha)
         labels = self._build_labels(spec, affected)
         self._install_repo(repo_path, spec.dataset_name)
         return labels
-
-    def import_cve_with_diff(self, spec: CVEImportSpec) -> list[GroundTruthLabel]:
-        """
-        Same as import_cve, but also generates a diff_spec.yaml for diff-mode testing.
-        Clones repo at fix_commit_sha (the fixed state) and records the diff
-        between fix_commit_sha~1 and fix_commit_sha.
-
-        Labels are tagged with introduced_in_diff=True since the CVE was present
-        in the before-fix state (the base of the diff).
-        """
-        ...
 ```
 
-**Operational note**: `fix_commit_sha~1` gives the last vulnerable state. Diff parsing extracts the removed lines (the vulnerable code) not the added lines (the fix).
+#### Coordinator API Endpoints
+
+```python
+# --- CVE Selection ---
+
+@app.post("/datasets/discover-cves")
+def discover_cves(criteria: CVESelectionCriteria, max_results: int = 50) -> list[dict]:
+    """
+    Automatic mode: query advisory databases, filter by criteria, return
+    ranked candidates. User reviews candidates, then imports chosen ones.
+    """
+    candidates = coordinator.cve_discovery.discover(criteria, max_results)
+    return [c.model_dump() for c in candidates]
+
+@app.post("/datasets/resolve-cve")
+def resolve_cve(cve_id: str) -> dict:
+    """
+    Manual mode: given a CVE ID, find the GitHub repo, fix commit, and metadata.
+    Returns a ResolvedCVE that can be reviewed before import.
+    """
+    resolved = coordinator.cve_resolver.resolve(cve_id)
+    if not resolved:
+        raise HTTPException(404, f"Could not resolve {cve_id}")
+    return resolved.model_dump()
+
+@app.post("/datasets/import-cve", status_code=201)
+def import_cve(req: "CVEImportRequest") -> dict:
+    """
+    Import a CVE as a dataset. Two modes:
+    - Provide only cve_id: framework resolves everything automatically
+    - Provide full CVEImportSpec: use exact repo/commit/metadata provided
+    """
+    if req.spec:
+        labels = coordinator.cve_importer.import_from_spec(req.spec)
+    else:
+        labels = coordinator.cve_importer.import_from_id(req.cve_id, req.dataset_name)
+    return {"dataset_name": req.dataset_name or req.cve_id, "labels_created": len(labels)}
+
+class CVEImportRequest(BaseModel):
+    cve_id: str                          # always required
+    dataset_name: str | None = None      # auto-generated if omitted
+    spec: CVEImportSpec | None = None    # provide for full-spec mode, omit for auto-resolve
+```
+
+#### Workflow
+
+**Automatic discovery:**
+
+```bash
+# Find CVEs matching criteria
+curl -X POST $COORD/datasets/discover-cves \
+  -H "Content-Type: application/json" \
+  -d '{
+    "languages": ["python", "javascript"],
+    "vuln_classes": ["sqli", "xss", "ssrf", "auth_bypass"],
+    "min_severity": "medium",
+    "max_files_changed": 3,
+    "max_lines_changed": 100,
+    "max_repo_kloc": 30,
+    "published_after": "2023-01-01"
+  }'
+
+# Response: ranked candidates with scores
+# [
+#   {
+#     "resolved": {"cve_id": "CVE-2024-1234", "repo_url": "...", "fix_commit_sha": "...", ...},
+#     "score": 0.92,
+#     "score_breakdown": {"patch_size": 0.95, "language": 1.0, "severity": 0.8, ...},
+#     "importable": true
+#   },
+#   ...
+# ]
+
+# Import a chosen candidate
+curl -X POST $COORD/datasets/import-cve \
+  -H "Content-Type: application/json" \
+  -d '{"cve_id": "CVE-2024-1234"}'
+```
+
+**Manual resolve:**
+
+```bash
+# User has a specific CVE in mind
+curl -X POST "$COORD/datasets/resolve-cve?cve_id=CVE-2023-45678"
+
+# Response: resolved metadata for review
+# {
+#   "cve_id": "CVE-2023-45678",
+#   "repo_url": "https://github.com/example/project",
+#   "fix_commit_sha": "abc123def456",
+#   "cwe_ids": ["CWE-89"],
+#   "vuln_class": "sqli",
+#   "severity": "high",
+#   "affected_files": ["src/db/queries.py"],
+#   "lines_changed": 12,
+#   "language": "python"
+# }
+
+# Looks good — import it
+curl -X POST $COORD/datasets/import-cve \
+  -H "Content-Type: application/json" \
+  -d '{"cve_id": "CVE-2023-45678", "dataset_name": "example-sqli"}'
+```
+
+**Operational note**: Both `discover-cves` and `resolve-cve` require outbound GitHub API access. These run inside the coordinator (or are proxied to a dataset-builder pod) since worker pods have restricted egress. The `import-cve` endpoint triggers a dataset-builder K8s Job for the actual git clone.
 
 ### 6.3 Vulnerability Injection
 
@@ -1355,6 +2160,41 @@ class VulnInjector:
         self.templates_root = templates_root
         self.templates: dict[str, InjectionTemplate] = self._load_templates()
 
+    def preview(
+        self,
+        repo_path: Path,
+        template_id: str,
+        target_file: str,
+        substitutions: dict[str, str] | None = None,
+    ) -> "InjectionPreview":
+        """
+        Dry-run: compute the injection without modifying files.
+        Returns the unified diff, before/after snippets, and the label
+        that would be created. Used by the frontend to show what will happen.
+        """
+        template = self.templates[template_id]
+        file_path = repo_path / target_file
+        original_content = file_path.read_text()
+        anchor_line = self._find_anchor(original_content, template.anchor_pattern)
+        patched_content = self._apply_patch(
+            original_content, template, anchor_line, substitutions
+        )
+        diff = difflib.unified_diff(
+            original_content.splitlines(keepends=True),
+            patched_content.splitlines(keepends=True),
+            fromfile=f"a/{target_file}",
+            tofile=f"b/{target_file}",
+        )
+        return InjectionPreview(
+            template_id=template_id,
+            target_file=target_file,
+            anchor_line=anchor_line,
+            unified_diff="".join(diff),
+            before_snippet=self._extract_snippet(original_content, anchor_line, context=4),
+            after_snippet=self._extract_snippet(patched_content, anchor_line, context=6),
+            label_preview=self._preview_label(template, target_file, anchor_line, patched_content),
+        )
+
     def inject(
         self,
         repo_path: Path,
@@ -1362,7 +2202,7 @@ class VulnInjector:
         target_file: str,
         substitutions: dict[str, str] | None = None,
     ) -> InjectionResult:
-        """Applies a template to a specific file in the repo."""
+        """Applies a template to a specific file in the repo. Modifies the file on disk."""
         ...
 
     def build_label(
@@ -1390,6 +2230,77 @@ changed_files:         # optional explicit list; if omitted, computed from git d
 ```
 
 The DiffReview strategy reads this file to scope its analysis. Labels with `introduced_in_diff: true` are vulns that exist in the diff; labels with `introduced_in_diff: false` are pre-existing.
+
+### 6.5 Diff Dataset Generator
+
+Creates realistic diff-mode datasets from clean repos by injecting vulnerabilities and producing a `diff_spec.yaml`.
+
+```python
+class DiffDatasetGenerator:
+    """
+    Takes a clean repo, applies vuln injection templates to create a
+    "vulnerable branch", and generates diff_spec.yaml for DiffReview testing.
+    """
+
+    def __init__(self, injector: VulnInjector, datasets_root: Path):
+        self.injector = injector
+        self.datasets_root = datasets_root
+
+    def generate(
+        self,
+        clean_repo_path: Path,
+        dataset_name: str,
+        template_ids: list[str],
+        target_files: dict[str, str],     # template_id → target file path
+        dataset_version: str,
+    ) -> list[GroundTruthLabel]:
+        """
+        1. Copy clean repo to datasets/targets/{dataset_name}/repo/
+        2. Create a git commit (the "clean" state = base_ref)
+        3. Apply each injection template to the specified target files
+        4. Create a git commit (the "vulnerable" state = head_ref)
+        5. Generate diff_spec.yaml with base_ref and head_ref
+        6. Generate labels with introduced_in_diff=True
+        """
+        repo_dest = self.datasets_root / "targets" / dataset_name / "repo"
+        shutil.copytree(clean_repo_path, repo_dest, dirs_exist_ok=True)
+
+        # Initialize git and commit clean state
+        subprocess.run(["git", "init"], cwd=repo_dest)
+        subprocess.run(["git", "add", "."], cwd=repo_dest)
+        subprocess.run(["git", "commit", "-m", "clean"], cwd=repo_dest)
+        base_ref = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=repo_dest, text=True
+        ).strip()
+
+        # Apply injections
+        labels = []
+        for tmpl_id in template_ids:
+            target_file = target_files[tmpl_id]
+            result = self.injector.inject(repo_dest, tmpl_id, target_file)
+            template = self.injector.templates[tmpl_id]
+            label = self.injector.build_label(result, template, dataset_version)
+            label.introduced_in_diff = True
+            labels.append(label)
+
+        # Commit vulnerable state
+        subprocess.run(["git", "add", "."], cwd=repo_dest)
+        subprocess.run(["git", "commit", "-m", "inject vulns"], cwd=repo_dest)
+        head_ref = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=repo_dest, text=True
+        ).strip()
+
+        # Write diff_spec.yaml
+        diff_spec = {"base_ref": base_ref, "head_ref": head_ref}
+        spec_path = self.datasets_root / "targets" / dataset_name / "diff_spec.yaml"
+        spec_path.write_text(yaml.dump(diff_spec))
+
+        # Write labels
+        LabelStore(self.datasets_root).append(dataset_name, labels)
+        return labels
+```
+
+This is triggered via `POST /datasets/{name}/generate-diff` on the coordinator.
 
 ---
 
@@ -1901,42 +2812,109 @@ Verification is itself a testable variable. By running the same strategy with an
 
 The `findings_pre_verification` field in `RunResult` preserves the pre-verification state so these comparisons are possible.
 
+### 8.3 Cross-Model Verification
+
+By default the verification pass uses the same model as the strategy. The optional `verifier_model_id` field on `ExperimentRun` enables cross-model verification — e.g., Claude verifying GPT-4o's findings.
+
+This tests whether a different model's biases can catch false positives that the original model would confirm (since models tend to "agree with themselves"). The worker creates a separate `ModelProvider` for verification:
+
+```python
+# In ExperimentWorker.run():
+if run.verification_variant == VerificationVariant.WITH_VERIFICATION:
+    if run.verifier_model_id and run.verifier_model_id != run.model_id:
+        verifier_model = ModelProviderFactory().create(
+            run.effective_verifier_model, run.model_config
+        )
+    else:
+        verifier_model = model  # same model
+
+    findings_pre_verification = list(candidates)
+    verification_result = LLMVerifier().verify(
+        candidates, target, verifier_model, tools
+    )
+```
+
+Cross-model verification is set at the matrix level (`verifier_model_id` in `ExperimentMatrix`) and applies to all runs where `verification_variant=WITH_VERIFICATION`. To test multiple verifier models, run separate batches.
+
 ---
 
 ## 9. Evaluation Pipeline
 
-### 9.1 Matching Algorithm
+### 9.1 Matching Algorithm (Bipartite Assignment)
+
+The previous greedy matching algorithm failed when a file had multiple labeled vulnerabilities. For example, if `auth.py` had both a SQLi on line 42 and an XSS on line 180, and the model only found the XSS, the greedy matcher would consume the first label (SQLi) for the XSS finding — producing a misleading TP.
+
+The fix uses bipartite matching: build a score matrix (finding x label), then use optimal assignment to find the best global matching.
 
 ```python
+import numpy as np
+from scipy.optimize import linear_sum_assignment
+
 class FileLevelEvaluator(Evaluator):
     """
-    Primary matching: exact file path match between finding and label.
-    Line overlap is computed and stored but does not affect TP/FP classification.
+    Bipartite matching between findings and labels.
+    Score considers: file path (required), vuln_class (high weight), line overlap (medium weight).
+    Uses scipy linear_sum_assignment for optimal global matching.
     """
 
+    def _match_score(self, finding: Finding, label: GroundTruthLabel) -> float:
+        """Score a (finding, label) pair. Returns -1.0 if file path doesn't match."""
+        if finding.file_path != label.file_path:
+            return -1.0  # hard constraint — never cross-file match
+
+        score = 0.0
+
+        # Vuln class match (high weight)
+        if finding.vuln_class == label.vuln_class:
+            score += 4.0
+
+        # Line overlap (medium weight)
+        if finding.line_start is not None and label.line_start is not None:
+            f_end = finding.line_end or finding.line_start
+            tolerance = 5
+            label_range = range(label.line_start - tolerance, label.line_end + tolerance + 1)
+            finding_range = range(finding.line_start, f_end + 1)
+            overlap = len(set(finding_range) & set(label_range))
+            if overlap > 0:
+                score += 2.0 * min(overlap / max(len(finding_range), 1), 1.0)
+
+        return score
+
     def evaluate(self, findings: list[Finding], labels: list[GroundTruthLabel]) -> EvaluationResult:
+        if not findings and not labels:
+            return self._empty_result()
+
+        # Build score matrix: rows = findings, cols = labels
+        n_findings, n_labels = len(findings), len(labels)
+        scores = np.full((n_findings, n_labels), -1.0)
+        for i, finding in enumerate(findings):
+            for j, label in enumerate(labels):
+                scores[i, j] = self._match_score(finding, label)
+
+        # Optimal assignment (negate for minimization, mask infeasible pairs)
+        cost = np.where(scores < 0, 1e9, -scores)
         matched_findings: list[MatchedFinding] = []
-        consumed_label_ids: set[str] = set()
+        matched_finding_indices: set[int] = set()
+        matched_label_indices: set[int] = set()
 
-        for finding in findings:
-            matching_labels = [
-                l for l in labels
-                if l.file_path == finding.file_path
-                and l.id not in consumed_label_ids
-            ]
+        if n_findings > 0 and n_labels > 0:
+            row_ind, col_ind = linear_sum_assignment(cost)
+            for r, c in zip(row_ind, col_ind):
+                if scores[r, c] > 0:  # must have at least file match + one signal
+                    line_overlap = self._check_line_overlap(findings[r], labels[c])
+                    matched_findings.append(MatchedFinding(
+                        finding=findings[r],
+                        matched_label=labels[c],
+                        match_status=MatchStatus.TRUE_POSITIVE,
+                        file_match=True,
+                        line_overlap=line_overlap,
+                    ))
+                    matched_finding_indices.add(r)
+                    matched_label_indices.add(c)
 
-            if matching_labels:
-                best = self._select_best_label(finding, matching_labels)
-                consumed_label_ids.add(best.id)
-                line_overlap = self._check_line_overlap(finding, best)
-                matched_findings.append(MatchedFinding(
-                    finding=finding,
-                    matched_label=best,
-                    match_status=MatchStatus.TRUE_POSITIVE,
-                    file_match=True,
-                    line_overlap=line_overlap,
-                ))
-            else:
+        # Unmatched findings → false positives
+        for i, finding in enumerate(findings):
+            if i not in matched_finding_indices:
                 matched_findings.append(MatchedFinding(
                     finding=finding,
                     matched_label=None,
@@ -1945,20 +2923,15 @@ class FileLevelEvaluator(Evaluator):
                     line_overlap=False,
                 ))
 
-        unmatched_labels = [l for l in labels if l.id not in consumed_label_ids]
+        unmatched_labels = [l for j, l in enumerate(labels) if j not in matched_label_indices]
 
         # Assess evidence quality for true positives
-        evidence_assessor = EvidenceQualityAssessor()
+        evidence_assessor = self._get_evidence_assessor()
         for mf in matched_findings:
             if mf.match_status == MatchStatus.TRUE_POSITIVE:
                 mf.evidence_quality = evidence_assessor.assess(mf.finding, mf.matched_label)
 
         return self._compute_metrics(matched_findings, unmatched_labels, labels)
-
-    def _select_best_label(self, finding, candidates):
-        """Prefer matching vuln_class, then any."""
-        class_matches = [l for l in candidates if l.vuln_class == finding.vuln_class]
-        return class_matches[0] if class_matches else candidates[0]
 
     def _check_line_overlap(self, finding, label) -> bool:
         if finding.line_start is None or finding.line_end is None:
@@ -2013,6 +2986,85 @@ class EvidenceQualityAssessor:
         }.get(vuln_class, [])
 ```
 
+The heuristic assessor is fast but limited — it can't judge whether the model's reasoning is actually correct. For higher fidelity, use the LLM-as-judge assessor.
+
+#### LLM-as-Judge Evidence Assessor (Optional)
+
+Sends the finding's description + actual source code to an LLM judge that evaluates whether the explanation is accurate, identifies the mechanism, and cites correct code. Drop-in replacement for the heuristic assessor.
+
+```python
+JUDGE_PROMPT = """
+You are evaluating whether a security scanner correctly identified a vulnerability.
+
+## Finding description (what the scanner reported)
+{description}
+
+## Source code excerpt
+```
+{source_excerpt}
+```
+
+## Labeled vulnerability
+- Type: {vuln_class}
+- Expected location: lines {line_start}-{line_end}
+
+Answer ONLY with a JSON object:
+{{
+  "accurate": true|false,
+  "identifies_mechanism": true|false,
+  "cites_correct_code": true|false,
+  "reason": "<one sentence>"
+}}
+"""
+
+class LLMEvidenceAssessor:
+    """Uses an LLM to judge evidence quality. More accurate than heuristics,
+    but adds cost — use for final evaluation, not exploratory batches."""
+
+    def __init__(self, model: ModelProvider, target: TargetCodebase):
+        self.model = model
+        self.target = target
+
+    def assess(self, finding: Finding, label: GroundTruthLabel) -> EvidenceQuality:
+        excerpt = self.target.read_file_excerpt(
+            finding.file_path, label.line_start, context_lines=20
+        )
+        prompt = JUDGE_PROMPT.format(
+            description=finding.description,
+            source_excerpt=excerpt,
+            vuln_class=label.vuln_class,
+            line_start=label.line_start,
+            line_end=label.line_end,
+        )
+        response = self.model.complete(
+            [Message(role="user", content=prompt)], max_tokens=256
+        )
+        try:
+            verdict = json.loads(response.content)
+        except json.JSONDecodeError:
+            return EvidenceQuality.NOT_ASSESSED
+
+        score = sum([
+            verdict.get("accurate", False),
+            verdict.get("identifies_mechanism", False),
+            verdict.get("cites_correct_code", False),
+        ])
+        if score >= 3:
+            return EvidenceQuality.STRONG
+        elif score >= 2:
+            return EvidenceQuality.ADEQUATE
+        else:
+            return EvidenceQuality.WEAK
+```
+
+Configure which assessor to use via `experiments.yaml`:
+
+```yaml
+evaluation:
+  evidence_assessor: "heuristic"   # or "llm_judge"
+  evidence_judge_model: "claude-opus-4"  # only used when evidence_assessor = llm_judge
+```
+
 ### 9.3 Metrics Computation
 
 ```python
@@ -2057,7 +3109,90 @@ def _compute_metrics(self, matched, unmatched_labels, all_labels) -> EvaluationR
     )
 ```
 
-### 9.4 Reclassification Workflow
+### 9.4 Statistical Significance
+
+With `num_repetitions > 1`, the framework runs each matrix cell multiple times. This enables confidence intervals on metrics and pairwise model comparisons.
+
+```python
+import math
+from scipy.stats import chi2
+
+@dataclass
+class ConfidenceInterval:
+    point_estimate: float
+    lower: float
+    upper: float
+    alpha: float = 0.05
+
+def wilson_ci(successes: int, n: int, alpha: float = 0.05) -> ConfidenceInterval:
+    """Wilson score interval — handles p near 0 or 1 better than normal approx."""
+    if n == 0:
+        return ConfidenceInterval(0.0, 0.0, 0.0, alpha)
+    z = 1.96  # z_{0.975}
+    p_hat = successes / n
+    center = (p_hat + z**2 / (2 * n)) / (1 + z**2 / n)
+    margin = (z / (1 + z**2 / n)) * math.sqrt(
+        p_hat * (1 - p_hat) / n + z**2 / (4 * n**2)
+    )
+    return ConfidenceInterval(p_hat, max(0.0, center - margin), min(1.0, center + margin), alpha)
+
+class StatisticalAnalyzer:
+    """Computes confidence intervals and pairwise significance tests."""
+
+    def __init__(self, alpha: float = 0.05):
+        self.alpha = alpha
+
+    def precision_ci(self, results: list[EvaluationResult]) -> ConfidenceInterval:
+        """Wilson CI on precision across repeated runs."""
+        tp_total = sum(r.true_positives for r in results)
+        fp_total = sum(r.false_positives for r in results)
+        return wilson_ci(tp_total, tp_total + fp_total, self.alpha)
+
+    def recall_ci(self, results: list[EvaluationResult]) -> ConfidenceInterval:
+        """Wilson CI on recall across repeated runs."""
+        tp_total = sum(r.true_positives for r in results)
+        fn_total = sum(r.false_negatives for r in results)
+        return wilson_ci(tp_total, tp_total + fn_total, self.alpha)
+
+    def mcnemar_test(
+        self,
+        results_a: list[EvaluationResult],
+        results_b: list[EvaluationResult],
+        labels: list[GroundTruthLabel],
+    ) -> dict:
+        """
+        Pairwise McNemar's test: does model A detect vulns that model B misses,
+        and vice versa? Requires both to be evaluated against the same labels.
+
+        Returns dict with statistic, p_value, significant, and interpretation.
+        """
+        # For each label: was it found (TP) by A? by B?
+        a_found = self._label_detection_set(results_a, labels)
+        b_found = self._label_detection_set(results_b, labels)
+
+        # Discordant pairs
+        b_count = sum(1 for lid in labels if lid.id in a_found and lid.id not in b_found)
+        c_count = sum(1 for lid in labels if lid.id not in a_found and lid.id in b_found)
+        n = b_count + c_count
+        if n == 0:
+            return {"statistic": 0.0, "p_value": 1.0, "significant": False}
+
+        chi2_stat = (abs(b_count - c_count) - 1) ** 2 / n
+        p_value = 1 - chi2.cdf(chi2_stat, df=1)
+        winner = "A" if b_count > c_count else "B"
+        return {
+            "statistic": chi2_stat,
+            "p_value": p_value,
+            "significant": p_value < self.alpha,
+            "a_only": b_count,
+            "b_only": c_count,
+            "interpretation": f"{winner} detects more (p={p_value:.4f})",
+        }
+```
+
+When `num_repetitions > 1`, the matrix report includes confidence intervals on all metrics and significance markers on pairwise comparisons. With `num_repetitions=1` (default), these sections are omitted — single-run metrics are reported without error bars.
+
+### 9.5 Reclassification Workflow
 
 After an experiment run, team members can reclassify false positives to `UNLABELED_REAL` via the coordinator API:
 
@@ -2330,6 +3465,11 @@ class BatchComparison:
     persistent_misses: list[dict]     # labels missed in both batches
     improvements: list[dict]          # findings that went from FP→TP or FN→TP
     regressions: list[dict]           # findings that went from TP→FP or TP→FN
+
+    # Cross-batch finding matching uses FindingIdentity
+    # Two findings from different batches are "the same" if their
+    # FindingIdentity matches (same file, same vuln_class, same 10-line bucket)
+    finding_stability: dict[str, float]  # FindingIdentity → fraction of runs it appeared in
 ```
 
 ### 12.2 Workflow
@@ -2490,14 +3630,85 @@ verification_variants:
 parallel_modes:
   - false
 
+# Repetitions — run each matrix cell N times for statistical significance
+num_repetitions: 1                # increase to 3-5 for significance testing
+
+# Cross-model verification — optional
+# verifier_model_id: "claude-opus-4"  # uncomment to use a different model for verification
+
+# Spend control — coordinator auto-cancels remaining jobs when exceeded
+max_batch_cost_usd: 500.00
+
 # Global cap on concurrent experiment runs across all models.
 # Per-model caps in concurrency.yaml further constrain this.
 max_parallel_runs: 10
 
+# Evidence quality assessment
+evaluation:
+  evidence_assessor: "heuristic"      # or "llm_judge"
+  # evidence_judge_model: "claude-opus-4"  # only used when evidence_assessor = llm_judge
+
 output_root: "outputs/"
 ```
 
-### 14.2 Model Provider Configuration
+### 14.2 Retry Configuration
+
+```yaml
+# config/retry.yaml — per-provider retry policies
+
+defaults:
+  max_retries: 3
+  base_delay: 1.0
+  max_delay: 60.0
+  jitter: true
+  retryable_status_codes: [429, 503, 529]
+
+providers:
+  openai:
+    max_retries: 5
+    base_delay: 1.0
+    max_delay: 32.0
+    # 429 carries Retry-After header; honoured via exc.retry_after
+
+  anthropic:
+    max_retries: 4
+    base_delay: 2.0
+    max_delay: 60.0
+    retryable_status_codes: [429, 529]
+    # 529 = overloaded; treat same as rate-limit
+
+  gemini:
+    max_retries: 4
+    base_delay: 1.5
+    max_delay: 45.0
+
+  mistral:
+    max_retries: 3
+    base_delay: 1.0
+    max_delay: 30.0
+
+  cohere:
+    max_retries: 3
+    base_delay: 2.0
+    max_delay: 30.0
+    jitter: false
+    # Cohere rate limits are quota-based; jitter is less effective
+```
+
+### 14.3 Retention Configuration
+
+```yaml
+# In config/coordinator.yaml
+
+retention:
+  retention_days: 30              # batches older than this are auto-deleted
+  cleanup_interval_hours: 1       # how often the cleanup loop runs
+
+jobs:
+  ttl_seconds_after_finished: 3600  # K8s garbage-collects Job pods 1h after completion
+```
+
+### 14.4 Model Provider Configuration
 
 ```yaml
 # config/models.yaml
@@ -2539,7 +3750,7 @@ providers:
     api_key_env: "COHERE_API_KEY"
 ```
 
-### 14.3 Vulnerability Class Definitions
+### 14.5 Vulnerability Class Definitions
 
 ```yaml
 # config/vuln_classes.yaml
@@ -2558,7 +3769,7 @@ vuln_classes:
   # ... complete list matching VulnClass enum
 ```
 
-### 14.4 Review Profiles
+### 14.6 Review Profiles
 
 Pre-canned review profiles. Each is a named configuration with a system prompt modifier that is injected into all strategy system prompts. Users select profiles by name in `experiments.yaml` — they do not write freeform instructions.
 
@@ -3078,9 +4289,380 @@ All state lives in K8s (job status) and shared storage (results). The coordinato
 
 For a 100-run batch with `max_parallel_runs: 10` and average run duration of 10 minutes, expected wall-clock time is ~100 minutes (10 waves of 10). With concurrency caps, some models may take longer if their cap is lower than the global cap.
 
+### 15.7 Log Aggregation
+
+Worker pods are ephemeral — once a Job completes and the pod is garbage-collected, logs vanish. Two-layer solution:
+
+**Layer 1: Conversation transcripts to shared storage.** Each worker writes `conversation.jsonl` incrementally during the run — one JSON line per message exchange. Survives OOM kills and evictions (partial transcripts are still useful). Written to the same output directory as `run_result.json`.
+
+**Layer 2: Structured stdout to Loki via Fluentd DaemonSet.** Workers emit structured JSON to stdout with `batch_id` and `run_id` fields. A Fluentd DaemonSet on each node tails `/var/log/pods/sec-review_*/*/*.log`, filters for `app=sec-review-worker`, and forwards to Loki.
+
+```yaml
+# Fluentd ConfigMap (excerpt)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fluentd-worker-config
+  namespace: logging
+data:
+  fluent.conf: |
+    <source>
+      @type tail
+      path /var/log/pods/sec-review_*/*/*.log
+      pos_file /var/log/fluentd-worker.pos
+      tag kubernetes.worker.*
+      <parse>
+        @type cri
+      </parse>
+    </source>
+
+    <filter kubernetes.worker.**>
+      @type grep
+      <regexp>
+        key $.kubernetes.labels.app
+        pattern ^sec-review-worker$
+      </regexp>
+    </filter>
+
+    <match kubernetes.worker.**>
+      @type loki
+      url http://loki.monitoring.svc.cluster.local:3100
+      flush_interval 5s
+      <label>
+        app $.kubernetes.labels.app
+        batch_id $.kubernetes.labels.batch_id
+        run_id $.kubernetes.labels.run_id
+      </label>
+    </match>
+```
+
+Worker pods must carry `batch_id` and `run_id` as pod labels (already set by the coordinator's Job template).
+
+### 15.8 Dataset-Builder Jobs
+
+CVE imports require cloning repos from GitHub, but worker pods have egress locked to LLM provider endpoints. A separate `dataset-builder` Job type has its own NetworkPolicy permitting GitHub access.
+
+```yaml
+# k8s/network-policy-dataset-builder.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: dataset-builder-egress
+  namespace: sec-review
+spec:
+  podSelector:
+    matchLabels:
+      role: dataset-builder
+  policyTypes:
+    - Egress
+  egress:
+    # GitHub HTTPS
+    - ports:
+        - protocol: TCP
+          port: 443
+      to:
+        - ipBlock:
+            cidr: 140.82.112.0/20   # github.com (verify current ranges)
+        - ipBlock:
+            cidr: 192.30.252.0/22
+    # DNS
+    - ports:
+        - protocol: UDP
+          port: 53
+    # NFS/EFS
+    - ports:
+        - protocol: TCP
+          port: 2049
+```
+
+The coordinator creates `dataset-builder` Jobs when `POST /datasets/import-cve` is called. These jobs use a separate container image (`Dockerfile.dataset-builder`) with git installed, and mount the shared datasets volume read-write. Workers mount it read-only.
+
+### 15.9 RBAC Hardening
+
+The coordinator's ServiceAccount can create Jobs, but nothing prevents it from creating Jobs with arbitrary images. A Gatekeeper ConstraintTemplate restricts Jobs in the `sec-review` namespace to approved images only.
+
+```yaml
+# k8s/gatekeeper-constraint.yaml
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: secreviewjobimage
+spec:
+  crd:
+    spec:
+      names:
+        kind: SecReviewJobImage
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            allowedImages:
+              type: array
+              items:
+                type: string
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package secreviewjobimage
+
+        violation[{"msg": msg}] {
+          input.review.kind.kind == "Job"
+          containers := array.concat(
+            object.get(input.review.object.spec.template.spec, "containers", []),
+            object.get(input.review.object.spec.template.spec, "initContainers", [])
+          )
+          container := containers[_]
+          image := container.image
+          not image_is_allowed(image)
+          msg := sprintf("Image %q not permitted in sec-review namespace", [image])
+        }
+
+        image_is_allowed(image) {
+          image == input.parameters.allowedImages[_]
+        }
+---
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: SecReviewJobImage
+metadata:
+  name: restrict-sec-review-job-images
+spec:
+  enforcementAction: deny
+  match:
+    kinds:
+      - apiGroups: ["batch"]
+        kinds: ["Job"]
+    namespaces:
+      - sec-review
+  parameters:
+    allowedImages:
+      - "ghcr.io/myorg/sec-review/worker:v1.0.0"
+      - "ghcr.io/myorg/sec-review/dataset-builder:v1.0.0"
+```
+
+Defense-in-depth: namespace-scoped RBAC (limits what API objects the coordinator can touch) + Gatekeeper policy (limits what those objects may contain). Neither alone is sufficient.
+
 ---
 
-## 16. Extension Points
+## 16. Web Frontend
+
+A lightweight single-page web application served by the coordinator. Thin client — all logic lives in the coordinator API; the frontend is pure presentation and form submission.
+
+### 16.1 Technology
+
+| Choice | Rationale |
+|--------|-----------|
+| React + TypeScript | Team is technical, React is widely known, TS catches API contract drift |
+| Vite | Fast build, no heavy config |
+| Tailwind CSS | Utility-first, no design system needed for internal tooling |
+| CodeMirror 6 | Syntax-highlighted code viewer for source files, diffs, and conversation transcripts |
+| Bundled into coordinator image | Single deployment unit — `Dockerfile.coordinator` builds the frontend and serves static files via FastAPI's `StaticFiles` mount |
+
+No separate frontend deployment, no ingress, no CDN. The coordinator serves the SPA at `/` and the API at `/api/*`. Accessed via the same `kubectl port-forward` or Ingress as the API.
+
+**Dark mode**: Tailwind's `dark:` variant with `class` strategy. Defaults to system preference via `prefers-color-scheme`, togglable via a button in the nav bar. Persisted to `localStorage`. All components use semantic color tokens (`bg-surface`, `text-primary`, `border-subtle`) mapped to light/dark values — no per-component color overrides.
+
+```python
+# In coordinator.py
+from fastapi.staticfiles import StaticFiles
+
+app.mount("/", StaticFiles(directory="frontend/dist", html=True), name="frontend")
+```
+
+### 16.2 Pages
+
+#### Dashboard (`/`)
+
+Overview of framework state. First thing a user sees.
+
+- **Active batches** — table: batch_id, progress bar (completed/total), running cost, elapsed time, status. Click through to batch detail.
+- **Recent batches** — last 10 completed batches with headline metrics (best model, best strategy).
+- **System health** — coordinator status, active jobs by model (bar chart from Prometheus metrics), storage usage.
+
+#### Batch Submission (`/batches/new`)
+
+Form-driven batch creation. Replaces the `curl -X POST /batches` workflow.
+
+- **Dataset selector** — dropdown of available datasets with label count and size.
+- **Model picker** — checkboxes for available models. Shows pricing per model.
+- **Strategy picker** — checkboxes for strategies. Each expands to show its config (max_turns, skip_patterns, etc.).
+- **Profile picker** — radio buttons for review profiles. Shows the prompt modifier text on hover.
+- **Dimension toggles** — tool_variants (with/without), verification (none/with), parallel modes.
+- **Repetitions** — number input, defaults to 1.
+- **Cross-model verification** — optional model selector for verifier.
+- **Cost estimate** — live-updating estimate as the user changes selections. Calls `POST /batches/estimate` on every change (debounced). Shows total runs, estimated cost, breakdown by model.
+- **Spend cap** — number input, pre-filled from estimate + 20% buffer.
+- **Submit** — creates the batch. Redirects to batch detail page.
+
+#### Batch Detail (`/batches/:id`)
+
+Real-time progress and results for a single batch.
+
+**While running:**
+- Progress bar with counts: completed / running / pending / failed.
+- Running cost vs. spend cap (progress bar with warning color near cap).
+- Live table of completed runs: experiment_id, status, precision, recall, cost, duration. Rows appear as jobs complete (poll every 10s).
+- Cancel button.
+
+**After completion:**
+- **Comparative matrix** — the full matrix table from the report. Sortable by any column. Heatmap coloring on precision/recall/F1 cells (green = good, red = bad).
+- **Dimension analysis charts** — bar charts for model comparison, strategy comparison, tool access impact, profile impact, verification impact. Generated client-side from the JSON report data.
+- **Cost analysis** — table: model, avg cost/run, total batch cost, cost per true positive.
+- **Evidence quality breakdown** — stacked bar chart per model: strong/adequate/weak.
+- **Statistical significance** (when `num_repetitions > 1`) — confidence intervals on metrics, significance markers on pairwise comparisons.
+- **Findings explorer** — expandable table of all findings across all runs. Filter by: model, strategy, match_status (TP/FP/FN/unlabeled_real), vuln_class, severity. **Free-text search bar** at the top searches across title, description, recommendation, and raw LLM output (calls `GET /batches/:id/findings/search?q=...`). Click to expand and see full LLM description, verification evidence, matched label. Expansion renders the LLM description in a CodeMirror instance (read-only, markdown mode) so code blocks and file references are syntax-highlighted.
+- **Reclassify button** on each FP finding — opens modal to reclassify as `unlabeled_real` with a note. Calls `POST /batches/:id/runs/:run_id/reclassify`.
+- **Run comparison** — "Compare" button in the comparative matrix. Select any two rows (click first, shift-click second), then "Compare Selected". Opens a side-by-side view (`/batches/:id/compare?a=run_a&b=run_b`) showing:
+  - Header: both runs' config (model, strategy, tools, profile) and metrics side by side with deltas highlighted.
+  - Three-column findings table grouped by `FindingIdentity`:
+    - **Found by both** — shows both descriptions side by side in CodeMirror. Useful for comparing explanation quality between models.
+    - **Only in Run A** — findings that A found but B missed. Each shows the LLM description and the matching ground truth label (if TP) or "not in ground truth" (if FP).
+    - **Only in Run B** — same, reversed.
+  - Summary: "Run A found 3 vulns that B missed. Run B found 1 vuln that A missed. 12 vulns found by both."
+- **Download reports** — button in the batch header. Calls `GET /batches/:id/results/download`. Returns a .zip containing `matrix_report.md`, `matrix_report.json`, and per-run `report.md` / `report.json` files.
+
+#### CVE Discovery (`/datasets/discover`)
+
+The workflow that most benefits from a UI. Reviewing ranked CVE candidates in JSON is impractical; a table with filtering and one-click import is essential.
+
+- **Criteria form** — fields matching `CVESelectionCriteria`: language checkboxes, vuln class multiselect, severity range slider, patch size range (min/max lines), repo size range (min/max KLOC), date range picker. "Search" button calls `POST /datasets/discover-cves`.
+- **Results table** — sortable, filterable table of candidates:
+
+  | Score | CVE ID | Vuln Class | Severity | Language | Repo | Files Changed | Lines | Importable |
+  |-------|--------|------------|----------|----------|------|---------------|-------|------------|
+  | 0.92 | CVE-2024-1234 | sqli | high | python | example/project | 2 | 18 | yes |
+
+  Each row expandable to show: description, affected files, score breakdown (radar chart or bar), link to GitHub advisory and fix commit.
+- **Bulk select + import** — checkboxes on each row. "Import Selected" button. Optional dataset name prefix. Shows confirmation modal with total count before triggering imports.
+- **Resolution tab** — separate tab for manual mode. Single text input for CVE ID, "Resolve" button. Shows resolved metadata. "Import" button if resolution succeeds.
+
+#### Dataset Management (`/datasets`)
+
+- **Dataset list** — table: name, source (CVE/injected/manual), label count, repo size, created date.
+- **Dataset detail** — two-panel layout:
+  - **Left panel: file tree** — collapsible directory tree fetched from `GET /datasets/{name}/tree`. Files show language icon and size. Files containing labeled vulns are badged with a count.
+  - **Right panel: file viewer** — clicking a file loads its content via `GET /datasets/{name}/file?path=...` into a CodeMirror instance with syntax highlighting (language auto-detected from extension), read-only mode, and line numbers. Ground truth labels for the file are rendered as inline annotations — colored gutters marks on labeled line ranges (red for critical/high, yellow for medium, blue for low) with hover tooltips showing the label details (vuln_class, CWE, description, source).
+  - **Label table** — below the file viewer. Full label list for the dataset, sortable/filterable. Clicking a label row navigates the file viewer to that file and scrolls to the labeled line range.
+- **Inject vulnerability** — multi-step workflow:
+  1. **Select template** — templates listed in a table grouped by vuln_class. Each row shows: ID, language, CWE, severity, description, anchor pattern. Click to select.
+  2. **Select target file** — interactive repo file tree (fetched from dataset). Files are filtered to those matching the template's language. Clicking a file shows its content in a read-only code viewer with line numbers.
+  3. **Substitutions** — if the template has `{{PLACEHOLDER}}` tokens, a form appears with one input per placeholder (e.g., `TABLE_NAME`, `COLUMN`). Defaults are suggested from the template.
+  4. **Preview** — clicking "Preview" calls `POST /datasets/{name}/inject/preview`. The result renders as:
+     - A side-by-side diff view (before / after) with syntax highlighting. Injected lines highlighted in red/green.
+     - The label that will be created: file path, line range, vuln_class, CWE, severity.
+     - A warning if the anchor pattern matched multiple locations (shows which one was selected).
+  5. **Confirm** — "Inject" button is only enabled after preview. Calls `POST /datasets/{name}/inject`. Success shows a toast with the new label ID and updates the label table.
+  6. **Undo** — the injection is a file modification on shared storage. An "Undo last injection" button is available for 60 seconds after injection, calling a revert endpoint that restores the file from the pre-injection snapshot (stored temporarily during injection).
+- **Generate diff dataset** — form: select clean repo, select templates to inject, target files. Each template shows a preview. "Generate" triggers `DiffDatasetGenerator` and shows progress.
+
+#### Feedback (`/feedback`)
+
+- **Batch comparison** — two dropdowns to select batches A and B. "Compare" button. Results show:
+  - Metric deltas table (experiment_id, precision delta, recall delta, highlighted regressions in red).
+  - Persistent FP patterns — table with model, vuln_class, pattern description, count, suggested action.
+  - Stability analysis — findings that appeared/disappeared between batches, grouped by `FindingIdentity`.
+- **FP pattern browser** — select a batch, see recurring false positive patterns. Link to the specific findings.
+
+#### Run Detail (`/batches/:batch_id/runs/:run_id`)
+
+Deep dive into a single experiment run.
+
+- **Header** — model, strategy, tool_variant, profile, verification, status, duration, cost. Download button for this run's reports.
+- **Prompt snapshot** — collapsible section showing exact system prompt, user message template, profile modifier, finding format used. Rendered in CodeMirror (read-only) with diff highlighting if the prompts differ from the batch default.
+- **Metrics** — precision, recall, F1, FPR, evidence quality breakdown.
+- **Findings table** — all findings with match status, free-text search bar. Expandable to show:
+  - LLM description and verification evidence (CodeMirror, markdown mode).
+  - **Source context** — the actual source file around the finding's line range, loaded from the dataset via `GET /datasets/{name}/file`. Rendered in CodeMirror with the finding's line range highlighted. Ground truth label (if matched) shown as a separate annotation so the user can see how well the model's reported location aligns with the label.
+  - Reclassify button (for FP findings).
+- **Tool call audit** — table of tool calls with name, input (truncated, expandable), timestamp. Flagged rows for calls with URL-like strings.
+- **Conversation transcript** — collapsible, full message-by-message exchange from `conversation.jsonl`. Each message rendered in CodeMirror with role-based coloring (user=blue, assistant=green, tool=gray). Useful for debugging why the model did or didn't find something.
+
+### 16.3 Directory Structure
+
+```
+frontend/
+├── package.json
+├── tsconfig.json
+├── vite.config.ts
+├── index.html
+├── src/
+│   ├── main.tsx
+│   ├── App.tsx
+│   ├── api/
+│   │   └── client.ts            # typed API client (generated from OpenAPI spec)
+│   ├── pages/
+│   │   ├── Dashboard.tsx
+│   │   ├── BatchNew.tsx
+│   │   ├── BatchDetail.tsx
+│   │   ├── RunDetail.tsx
+│   │   ├── RunCompare.tsx        # side-by-side run comparison
+│   │   ├── CVEDiscovery.tsx
+│   │   ├── Datasets.tsx
+│   │   ├── DatasetDetail.tsx
+│   │   └── Feedback.tsx
+│   ├── components/
+│   │   ├── MatrixTable.tsx       # sortable, heatmapped comparative matrix
+│   │   ├── FindingsExplorer.tsx  # filterable findings table with search + expand
+│   │   ├── FindingsSearch.tsx    # free-text search bar, calls /findings/search
+│   │   ├── CodeViewer.tsx        # CodeMirror wrapper: syntax highlight, annotations, line gutter
+│   │   ├── FileTree.tsx          # collapsible directory tree with label badges
+│   │   ├── DiffViewer.tsx        # side-by-side diff (for injection preview + run comparison)
+│   │   ├── CostEstimate.tsx      # live cost estimate widget
+│   │   ├── ProgressBar.tsx
+│   │   ├── DimensionChart.tsx    # bar chart for dimension analysis
+│   │   ├── CVECandidateTable.tsx # discovery results with bulk select
+│   │   ├── ConversationViewer.tsx # message-by-message transcript with role coloring
+│   │   ├── ThemeToggle.tsx       # dark/light mode toggle
+│   │   └── DownloadButton.tsx    # report download (.zip)
+│   └── hooks/
+│       ├── useBatch.ts           # polling hook for batch progress
+│       ├── useEstimate.ts        # debounced cost estimate
+│       ├── useTheme.ts           # dark mode state + localStorage persistence
+│       └── useSearch.ts          # debounced free-text search
+└── dist/                         # built output, copied into coordinator image
+```
+
+### 16.4 API Client Generation
+
+The frontend API client is auto-generated from the coordinator's OpenAPI spec (FastAPI provides this at `/openapi.json`). This keeps the frontend in sync with the API without manual type definitions.
+
+```bash
+# Generate typed client from running coordinator
+npx openapi-typescript-codegen \
+  --input http://localhost:8080/openapi.json \
+  --output frontend/src/api/generated \
+  --client fetch
+```
+
+Re-run after API changes. The generated types are committed to the repo so the frontend builds without a running coordinator.
+
+### 16.5 Build and Deployment
+
+The frontend is built during the coordinator Docker image build:
+
+```dockerfile
+# Dockerfile.coordinator (updated)
+FROM node:20-slim AS frontend-build
+WORKDIR /frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ .
+RUN npm run build
+
+FROM python:3.12-slim
+COPY pyproject.toml .
+COPY src/ src/
+RUN pip install --no-cache-dir ".[coordinator]"
+COPY --from=frontend-build /frontend/dist /app/frontend/dist
+
+EXPOSE 8080
+ENTRYPOINT ["uvicorn", "sec_review_framework.coordinator:app", "--host", "0.0.0.0", "--port", "8080"]
+```
+
+One image, one deployment, one port. The coordinator serves the SPA at `/` and the API at `/api/*`. No CORS issues, no separate frontend ingress.
+
+---
+
+## 17. Extension Points
 
 ### Adding a New Model Provider
 
@@ -3137,7 +4719,7 @@ Add an entry to `config/review_profiles.yaml` with a `name`, `description`, and 
 
 ---
 
-## 17. Future Work: Iterative Review
+## 18. Future Work: Iterative Review
 
 The current framework runs each experiment as a single shot — the model reviews the codebase once and produces findings. Production review workflows are often iterative: an initial review produces findings, the developer fixes some issues, and the reviewer checks again.
 
