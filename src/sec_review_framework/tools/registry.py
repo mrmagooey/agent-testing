@@ -2,14 +2,53 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from sec_review_framework.data.experiment import ToolVariant
+from sec_review_framework.data.experiment import ToolExtension, ToolVariant
 from sec_review_framework.models.base import ToolDefinition
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Extension auto-registration
+#
+# Each extension module calls register_extension_builder() at import time.
+# We guard with try/except so that a missing optional dependency (e.g.
+# tree-sitter-language-pack not installed) produces a clear warning rather
+# than an import error that breaks the whole registry.
+# ---------------------------------------------------------------------------
+try:
+    from sec_review_framework.tools.extensions import lsp_ext  # noqa: F401
+except ImportError as _ext_import_err:
+    logger.warning(
+        "lsp_ext could not be imported; ToolExtension.LSP will not be "
+        "available. Install worker extras to enable it. (%s)",
+        _ext_import_err,
+    )
+
+try:
+    from sec_review_framework.tools.extensions import tree_sitter_ext  # noqa: F401
+except ImportError as _ext_import_err:
+    logger.warning(
+        "tree_sitter_ext could not be imported; ToolExtension.TREE_SITTER will not be "
+        "available. Install worker extras to enable it. (%s)",
+        _ext_import_err,
+    )
+
+try:
+    from sec_review_framework.tools.extensions import devdocs_ext  # noqa: F401
+except ImportError as _ext_import_err:
+    logger.warning(
+        "devdocs_ext could not be imported; ToolExtension.DEVDOCS will not be "
+        "available. Install worker extras to enable it. (%s)",
+        _ext_import_err,
+    )
 
 
 @dataclass
@@ -73,6 +112,8 @@ class ToolRegistry:
 
     tools: dict[str, Tool] = field(default_factory=dict)
     audit_log: ToolCallAuditLog = field(default_factory=ToolCallAuditLog)
+    _closers: list[Callable[[], None]] = field(default_factory=list, repr=False)
+    _closed: bool = field(default=False, repr=False)
 
     def get_tool_definitions(self) -> list[ToolDefinition]:
         return [t.definition() for t in self.tools.values()]
@@ -102,12 +143,48 @@ class ToolRegistry:
         """Return a registry sharing the same tool instances but with a fresh audit log."""
         return ToolRegistry(tools=dict(self.tools), audit_log=ToolCallAuditLog())
 
+    def add_closer(self, fn: Callable[[], None]) -> None:
+        """Register a cleanup callback invoked by close() in LIFO order."""
+        self._closers.append(fn)
+
+    def close(self) -> None:
+        """Run all registered closers in LIFO order. Idempotent; exceptions are logged."""
+        if self._closed:
+            return
+        self._closed = True
+        for fn in reversed(self._closers):
+            try:
+                fn()
+            except Exception:
+                logger.exception("Error in registry closer %r", fn)
+
+
+# Dispatch table for optional tool extensions.  Chunks 3-5 populate this via
+# register_extension_builder(); left empty here so Chunk 2 ships a clean scaffold.
+_EXTENSION_BUILDERS: dict[ToolExtension, Callable[["ToolRegistry", Any], None]] = {}
+
+
+def register_extension_builder(
+    ext: ToolExtension,
+    builder: Callable[["ToolRegistry", Any], None],
+) -> None:
+    """Register a builder for a ToolExtension so create() can invoke it.
+
+    Called by extension modules (Chunks 3-5) at import time — keeps the factory
+    body free of per-extension conditionals.
+    """
+    _EXTENSION_BUILDERS[ext] = builder
+
 
 class ToolRegistryFactory:
     """Constructs a ToolRegistry appropriate for the given ToolVariant."""
 
     @staticmethod
-    def create(tool_variant: ToolVariant, target: Any) -> ToolRegistry:
+    def create(
+        tool_variant: ToolVariant,
+        target: Any,
+        tool_extensions: frozenset[ToolExtension] | Iterable[ToolExtension] = frozenset(),
+    ) -> ToolRegistry:
         """
         Build and return a configured ToolRegistry.
 
@@ -119,35 +196,57 @@ class ToolRegistryFactory:
         target:
             The repository/target being reviewed. Expected to expose a
             ``repo_path`` attribute (Path) used by file-access tools.
+        tool_extensions:
+            Optional extension dimensions (tree-sitter, LSP, DevDocs). Each
+            extension's builder must have been registered via
+            register_extension_builder before create() is called.  Passing an
+            unregistered extension raises ValueError immediately so misconfigured
+            runs fail fast rather than silently running without the extension.
         """
+        extensions: frozenset[ToolExtension] = (
+            tool_extensions
+            if isinstance(tool_extensions, frozenset)
+            else frozenset(tool_extensions)
+        )
+
         registry = ToolRegistry()
 
-        if tool_variant == ToolVariant.WITHOUT_TOOLS:
-            return registry
+        if tool_variant != ToolVariant.WITHOUT_TOOLS:
+            # WITH_TOOLS — import here to avoid circular imports at module level.
+            from pathlib import Path
 
-        # WITH_TOOLS — import here to avoid circular imports at module level.
-        from pathlib import Path
+            from sec_review_framework.tools.doc_lookup import DocLookupTool
+            from sec_review_framework.tools.repo_access import (
+                GrepTool,
+                ListDirectoryTool,
+                ReadFileTool,
+            )
+            from sec_review_framework.tools.semgrep import SemgrepTool
 
-        from sec_review_framework.tools.doc_lookup import DocLookupTool
-        from sec_review_framework.tools.repo_access import (
-            GrepTool,
-            ListDirectoryTool,
-            ReadFileTool,
-        )
-        from sec_review_framework.tools.semgrep import SemgrepTool
+            repo_path: Path = getattr(target, "repo_path", Path(str(target)))
 
-        repo_path: Path = getattr(target, "repo_path", Path(str(target)))
+            core_tools: list[Tool] = [
+                ReadFileTool(repo_root=repo_path),
+                ListDirectoryTool(repo_root=repo_path),
+                GrepTool(repo_root=repo_path),
+                SemgrepTool(repo_path=repo_path),
+            ]
 
-        tools: list[Tool] = [
-            ReadFileTool(repo_root=repo_path),
-            ListDirectoryTool(repo_root=repo_path),
-            GrepTool(repo_root=repo_path),
-            SemgrepTool(repo_path=repo_path),
-            DocLookupTool(),
-        ]
+            # When DEVDOCS is active the MCP-backed doc_* tools replace the stub.
+            # Suppress the stub so the two don't coexist in the registry.
+            if ToolExtension.DEVDOCS not in extensions:
+                core_tools.append(DocLookupTool())
 
-        for tool in tools:
-            defn = tool.definition()
-            registry.tools[defn.name] = tool
+            for tool in core_tools:
+                defn = tool.definition()
+                registry.tools[defn.name] = tool
+
+        for ext in extensions:
+            builder = _EXTENSION_BUILDERS.get(ext)
+            if builder is None:
+                raise ValueError(
+                    f"ToolExtension {ext.value!r} is not yet implemented"
+                )
+            builder(registry, target)
 
         return registry

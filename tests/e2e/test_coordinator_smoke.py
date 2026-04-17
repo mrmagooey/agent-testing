@@ -318,12 +318,12 @@ class TestSmokeBatchStatusAfterSubmit:
 
         status = get_resp.json()
         assert status["batch_id"] == BATCH_ID
-        assert status["total"] == 1
-        assert status["completed"] == 0
-        assert status["failed"] == 0
+        assert status["total_runs"] == 1
+        assert status["completed_runs"] == 0
+        assert status["failed_runs"] == 0
         # Runs may be 'pending' or 'running' depending on the scheduling thread timing;
         # the key guarantee is that nothing is completed yet.
-        assert status["completed"] == 0
+        assert status["completed_runs"] == 0
 
 
 class TestSmokeRunWorkerAndCollect:

@@ -3,15 +3,36 @@ import { useParams, useSearchParams } from 'react-router-dom'
 import { compareRuns, type RunComparison, type Finding } from '../api/client'
 import Breadcrumbs from '../components/Breadcrumbs'
 import CodeViewer from '../components/CodeViewer'
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
 
-function delta(a?: number, b?: number): React.ReactNode {
+function DeltaBadge({ a, b }: { a?: number; b?: number }) {
   if (a === undefined || b === undefined) return null
   const diff = b - a
-  const cls = diff > 0 ? 'text-green-600 dark:text-green-400' : diff < 0 ? 'text-red-600 dark:text-red-400' : 'text-gray-400'
+  const formatted = `${diff > 0 ? '+' : ''}${diff.toFixed(3)}`
+  if (diff > 0) {
+    return (
+      <Badge className="ml-2 bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300 border-green-300 dark:border-green-700 font-mono text-xs" variant="outline">
+        {formatted}
+      </Badge>
+    )
+  }
+  if (diff < 0) {
+    return (
+      <Badge className="ml-2 bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300 border-red-300 dark:border-red-700 font-mono text-xs" variant="outline">
+        {formatted}
+      </Badge>
+    )
+  }
   return (
-    <span className={`ml-2 text-sm ${cls}`}>
-      {diff > 0 ? '+' : ''}{diff.toFixed(3)}
-    </span>
+    <Badge className="ml-2 font-mono text-xs" variant="secondary">
+      {formatted}
+    </Badge>
   )
 }
 
@@ -38,6 +59,28 @@ function FindingCard({ finding, expandedId, onToggle }: {
         </div>
       )}
     </div>
+  )
+}
+
+function VennDiagram({ aOnly, overlap, bOnly }: { aOnly: number; overlap: number; bOnly: number }) {
+  const w = 160, h = 80, r = 36, cx1 = 52, cx2 = 108, cy = 40
+  return (
+    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} aria-label="Venn diagram">
+      <circle cx={cx1} cy={cy} r={r} fill="#6366f1" fillOpacity={0.25} stroke="#6366f1" strokeWidth={1.5} />
+      <circle cx={cx2} cy={cy} r={r} fill="#6366f1" fillOpacity={0.25} stroke="#6366f1" strokeWidth={1.5} />
+      <text x={cx1 - r / 2 - 4} y={cy + 1} textAnchor="middle" dominantBaseline="middle"
+        className="fill-indigo-700 dark:fill-indigo-300" fontSize={13} fontWeight="bold">{aOnly}</text>
+      <text x={(cx1 + cx2) / 2} y={cy + 1} textAnchor="middle" dominantBaseline="middle"
+        className="fill-indigo-900 dark:fill-indigo-100" fontSize={12} fontWeight="bold">{overlap}</text>
+      <text x={cx2 + r / 2 + 4} y={cy + 1} textAnchor="middle" dominantBaseline="middle"
+        className="fill-indigo-700 dark:fill-indigo-300" fontSize={13} fontWeight="bold">{bOnly}</text>
+      <text x={cx1 - r / 2 - 4} y={cy + 17} textAnchor="middle" dominantBaseline="middle"
+        className="fill-indigo-500 dark:fill-indigo-400" fontSize={8}>only A</text>
+      <text x={(cx1 + cx2) / 2} y={cy + 17} textAnchor="middle" dominantBaseline="middle"
+        className="fill-indigo-500 dark:fill-indigo-400" fontSize={8}>both</text>
+      <text x={cx2 + r / 2 + 4} y={cy + 17} textAnchor="middle" dominantBaseline="middle"
+        className="fill-indigo-500 dark:fill-indigo-400" fontSize={8}>only B</text>
+    </svg>
   )
 }
 
@@ -83,6 +126,10 @@ export default function RunCompare() {
 
   const tabFindings = activeTab === 'both' ? found_by_both : activeTab === 'only_a' ? only_in_a : only_in_b
 
+  const costDiff = run_a.cost_usd !== undefined && run_b.cost_usd !== undefined
+    ? run_b.cost_usd - run_a.cost_usd
+    : undefined
+
   return (
     <div className="space-y-6">
       <Breadcrumbs
@@ -93,82 +140,120 @@ export default function RunCompare() {
         ]}
       />
 
-      {/* Header comparison */}
+      {/* Header comparison — shadcn Card for each run panel */}
       <div className="grid grid-cols-2 gap-4">
         {[
           { label: 'Run A', run: run_a },
           { label: 'Run B', run: run_b },
         ].map(({ label, run }) => (
-          <div key={label} className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
-            <h2 className="font-bold text-lg mb-3">{label}</h2>
-            <dl className="space-y-1 text-sm">
-              {[
-                ['Model', run.model],
-                ['Strategy', run.strategy],
-                ['Tools', run.tool_variant],
-                ['Profile', run.profile],
-              ].map(([k, v]) => (
-                <div key={k} className="flex justify-between">
-                  <dt className="text-gray-500 dark:text-gray-400">{k}</dt>
-                  <dd className="font-mono text-xs">{v}</dd>
-                </div>
-              ))}
-              <div className="pt-2 mt-2 border-t border-gray-100 dark:border-gray-700 space-y-1">
-                {(['precision', 'recall', 'f1'] as const).map((m) => (
-                  <div key={m} className="flex justify-between">
-                    <dt className="text-gray-500 dark:text-gray-400 capitalize">{m}</dt>
-                    <dd className="font-mono text-xs">
-                      {run[m]?.toFixed(3) ?? '—'}
-                      {label === 'Run B' && delta(run_a[m], run_b[m])}
-                    </dd>
+          <Card key={label}>
+            <CardHeader>
+              <CardTitle>{label}</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <dl className="space-y-1 text-sm">
+                {[
+                  ['Model', run.model],
+                  ['Strategy', run.strategy],
+                  ['Tools', run.tool_variant],
+                  ['Extensions', (run.tool_extensions ?? []).join(', ') || '—'],
+                  ['Profile', run.profile],
+                ].map(([k, v]) => (
+                  <div key={k} className="flex justify-between">
+                    <dt className="text-muted-foreground">{k}</dt>
+                    <dd className="font-mono text-xs">{v}</dd>
                   </div>
                 ))}
-              </div>
-            </dl>
-          </div>
+                <div className="pt-2 mt-2 border-t border-gray-100 dark:border-gray-700 space-y-1">
+                  {(['precision', 'recall', 'f1'] as const).map((m) => (
+                    <div key={m} className="flex justify-between items-center">
+                      <dt className="text-muted-foreground capitalize">{m}</dt>
+                      <dd className="font-mono text-xs flex items-center">
+                        {run[m]?.toFixed(3) ?? '—'}
+                        {label === 'Run B' && (
+                          <DeltaBadge a={run_a[m]} b={run_b[m]} />
+                        )}
+                      </dd>
+                    </div>
+                  ))}
+                </div>
+              </dl>
+            </CardContent>
+          </Card>
         ))}
       </div>
 
-      {/* Summary */}
-      <div className="bg-indigo-50 dark:bg-indigo-950 rounded-lg px-5 py-3 text-sm text-indigo-800 dark:text-indigo-200">
-        Run A found <strong>{only_in_a.length}</strong> vulns that B missed.
-        Run B found <strong>{only_in_b.length}</strong> vulns that A missed.{' '}
-        <strong>{found_by_both.length}</strong> found by both.
-      </div>
-
-      {/* Tabs */}
-      <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
-        <div className="flex gap-1 mb-5 border-b border-gray-200 dark:border-gray-700">
-          {tabs.map((t) => (
-            <button
-              key={t.key}
-              onClick={() => setActiveTab(t.key)}
-              className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px ${
-                activeTab === t.key
-                  ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
-              }`}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-        <div className="space-y-3">
-          {tabFindings.map((f) => (
-            <FindingCard
-              key={f.finding_id}
-              finding={f}
-              expandedId={expandedId}
-              onToggle={(id) => setExpandedId((prev) => prev === id ? null : id)}
-            />
-          ))}
-          {tabFindings.length === 0 && (
-            <p className="text-sm text-gray-400 dark:text-gray-500 text-center py-8">
-              No findings in this category.
-            </p>
+      {/* Summary — Venn + cost delta. Kept as indigo callout panel (not a Card) per spec */}
+      <div className="bg-indigo-50 dark:bg-indigo-950 rounded-lg px-5 py-4">
+        <div className="flex flex-wrap items-center gap-6">
+          {/* Hand-rolled SVG Venn — preserved */}
+          <div className="shrink-0">
+            <VennDiagram aOnly={only_in_a.length} overlap={found_by_both.length} bOnly={only_in_b.length} />
+          </div>
+          <div className="text-sm text-indigo-800 dark:text-indigo-200 space-y-1">
+            <p>Run A found <strong>{only_in_a.length}</strong> vulns that B missed.</p>
+            <p>Run B found <strong>{only_in_b.length}</strong> vulns that A missed.</p>
+            <p><strong>{found_by_both.length}</strong> found by both.</p>
+          </div>
+          {/* Cost delta — wrapped in a Badge for the diff */}
+          {costDiff !== undefined && run_a.cost_usd !== undefined && run_b.cost_usd !== undefined && (
+            <div className="ml-auto text-sm text-indigo-800 dark:text-indigo-200 text-right">
+              <p className="text-xs opacity-70 mb-1">Cost delta (B − A)</p>
+              <Badge
+                variant="outline"
+                className={`font-mono font-bold text-base px-3 py-1 ${
+                  costDiff > 0
+                    ? 'border-red-400 text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950'
+                    : costDiff < 0
+                    ? 'border-emerald-400 text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950'
+                    : 'border-gray-300 text-gray-500'
+                }`}
+              >
+                {costDiff >= 0 ? '+' : ''}${costDiff.toFixed(4)}
+              </Badge>
+              <p className="text-xs opacity-60 mt-1">
+                A: ${run_a.cost_usd.toFixed(4)} / B: ${run_b.cost_usd.toFixed(4)}
+              </p>
+            </div>
           )}
         </div>
       </div>
+
+      {/* Findings tabs — shadcn Card wrapper */}
+      <Card>
+        <CardContent className="pt-6">
+          <div className="flex gap-1 mb-5 border-b border-gray-200 dark:border-gray-700">
+            {tabs.map((t) => (
+              <button
+                key={t.key}
+                onClick={() => setActiveTab(t.key)}
+                className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px ${
+                  activeTab === t.key
+                    ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
+                }`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+          <div className="space-y-3">
+            {tabFindings.map((f) => (
+              <FindingCard
+                key={f.finding_id}
+                finding={f}
+                expandedId={expandedId}
+                onToggle={(id) => setExpandedId((prev) => prev === id ? null : id)}
+              />
+            ))}
+            {tabFindings.length === 0 && (
+              <p className="text-sm text-muted-foreground text-center py-8">
+                No findings in this category.
+              </p>
+            )}
+          </div>
+        </CardContent>
+      </Card>
     </div>
   )
 }

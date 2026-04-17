@@ -23,6 +23,7 @@ const batchResults = loadFixture<unknown>('batch-results.json')
 const fpPatterns = loadFixture<unknown[]>('fp-patterns.json')
 const fileTree = loadFixture<unknown>('file-tree.json')
 const templates = loadFixture<unknown[]>('templates.json')
+const accuracyMatrix = loadFixture<unknown>('accuracy-matrix.json')
 
 function json(route: Route, body: unknown, status = 200) {
   return route.fulfill({
@@ -164,8 +165,20 @@ export async function mockApi(page: Page) {
     if (path === '/profiles' && method === 'GET') {
       return json(route, ['default', 'strict', 'lenient'])
     }
+    if (path === '/tool-extensions' && method === 'GET') {
+      return json(route, [
+        { key: 'tree_sitter', label: 'Tree-sitter', available: true },
+        { key: 'lsp', label: 'LSP', available: true },
+        { key: 'devdocs', label: 'DevDocs', available: false },
+      ])
+    }
     if (path === '/templates' && method === 'GET') {
       return json(route, templates)
+    }
+
+    // --- Matrix ---
+    if (path === '/matrix/accuracy' && method === 'GET') {
+      return json(route, accuracyMatrix)
     }
 
     // --- Smoke test ---

@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 import sec_review_framework.coordinator as coord_module
 from sec_review_framework.coordinator import (
+    AUDIT_URL_CHECK_EXEMPT_PREFIXES,
     BatchCoordinator,
     BatchCostTracker,
     app,
@@ -27,6 +28,7 @@ from sec_review_framework.data.experiment import (
     RunResult,
     RunStatus,
     StrategyName,
+    ToolExtension,
     ToolVariant,
     VerificationVariant,
 )
@@ -387,6 +389,104 @@ async def test_submit_batch_creates_db_record(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
+# Batch Frontend Contract — enforce shape of serialized batches
+# ---------------------------------------------------------------------------
+
+# Expected frontend Batch interface from frontend/src/api/client.ts:7-20
+FRONTEND_BATCH_REQUIRED_KEYS = {
+    "batch_id",
+    "status",
+    "dataset",
+    "created_at",
+    "total_runs",
+    "completed_runs",
+    "running_runs",
+    "pending_runs",
+    "failed_runs",
+    "total_cost_usd",
+}
+
+FRONTEND_BATCH_OPTIONAL_KEYS = {
+    "completed_at",
+    "spend_cap_usd",
+}
+
+ALLOWED_STATUS_VALUES = {"pending", "running", "completed", "failed", "cancelled"}
+
+
+class TestBatchFrontendContract:
+    """Test that batch endpoints return correct shape for frontend consumption."""
+
+    @pytest.mark.asyncio
+    async def test_list_batches_contract(self, coordinator_client):
+        """GET /batches returns array of batches matching frontend Batch interface."""
+        client, c, tmp_path = coordinator_client
+
+        # Submit a batch
+        resp = client.post("/batches", json=_minimal_matrix())
+        assert resp.status_code == 201
+
+        # List batches
+        resp = client.get("/batches")
+        assert resp.status_code == 200
+        batches = resp.json()
+        assert isinstance(batches, list)
+        assert len(batches) > 0
+
+        # Check first batch conforms to frontend contract
+        batch = batches[0]
+        self._assert_batch_contract(batch)
+
+    @pytest.mark.asyncio
+    async def test_get_batch_detail_contract(self, coordinator_client):
+        """GET /batches/{id} returns single batch matching frontend Batch interface."""
+        client, c, tmp_path = coordinator_client
+
+        # Submit a batch
+        resp = client.post("/batches", json=_minimal_matrix())
+        assert resp.status_code == 201
+        batch_id = resp.json()["batch_id"]
+
+        # Get batch detail
+        resp = client.get(f"/batches/{batch_id}")
+        assert resp.status_code == 200
+        batch = resp.json()
+
+        # Check batch conforms to frontend contract
+        self._assert_batch_contract(batch)
+
+    def _assert_batch_contract(self, batch: dict) -> None:
+        """Assert batch dict has exactly the keys and types the frontend expects."""
+        # Check all required keys present
+        batch_keys = set(batch.keys())
+        missing = FRONTEND_BATCH_REQUIRED_KEYS - batch_keys
+        assert not missing, f"Missing required keys: {missing}"
+
+        # Check no unexpected keys (only required + optional allowed)
+        allowed_keys = FRONTEND_BATCH_REQUIRED_KEYS | FRONTEND_BATCH_OPTIONAL_KEYS
+        unexpected = batch_keys - allowed_keys
+        assert not unexpected, f"Unexpected keys: {unexpected}"
+
+        # Check types
+        assert isinstance(batch["batch_id"], str)
+        assert batch["status"] in ALLOWED_STATUS_VALUES
+        assert isinstance(batch["dataset"], str)
+        assert isinstance(batch["created_at"], str)
+        assert isinstance(batch["total_runs"], int)
+        assert isinstance(batch["completed_runs"], int)
+        assert isinstance(batch["running_runs"], int)
+        assert isinstance(batch["pending_runs"], int)
+        assert isinstance(batch["failed_runs"], int)
+        assert isinstance(batch["total_cost_usd"], (int, float))
+
+        # Optional fields may be present as null or their type
+        if batch.get("completed_at") is not None:
+            assert isinstance(batch["completed_at"], str)
+        if batch.get("spend_cap_usd") is not None:
+            assert isinstance(batch["spend_cap_usd"], (int, float))
+
+
+# ---------------------------------------------------------------------------
 # GET /batches/{id}/findings/search — no crash when batch has no results
 # ---------------------------------------------------------------------------
 
@@ -408,3 +508,124 @@ def test_tool_audit_no_file(coordinator_client):
     data = resp.json()
     assert data["counts_by_tool"] == {}
     assert data["suspicious_calls"] == []
+
+
+# ---------------------------------------------------------------------------
+# GET /tool-extensions
+# ---------------------------------------------------------------------------
+
+def test_list_tool_extensions_returns_list(coordinator_client):
+    client, *_ = coordinator_client
+    resp = client.get("/tool-extensions")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert isinstance(data, list)
+
+
+def test_list_tool_extensions_has_all_enum_members(coordinator_client):
+    client, *_ = coordinator_client
+    data = client.get("/tool-extensions").json()
+    keys = {item["key"] for item in data}
+    for ext in ToolExtension:
+        assert ext.value in keys, f"{ext.value} missing from /tool-extensions"
+
+
+def test_list_tool_extensions_correct_shape(coordinator_client):
+    client, *_ = coordinator_client
+    data = client.get("/tool-extensions").json()
+    for item in data:
+        assert "key" in item
+        assert "label" in item
+        assert "available" in item
+        assert isinstance(item["key"], str)
+        assert isinstance(item["label"], str)
+        assert isinstance(item["available"], bool)
+
+
+def test_list_tool_extensions_tree_sitter_label(coordinator_client):
+    client, *_ = coordinator_client
+    data = client.get("/tool-extensions").json()
+    by_key = {item["key"]: item for item in data}
+    assert by_key["tree_sitter"]["label"] == "Tree-sitter"
+    assert by_key["lsp"]["label"] == "LSP"
+    assert by_key["devdocs"]["label"] == "DevDocs"
+
+
+def test_list_tool_extensions_default_not_available(coordinator_client):
+    """Without env vars set, all extensions should report available=False."""
+    client, *_ = coordinator_client
+    data = client.get("/tool-extensions").json()
+    for item in data:
+        assert item["available"] is False, f"{item['key']} should be unavailable by default"
+
+
+def test_list_tool_extensions_available_when_env_set(coordinator_client, monkeypatch):
+    """With TOOL_EXT_LSP_AVAILABLE=true, lsp should report available=True."""
+    monkeypatch.setenv("TOOL_EXT_LSP_AVAILABLE", "true")
+    client, *_ = coordinator_client
+    data = client.get("/tool-extensions").json()
+    by_key = {item["key"]: item for item in data}
+    assert by_key["lsp"]["available"] is True
+    assert by_key["tree_sitter"]["available"] is False
+
+
+def test_list_tool_extensions_stable_order(coordinator_client):
+    """Order should match ToolExtension enum declaration order."""
+    client, *_ = coordinator_client
+    data = client.get("/tool-extensions").json()
+    keys = [item["key"] for item in data]
+    expected = [ext.value for ext in ToolExtension]
+    assert keys == expected
+
+
+# ---------------------------------------------------------------------------
+# Audit URL whitelist — AUDIT_URL_CHECK_EXEMPT_PREFIXES
+# ---------------------------------------------------------------------------
+
+def test_audit_exempt_prefixes_constant_exists():
+    assert "doc_" in AUDIT_URL_CHECK_EXEMPT_PREFIXES
+    assert "ts_" in AUDIT_URL_CHECK_EXEMPT_PREFIXES
+    assert "lsp_" in AUDIT_URL_CHECK_EXEMPT_PREFIXES
+
+
+def test_audit_doc_tool_with_url_not_flagged(coordinator_client, tmp_path):
+    """doc_ tools with URL-looking paths must not be flagged as suspicious."""
+    import json as _json
+    client, c, tp = coordinator_client
+    storage = tp / "storage"
+    run_dir = storage / "outputs" / "batch-x" / "run-1"
+    run_dir.mkdir(parents=True)
+    tool_calls = run_dir / "tool_calls.jsonl"
+    tool_calls.write_text(
+        _json.dumps({
+            "tool_name": "doc_fetch",
+            "inputs": {"path": "library/urllib.request#urllib.request.urlopen"},
+        }) + "\n"
+    )
+
+    resp = client.get("/batches/batch-x/runs/run-1/tool-audit")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["suspicious_calls"] == []
+
+
+def test_audit_unknown_tool_with_url_flagged(coordinator_client, tmp_path):
+    """Non-exempt tools with https:// in inputs must be flagged."""
+    import json as _json
+    client, c, tp = coordinator_client
+    storage = tp / "storage"
+    run_dir = storage / "outputs" / "batch-y" / "run-2"
+    run_dir.mkdir(parents=True)
+    tool_calls = run_dir / "tool_calls.jsonl"
+    tool_calls.write_text(
+        _json.dumps({
+            "tool_name": "fetch_something",
+            "inputs": {"url": "https://evil.example.com/exfil"},
+        }) + "\n"
+    )
+
+    resp = client.get("/batches/batch-y/runs/run-2/tool-audit")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["suspicious_calls"]) == 1
+    assert data["suspicious_calls"][0]["tool_name"] == "fetch_something"

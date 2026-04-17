@@ -21,6 +21,10 @@ Given a corpus of code targets with known vulnerabilities, the framework runs th
   - `diff_review` — review only the changed lines between two refs
 - **Tool variants** — `with_tools` (read_file, grep, etc.) vs. `without_tools`
 - **Review profiles** — `default`, `strict`, `comprehensive`, `owasp_focused`, `quick_scan`
+- **Tool extensions** — optional MCP-backed tools for enhanced code inspection and documentation lookup:
+  - `TREE_SITTER` — symbol search and AST queries (`ts_find_symbol`, `ts_get_ast`, `ts_query`, `ts_list_functions`)
+  - `LSP` — language-server-driven definition/reference/hover/symbol navigation (`lsp_definition`, `lsp_references`, `lsp_hover`, `lsp_document_symbols`, `lsp_workspace_symbols`)
+  - `DEVDOCS` — offline documentation search (`doc_search`, `doc_fetch`, `doc_list_docsets`)
 - **Verification** — optional second-pass LLM verifier over candidate findings
 - **Repetitions** — for statistical significance (Wilson CI + McNemar's test)
 
@@ -187,6 +191,26 @@ All config lives under `config/` as YAML, loaded via Pydantic:
 - `experiments.yaml` — default experiment matrix presets
 - `coordinator.yaml` — namespace, storage paths, spend caps
 - `prompts/` — finding output format, verification prompt
+
+### Tool Extensions Configuration
+
+Tool extensions are optional and disabled by default. Enable them in the Helm values:
+
+```yaml
+workerTools:
+  treeSitter:
+    enabled: true
+  lsp:
+    enabled: true
+  devdocs:
+    enabled: true
+    docsets:
+      - python~3.12
+      - javascript
+      - go
+```
+
+See `helm/sec-review/values.yaml` for the full `workerTools` block. When enabled, each extension is spawned as a subprocess MCP server within the worker pod. The coordinator exposes a `GET /api/tool-extensions` endpoint listing available extensions and their capabilities.
 
 ---
 

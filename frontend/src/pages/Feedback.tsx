@@ -6,6 +6,7 @@ import {
   type Batch,
   type FPPattern,
 } from '../api/client'
+import { PageLoadingSpinner } from '../components/Skeleton'
 
 function DeltaCell({ value }: { value: number }) {
   const cls =
@@ -74,9 +75,7 @@ export default function Feedback() {
 
   const completedBatches = batches.filter((b) => b.status === 'completed')
 
-  if (loading) {
-    return <div className="flex items-center justify-center h-64 text-gray-400">Loading...</div>
-  }
+  if (loading) return <PageLoadingSpinner />
 
   return (
     <div className="max-w-5xl mx-auto space-y-8">

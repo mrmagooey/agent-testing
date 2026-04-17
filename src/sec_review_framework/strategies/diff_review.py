@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from sec_review_framework.data.findings import StrategyOutput
+from sec_review_framework.prompts.loader import load_system_prompt, load_user_prompt
 from sec_review_framework.strategies.base import ScanStrategy
 from sec_review_framework.strategies.common import (
     FINDING_OUTPUT_FORMAT,
@@ -47,13 +48,7 @@ class DiffReviewStrategy(ScanStrategy):
     # ------------------------------------------------------------------
 
     def _base_system_prompt(self) -> str:
-        return (
-            "You are an expert security code reviewer performing a pull request review. "
-            "Your primary focus is on security issues introduced or exposed by the code change, "
-            "but you should also flag pre-existing issues in the files touched by the diff "
-            "and any issues in unchanged code that interact with the changes. "
-            "Be precise — report only genuine findings with evidence from the code."
-        )
+        return load_system_prompt("diff_review.txt")
 
     # ------------------------------------------------------------------
     # ScanStrategy.run()
@@ -80,18 +75,10 @@ class DiffReviewStrategy(ScanStrategy):
             content = target.read_file(fp)
             file_context += f"\n--- {fp} (full file) ---\n{content}\n"
 
-        user_message = (
-            "You are reviewing a code change (pull request). Focus your security analysis\n"
-            "on the changed code, but consider the full file context for understanding.\n\n"
-            "Flag issues in three categories:\n"
-            "- Bugs introduced by this change\n"
-            "- Pre-existing bugs in the touched files that should be addressed\n"
-            "- Bugs in unchanged code that interact with the changes\n\n"
-            f"Unified diff:\n"
-            f"```diff\n{diff_text}\n```\n\n"
-            f"Full content of changed files:\n{file_context}\n"
-            "Use your tools to read any other files needed for context.\n"
-            f"{FINDING_OUTPUT_FORMAT}"
+        user_message = load_user_prompt("diff_review.txt").format(
+            diff_text=diff_text,
+            file_context=file_context,
+            finding_output_format=FINDING_OUTPUT_FORMAT,
         )
 
         raw_output = run_agentic_loop(
@@ -114,4 +101,6 @@ class DiffReviewStrategy(ScanStrategy):
             pre_dedup_count=len(findings),
             post_dedup_count=len(findings),
             dedup_log=[],
+            system_prompt=system_prompt,
+            user_message=user_message,
         )

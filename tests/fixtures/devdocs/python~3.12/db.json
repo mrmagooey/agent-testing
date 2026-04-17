@@ -1,0 +1,9 @@
+{
+  "os.path#os.path.join": "<p><strong>os.path.join(path, *paths)</strong></p><p>Join one or more path components intelligently. The return value is the concatenation of path and any members of *paths with exactly one directory separator following each non-empty part except the last.</p>",
+  "subprocess#subprocess.Popen": "<p><strong>class subprocess.Popen(args, bufsize=-1, executable=None, stdin=None, stdout=None, stderr=None, ...)</strong></p><p>Execute a child program in a new process. On POSIX, the class uses os.execvpe()-like behavior to execute the child program. On Windows, the class uses the Windows CreateProcess() function.</p><p><strong>Security note:</strong> Use shell=False (the default) to avoid shell injection vulnerabilities.</p>",
+  "subprocess#subprocess.run": "<p><strong>subprocess.run(args, *, stdin=None, input=None, capture_output=False, timeout=None, check=False, **kwargs)</strong></p><p>Run the command described by args. Wait for command to complete, then return a CompletedProcess instance.</p>",
+  "hashlib#hashlib.sha256": "<p><strong>hashlib.sha256(data=b'')</strong></p><p>Return a new SHA-256 hash object. If data is present it is used to update the hash immediately after construction.</p>",
+  "secrets#secrets.token_bytes": "<p><strong>secrets.token_bytes(nbytes=None)</strong></p><p>Return a random byte string containing nbytes number of bytes. If nbytes is None or not supplied, a reasonable default is used.</p>",
+  "urllib.request#urllib.request.urlopen": "<h2>urllib.request.urlopen</h2><p><strong>urllib.request.urlopen(url, data=None, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, ...)</strong></p><p>Open the URL url. Can be a string or a Request object.</p>",
+  "socket#socket.socket": "<p><strong>class socket.socket(family=AF_INET, type=SOCK_STREAM, proto=0, fileno=None)</strong></p><p>Create a new socket using the given address family, socket type and protocol number.</p>"
+}

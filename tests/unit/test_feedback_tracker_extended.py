@@ -12,11 +12,12 @@ from sec_review_framework.data.experiment import (
     ReviewProfileName,
     RunStatus,
     StrategyName,
+    ToolExtension,
     ToolVariant,
     VerificationVariant,
 )
 from sec_review_framework.data.findings import Finding, Severity, VulnClass
-from sec_review_framework.feedback.tracker import BatchComparison, FeedbackTracker
+from sec_review_framework.feedback.tracker import BatchComparison, FeedbackTracker, _experiment_key
 
 
 # ---------------------------------------------------------------------------
@@ -32,6 +33,7 @@ def _make_run(
     precision: float | None = 0.8,
     recall: float | None = 0.7,
     f1: float | None = 0.75,
+    tool_extensions: frozenset | None = None,
 ) -> MagicMock:
     run = MagicMock()
     run.experiment = ExperimentRun(
@@ -45,6 +47,7 @@ def _make_run(
         dataset_name="test-ds",
         dataset_version="1.0.0",
         created_at=datetime(2026, 4, 16, tzinfo=timezone.utc),
+        tool_extensions=tool_extensions or frozenset(),
     )
     run.findings = findings or []
     run.status = RunStatus.COMPLETED
@@ -291,3 +294,62 @@ class TestExtractFPPatterns:
         tracker = FeedbackTracker()
         patterns = tracker.extract_fp_patterns(runs)
         assert patterns == []
+
+
+# ---------------------------------------------------------------------------
+# _experiment_key — tool_extensions dimension
+# ---------------------------------------------------------------------------
+
+
+class TestExperimentKeyExtensions:
+    def test_same_base_different_extensions_produce_distinct_keys(self):
+        """Runs differing only in tool_extensions must have distinct experiment keys."""
+        r_lsp = _make_run(tool_extensions=frozenset({ToolExtension.LSP}))
+        r_devdocs = _make_run(tool_extensions=frozenset({ToolExtension.DEVDOCS}))
+        assert _experiment_key(r_lsp) != _experiment_key(r_devdocs)
+
+    def test_same_base_same_extensions_produce_equal_keys(self):
+        """Runs with identical (model, strategy, tool_variant, extensions) must share a key."""
+        r1 = _make_run(tool_extensions=frozenset({ToolExtension.LSP}))
+        r2 = _make_run(tool_extensions=frozenset({ToolExtension.LSP}))
+        assert _experiment_key(r1) == _experiment_key(r2)
+
+    def test_empty_extensions_produce_empty_tuple_slot(self):
+        """Runs with no extensions should have () as the extensions component."""
+        r = _make_run(tool_extensions=frozenset())
+        key = _experiment_key(r)
+        assert key[3] == ()
+
+    def test_extensions_slot_is_sorted(self):
+        """Multi-extension keys must be in sorted order for stability."""
+        r = _make_run(tool_extensions=frozenset({ToolExtension.DEVDOCS, ToolExtension.LSP}))
+        key = _experiment_key(r)
+        ext_tuple = key[3]
+        assert list(ext_tuple) == sorted(ext_tuple)
+
+    def test_base_run_no_extensions_matches_legacy_behavior(self):
+        """A run with no extensions produces the same key structure as legacy (+ empty tuple)."""
+        r_no_ext = _make_run(tool_extensions=frozenset())
+        r_with_ext = _make_run(tool_extensions=frozenset({ToolExtension.TREE_SITTER}))
+        key_no_ext = _experiment_key(r_no_ext)
+        key_with_ext = _experiment_key(r_with_ext)
+        # First three components match (same model/strategy/tool_variant)
+        assert key_no_ext[:3] == key_with_ext[:3]
+        # But the full keys differ
+        assert key_no_ext != key_with_ext
+
+    def test_compare_batches_different_extensions_do_not_merge(self):
+        """Runs with different extensions are not compared across batches."""
+        r_a = _make_run("batch-a", tool_extensions=frozenset({ToolExtension.LSP}))
+        r_b = _make_run("batch-b", tool_extensions=frozenset({ToolExtension.DEVDOCS}))
+        tracker = FeedbackTracker()
+        comparison = tracker.compare_batches([r_a], [r_b])
+        assert comparison.metric_deltas == {}
+
+    def test_compare_batches_same_extensions_merge(self):
+        """Runs with identical extensions are matched across batches."""
+        r_a = _make_run("batch-a", tool_extensions=frozenset({ToolExtension.LSP}))
+        r_b = _make_run("batch-b", tool_extensions=frozenset({ToolExtension.LSP}))
+        tracker = FeedbackTracker()
+        comparison = tracker.compare_batches([r_a], [r_b])
+        assert len(comparison.metric_deltas) == 1

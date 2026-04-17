@@ -28,6 +28,19 @@ coordinator:
   service:
     type: NodePort
 
+# Expose the coordinator via the nginx ingress. Requires
+# `minikube addons enable ingress` on the agent-testing profile. Access via:
+#   open http://$(minikube -p agent-testing ip)/
+# The empty host makes this a catch-all — any Host header (or a raw IP hit)
+# routes to the coordinator, so no /etc/hosts entry is needed.
+ingress:
+  enabled: true
+  hosts:
+    - host: ""
+      paths:
+        - path: /
+          pathType: Prefix
+
 # Disable cluster features not available out-of-the-box on minikube.
 # Enable individually if you install the corresponding addon / operator.
 networkPolicy:

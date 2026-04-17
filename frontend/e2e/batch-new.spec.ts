@@ -105,3 +105,34 @@ test('spend cap input accepts decimal values', async ({ page }) => {
   await spendCapInput.fill('25.50')
   await expect(spendCapInput).toHaveValue('25.50')
 })
+
+test('shows tool extensions checkbox group', async ({ page }) => {
+  await expect(page.locator('label').filter({ hasText: 'Tree-sitter' })).toBeVisible()
+  await expect(page.locator('label').filter({ hasText: 'LSP' })).toBeVisible()
+  await expect(page.locator('label').filter({ hasText: 'DevDocs' })).toBeVisible()
+})
+
+test('disables unavailable tool extensions', async ({ page }) => {
+  const devdocsCheckbox = page.locator('label').filter({ hasText: 'DevDocs' }).locator('input[type="checkbox"]')
+  await expect(devdocsCheckbox).toBeDisabled()
+})
+
+test('shows power-set toggle for tool extensions', async ({ page }) => {
+  const powerSetToggle = page.locator('input[type="checkbox"]').filter({ hasText: '' }).locator('xpath=./following-sibling::*[contains(text(), "power-set")]')
+  // Check that the power-set toggle exists by looking for the text near the checkbox
+  await expect(page.getByText(/generate all combinations/i)).toBeVisible()
+})
+
+test('successful submission includes tool_extension_sets when extensions selected', async ({ page }) => {
+  // Setup form with required fields
+  await page.locator('select').first().selectOption('cve-2024-python')
+  await page.locator('label').filter({ hasText: 'gpt-4o' }).first().locator('input[type="checkbox"]').check()
+  await page.locator('label').filter({ hasText: 'zero_shot' }).locator('input[type="checkbox"]').check()
+
+  // Select a tool extension
+  await page.locator('label').filter({ hasText: 'LSP' }).locator('input[type="checkbox"]').check()
+
+  // Submit
+  await page.getByRole('button', { name: 'Submit Batch' }).click()
+  await expect(page).toHaveURL(/\/batches\/newbatch-1111/)
+})

@@ -6,6 +6,7 @@ from collections import defaultdict
 from typing import TYPE_CHECKING
 
 from sec_review_framework.data.findings import StrategyOutput
+from sec_review_framework.prompts.loader import load_system_prompt, load_user_prompt
 from sec_review_framework.strategies.base import ScanStrategy
 from sec_review_framework.strategies.common import (
     FINDING_OUTPUT_FORMAT,
@@ -43,14 +44,7 @@ class SASTFirstStrategy(ScanStrategy):
     # ------------------------------------------------------------------
 
     def _base_system_prompt(self) -> str:
-        return (
-            "You are an expert security code reviewer working in a SAST triage role. "
-            "You will be shown automated static analysis findings for a source file. "
-            "For each finding: confirm it (true positive), reject it (false positive), "
-            "or escalate it (needs further investigation). "
-            "Also look for security issues the automated scanner may have missed. "
-            "Be precise — report only genuine findings with evidence from the code."
-        )
+        return load_system_prompt("sast_first.txt")
 
     def _format_sast_matches(self, matches: list) -> str:
         """Format a list of SASTMatch objects into a readable summary."""
@@ -90,6 +84,7 @@ class SASTFirstStrategy(ScanStrategy):
                 pre_dedup_count=0,
                 post_dedup_count=0,
                 dedup_log=[],
+                system_prompt=build_system_prompt(self._base_system_prompt(), config),
             )
 
         # Group SAST matches by file
@@ -105,6 +100,7 @@ class SASTFirstStrategy(ScanStrategy):
         max_turns_per_file = config.get("max_turns_per_file", 25)
         parallel = config.get("parallel", False)
 
+        user_template = load_user_prompt("sast_first.txt")
         tasks = []
         file_paths = []
         for file_path, matches in by_file.items():
@@ -113,18 +109,18 @@ class SASTFirstStrategy(ScanStrategy):
             tasks.append(
                 {
                     "system_prompt": system_prompt,
-                    "user_message": (
-                        f"Semgrep flagged the following issues in {file_path}.\n"
-                        f"Confirm, reject, or escalate each. Also look for issues Semgrep missed.\n\n"
-                        f"SAST findings:\n{sast_summary}\n\n"
-                        f"File content:\n"
-                        f"```\n{file_content}\n```\n"
-                        f"{FINDING_OUTPUT_FORMAT}"
+                    "user_message": user_template.format(
+                        file_path=file_path,
+                        sast_summary=sast_summary,
+                        file_content=file_content,
+                        finding_output_format=FINDING_OUTPUT_FORMAT,
                     ),
                     "max_turns": max_turns_per_file,
                 }
             )
             file_paths.append(file_path)
+
+        first_user_message = tasks[0]["user_message"] if tasks else None
 
         outputs = run_subagents(tasks, model, tools, parallel=parallel)
 
@@ -143,4 +139,6 @@ class SASTFirstStrategy(ScanStrategy):
             pre_dedup_count=len(all_findings),
             post_dedup_count=len(all_findings),
             dedup_log=[],
+            system_prompt=system_prompt,
+            user_message=first_user_message,
         )

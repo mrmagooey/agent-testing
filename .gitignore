@@ -44,3 +44,6 @@ Thumbs.db
 
 # Config secrets (actual keys)
 config/secrets/
+
+# Make incremental-redeploy stamps
+.build-stamps/

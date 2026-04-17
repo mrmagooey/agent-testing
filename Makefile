@@ -1,6 +1,7 @@
 .PHONY: minikube-start minikube-stop minikube-delete minikube-dashboard \
         docker-build-worker docker-build-coordinator docker-build-all \
         helm-lint helm-template helm-install-minikube helm-upgrade-minikube helm-uninstall \
+        redeploy redeploy-clean \
         dev-coordinator dev-frontend \
         test lint format sync
 
@@ -54,15 +55,66 @@ helm-template:
 	helm template $(RELEASE) $(CHART_DIR) --namespace $(NAMESPACE) --values $(CHART_DIR)/values-minikube.yaml
 
 helm-install-minikube:
+	DIGEST=$$(eval $$(minikube -p agent-testing docker-env) && docker image inspect sec-review-coordinator:latest --format '{{.Id}}' 2>/dev/null || true); \
 	helm upgrade --install $(RELEASE) $(CHART_DIR) \
 		--namespace $(NAMESPACE) --create-namespace \
 		--values $(CHART_DIR)/values-minikube.yaml \
+		--set-string coordinator.imageDigest=$$DIGEST \
 		--kube-context agent-testing
 
 helm-upgrade-minikube: helm-install-minikube
 
 helm-uninstall:
 	helm uninstall $(RELEASE) --namespace $(NAMESPACE) --kube-context agent-testing
+
+# ---------------------------------------------------------------------------
+# Incremental redeploy
+#
+# `make redeploy` rebuilds only the images whose sources changed since the
+# last successful build, then runs `helm upgrade` only if any image or chart
+# file changed. State lives in $(STAMP_DIR)/ (gitignored). Use
+# `make redeploy-clean` to force a full rebuild on the next invocation.
+# ---------------------------------------------------------------------------
+
+STAMP_DIR := .build-stamps
+
+COORDINATOR_SOURCES := Dockerfile.coordinator pyproject.toml \
+    $(shell find src -type f -not -name '*.pyc' -not -path '*/__pycache__/*' 2>/dev/null) \
+    $(shell find frontend -type f \
+        -not -path 'frontend/node_modules/*' \
+        -not -path 'frontend/dist/*' \
+        -not -path 'frontend/playwright-report/*' \
+        -not -path 'frontend/test-results/*' \
+        2>/dev/null)
+
+WORKER_SOURCES := Dockerfile.worker pyproject.toml \
+    $(shell find src -type f -not -name '*.pyc' -not -path '*/__pycache__/*' 2>/dev/null)
+
+CHART_SOURCES := $(shell find helm -type f 2>/dev/null)
+
+$(STAMP_DIR)/coordinator: $(COORDINATOR_SOURCES)
+	@mkdir -p $(STAMP_DIR)
+	@echo ">>> coordinator sources changed — rebuilding image"
+	eval $$(minikube -p agent-testing docker-env) && docker build -f Dockerfile.coordinator -t sec-review-coordinator:latest .
+	@touch $@
+
+$(STAMP_DIR)/worker: $(WORKER_SOURCES)
+	@mkdir -p $(STAMP_DIR)
+	@echo ">>> worker sources changed — rebuilding image"
+	eval $$(minikube -p agent-testing docker-env) && docker build -f Dockerfile.worker -t sec-review-worker:latest .
+	@touch $@
+
+$(STAMP_DIR)/deploy: $(STAMP_DIR)/coordinator $(STAMP_DIR)/worker $(CHART_SOURCES)
+	@mkdir -p $(STAMP_DIR)
+	@echo ">>> images or chart changed — running helm upgrade"
+	$(MAKE) helm-install-minikube
+	@touch $@
+
+redeploy: $(STAMP_DIR)/deploy
+	@echo "redeploy: up to date"
+
+redeploy-clean:
+	rm -rf $(STAMP_DIR)
 
 # ---------------------------------------------------------------------------
 # Local development

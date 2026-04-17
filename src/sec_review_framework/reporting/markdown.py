@@ -7,7 +7,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from sec_review_framework.data.evaluation import EvidenceQuality, MatchStatus
-from sec_review_framework.data.experiment import RunResult, RunStatus
+from sec_review_framework.data.experiment import RunResult, RunStatus, ToolExtension
 from sec_review_framework.reporting.generator import ReportGenerator
 
 
@@ -215,13 +215,22 @@ class MarkdownReportGenerator(ReportGenerator):
 
         # --- Comparative Matrix ---
         lines.append("## Comparative Matrix\n")
+
+        # Determine which extensions appear in any run (gate columns)
+        active_extensions = [
+            ext for ext in ToolExtension
+            if any(ext in r.experiment.tool_extensions for r in results)
+        ]
+        ext_col_headers = "".join(f" ext-{ext.value} |" for ext in active_extensions)
+        ext_col_seps = "".join(" ------------|" for _ in active_extensions)
+
         header = (
             "| Model | Strategy | Tools | Profile | Verif "
-            "| Prec | Recall | F1 | FPR | TP | FP | FN | Ev:Strong | Cost | Duration |"
+            f"| Prec | Recall | F1 | FPR | TP | FP | FN | Ev:Strong |{ext_col_headers} Cost | Duration |"
         )
         separator = (
             "|-------|----------|-------|---------|-------"
-            "|------|--------|----|-----|----|----|----|-----------|------|----------|"
+            f"|------|--------|----|-----|----|----|----|-----------|{ext_col_seps}------|----------|"
         )
         lines.append(header)
         lines.append(separator)
@@ -244,11 +253,15 @@ class MarkdownReportGenerator(ReportGenerator):
                 strong = f"{strong_count}/{ev.true_positives}"
             cost = _fmt_cost(r.estimated_cost_usd)
             dur = _fmt_duration(r.duration_seconds)
+            ext_cells = "".join(
+                f" {'yes' if ext in exp.tool_extensions else 'no'} |"
+                for ext in active_extensions
+            )
             lines.append(
                 f"| {exp.model_id} | {exp.strategy.value} | {exp.tool_variant.value} "
                 f"| {exp.review_profile.value} | {exp.verification_variant.value} "
                 f"| {prec} | {recall} | {f1} | {fpr} | {tp} | {fp} | {fn} "
-                f"| {strong} | {cost} | {dur} |"
+                f"| {strong} |{ext_cells} {cost} | {dur} |"
             )
         lines.append("")
 
@@ -276,6 +289,17 @@ class MarkdownReportGenerator(ReportGenerator):
         # Verification Impact
         lines.append("### Verification Impact\n")
         lines.extend(self._dimension_table(completed, key=lambda r: r.experiment.verification_variant.value, label="Verification"))
+
+        # Tool Extension Impact
+        lines.append("### Tool Extension Impact\n")
+        lines.extend(self._dimension_table(
+            completed,
+            key=lambda r: (
+                "+".join(sorted(e.value for e in r.experiment.tool_extensions))
+                if r.experiment.tool_extensions else "(none)"
+            ),
+            label="Extensions",
+        ))
 
         # Evidence Quality by Model
         lines.append("### Evidence Quality by Model\n")

@@ -1,0 +1,11 @@
+Semgrep flagged the following issues in {file_path}.
+Confirm, reject, or escalate each. Also look for issues Semgrep missed.
+
+SAST findings:
+{sast_summary}
+
+File content:
+```
+{file_content}
+```
+{finding_output_format}

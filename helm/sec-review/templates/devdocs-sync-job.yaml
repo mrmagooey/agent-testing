@@ -1,0 +1,71 @@
+{{- if .Values.workerTools.devdocs.enabled }}
+# ---------------------------------------------------------------------------
+# DevDocs Sync Job
+#
+# Runs the devdocs_sync module to download DevDocs JSON docsets (index.json +
+# db.json) from documents.devdocs.io onto the shared PVC at docsetsPath.
+#
+# This Job is the ONLY place external network access for documentation is used.
+# Workers (at runtime) read the JSON files directly — no network calls.
+#
+# Trigger: deploy / helm upgrade.  Subsequent runs skip already-present files
+# (idempotent) unless the Job is manually deleted and re-created with --force.
+# ---------------------------------------------------------------------------
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "sec-review.fullname" . }}-devdocs-sync
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sec-review.labels" . | nindent 4 }}
+    app.kubernetes.io/component: devdocs-sync
+  annotations:
+    # Re-run when the docset list changes (hash of the join changes).
+    sec-review.io/docsets-hash: {{ .Values.workerTools.devdocs.docsets | join "," | sha256sum | quote }}
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  # Retain the Job pod for 1 h after completion so logs are inspectable.
+  ttlSecondsAfterFinished: 3600
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        {{- include "sec-review.labels" . | nindent 8 }}
+        app.kubernetes.io/component: devdocs-sync
+        role: dataset-builder
+    spec:
+      restartPolicy: OnFailure
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: devdocs-sync
+          image: {{ printf "%s:%s" .Values.image.datasetBuilder.repository .Values.image.datasetBuilder.tag | quote }}
+          imagePullPolicy: {{ .Values.image.datasetBuilder.pullPolicy }}
+          command:
+            - python
+            - -m
+            - sec_review_framework.data.devdocs_sync
+            - --root
+            - {{ .Values.workerTools.devdocs.docsetsPath | quote }}
+            - --docsets
+            - {{ .Values.workerTools.devdocs.docsets | join "," | quote }}
+          volumeMounts:
+            - name: shared-data
+              mountPath: {{ .Values.workerTools.devdocs.docsetsPath }}
+              subPath: devdocs
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: shared-data
+          persistentVolumeClaim:
+            claimName: {{ .Values.storage.existingClaim | default (printf "%s-data" (include "sec-review.fullname" .)) }}
+{{- end }}

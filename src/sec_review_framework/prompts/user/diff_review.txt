@@ -1,0 +1,17 @@
+You are reviewing a code change (pull request). Focus your security analysis
+on the changed code, but consider the full file context for understanding.
+
+Flag issues in three categories:
+- Bugs introduced by this change
+- Pre-existing bugs in the touched files that should be addressed
+- Bugs in unchanged code that interact with the changes
+
+Unified diff:
+```diff
+{diff_text}
+```
+
+Full content of changed files:
+{file_context}
+Use your tools to read any other files needed for context.
+{finding_output_format}

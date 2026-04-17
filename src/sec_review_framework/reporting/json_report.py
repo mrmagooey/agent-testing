@@ -89,6 +89,7 @@ class JSONReportGenerator(ReportGenerator):
             "model_id": exp.model_id,
             "strategy": exp.strategy.value,
             "tool_variant": exp.tool_variant.value,
+            "tool_extensions": sorted(e.value for e in exp.tool_extensions),
             "review_profile": exp.review_profile.value,
             "verification_variant": exp.verification_variant.value,
             "dataset_name": exp.dataset_name,
@@ -138,6 +139,10 @@ class JSONReportGenerator(ReportGenerator):
             "tool_access_impact": self._aggregate_by(completed, lambda r: r.experiment.tool_variant.value),
             "review_profile_impact": self._aggregate_by(completed, lambda r: r.experiment.review_profile.value),
             "verification_impact": self._aggregate_by(completed, lambda r: r.experiment.verification_variant.value),
+            "tool_extension_impact": self._aggregate_by(
+                completed,
+                lambda r: ",".join(sorted(e.value for e in r.experiment.tool_extensions)),
+            ),
             "evidence_quality_by_model": self._evidence_quality_by_model(completed),
         }
 

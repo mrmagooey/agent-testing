@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from sec_review_framework.data.findings import StrategyOutput
+from sec_review_framework.prompts.loader import load_system_prompt, load_user_prompt
 from sec_review_framework.strategies.base import ScanStrategy
 from sec_review_framework.strategies.common import (
     FINDING_OUTPUT_FORMAT,
@@ -35,14 +36,7 @@ class PerFileStrategy(ScanStrategy):
     # ------------------------------------------------------------------
 
     def _base_system_prompt(self) -> str:
-        return (
-            "You are an expert security code reviewer. "
-            "You will be given a single source file to audit. "
-            "Focus on vulnerabilities within this file, but use your tools to read "
-            "related files when cross-file context is needed (e.g. to understand how "
-            "user input flows through the system). "
-            "Be precise — report only genuine findings with evidence from the code."
-        )
+        return load_system_prompt("per_file.txt")
 
     # ------------------------------------------------------------------
     # ScanStrategy.run()
@@ -61,22 +55,24 @@ class PerFileStrategy(ScanStrategy):
         max_turns_per_file = config.get("max_turns_per_file", 20)
         parallel = config.get("parallel", False)
 
+        user_template = load_user_prompt("per_file.txt")
         tasks = []
         for file_path in source_files:
             file_content = target.read_file(file_path)
             tasks.append(
                 {
                     "system_prompt": system_prompt,
-                    "user_message": (
-                        f"Perform a security audit of the following file.\n"
-                        f"You may use tools to read related files if context is needed.\n\n"
-                        f"File: {file_path}\n"
-                        f"```\n{file_content}\n```\n"
-                        f"{FINDING_OUTPUT_FORMAT}"
+                    "user_message": user_template.format(
+                        file_path=file_path,
+                        file_content=file_content,
+                        finding_output_format=FINDING_OUTPUT_FORMAT,
                     ),
                     "max_turns": max_turns_per_file,
                 }
             )
+
+        first_system_prompt = tasks[0]["system_prompt"] if tasks else None
+        first_user_message = tasks[0]["user_message"] if tasks else None
 
         outputs = run_subagents(tasks, model, tools, parallel=parallel)
 
@@ -89,4 +85,7 @@ class PerFileStrategy(ScanStrategy):
             )
             all_findings.extend(findings)
 
-        return deduplicate(all_findings)
+        result = deduplicate(all_findings)
+        result.system_prompt = first_system_prompt
+        result.user_message = first_user_message
+        return result

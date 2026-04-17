@@ -37,6 +37,13 @@ image:
 coordinator:
   replicas: 1
 
+  # Opaque identifier embedded in the pod template as an annotation. When the
+  # value changes, Helm rolls the Deployment — useful with floating tags like
+  # :latest where the PodSpec is otherwise stable across rebuilds. Leave blank
+  # to omit the annotation entirely; the Makefile populates this from the local
+  # minikube docker daemon on helm-install-minikube.
+  imageDigest: ""
+
   service:
     type: ClusterIP
     port: 8080
@@ -60,6 +67,28 @@ coordinator:
 
   # Name of the ConfigMap containing config/*.yaml; rendered into /app/config
   configMapName: experiment-config
+
+# -----------------------------------------------------------------------------
+# Ingress
+#
+# Disabled by default; enable to expose the coordinator (which serves both the
+# /api/* JSON endpoints and the bundled frontend at /) outside the cluster.
+# Requires an Ingress controller (nginx, traefik, ALB, …) installed separately.
+# -----------------------------------------------------------------------------
+ingress:
+  enabled: false
+  className: nginx
+  annotations: {}
+    # nginx.ingress.kubernetes.io/proxy-body-size: 10m
+  hosts:
+    - host: sec-review.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+    # - secretName: sec-review-tls
+    #   hosts:
+    #     - sec-review.local
 
 # -----------------------------------------------------------------------------
 # Shared storage
@@ -111,6 +140,12 @@ networkPolicy:
     githubCidrs:
       - 140.82.112.0/20
       - 192.30.252.0/22
+    # CIDR(s) the devdocs-sync Job can reach to fetch DevDocs docsets
+    # (documents.devdocs.io is fronted by Fastly; these ranges drift, so pin
+    # narrowly in production or point devdocs_sync at an internal mirror).
+    docsetsCidrs:
+      - 151.101.0.0/16
+      - 199.232.0.0/16
   # NFS port used for intra-namespace shared-storage traffic.
   nfsPort: 2049
 
@@ -148,6 +183,77 @@ fluentd:
   configMapName: fluentd-worker-config
   lokiUrl: http://loki.monitoring.svc.cluster.local:3100
   flushIntervalSeconds: 5
+
+# -----------------------------------------------------------------------------
+# Worker tool extensions
+#
+# Controls which optional MCP-backed tool dimensions are available in worker pods.
+# The coordinator reads TOOL_EXT_<NAME>_AVAILABLE env vars (injected below via
+# the coordinator-deployment template) to build the /api/tool-extensions response
+# (Chunk 6).  Disabling an extension here does NOT remove its packages from the
+# worker image — it merely signals that the coordinator should not schedule runs
+# that request that extension.
+# -----------------------------------------------------------------------------
+workerTools:
+  treeSitter:
+    enabled: true
+    # grammars is informational — the image bakes them in via the Dockerfile init()
+    # call.  This list is surfaced by /api/tool-extensions so the frontend can show
+    # which languages are supported (Chunk 6).
+    grammars:
+      - python
+      - javascript
+      - typescript
+      - tsx
+      - go
+      - java
+      - ruby
+      - rust
+      - c
+      - cpp
+      - php
+      - bash
+      - yaml
+      - json
+      - hcl
+      - dockerfile
+      - sql
+  lsp:
+    enabled: true
+    # servers lists the language-server binaries installed in the worker image.
+    # Informational only — the LSP multiplexer discovers availability via PATH.
+    # Surfaced by /api/tool-extensions (Chunk 6).
+    servers:
+      - pyright-langserver
+      - gopls
+      - typescript-language-server
+      - rust-analyzer
+      - clangd
+  devdocs:
+    enabled: true
+    # Path where docsets are mounted from the shared PVC.
+    # The devdocs-sync Job populates this path; workers read from it.
+    docsetsPath: /data/devdocs
+    # Docsets to sync. Used by the devdocs-sync Job entrypoint.
+    # Add or remove slugs here to control which offline docs are available.
+    docsets:
+      - python~3.12
+      - javascript
+      - typescript
+      - go
+      - rust
+      - cpp
+      - ruby
+      - php
+      - bash
+      - nodejs
+      - express
+      - flask
+      - django
+      - aws
+      - openapi
+      - http
+      - dom
 
 # -----------------------------------------------------------------------------
 # ServiceAccount / RBAC

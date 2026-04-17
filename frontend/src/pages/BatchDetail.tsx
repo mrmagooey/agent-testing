@@ -81,19 +81,19 @@ function TokenMeter({ runs }: { runs: Run[] }) {
   return (
     <div className="flex flex-wrap items-center gap-4 text-sm mt-4 pt-4 border-t border-gray-100 dark:border-gray-700">
       <div className="flex items-center gap-2">
-        <span className="text-gray-500 dark:text-gray-400">Batch total</span>
+        <span className="text-gray-500 dark:text-gray-300">Batch total</span>
         <span className="font-semibold font-mono text-gray-900 dark:text-gray-100">
           ${totalCost.toFixed(2)}
         </span>
       </div>
       <div className="flex items-center gap-2">
-        <span className="text-gray-500 dark:text-gray-400">Avg/run</span>
+        <span className="text-gray-500 dark:text-gray-300">Avg/run</span>
         <span className="font-mono text-gray-700 dark:text-gray-300">
           ${avgCost.toFixed(3)}
         </span>
       </div>
       <div className="flex items-center gap-2">
-        <span className="text-gray-500 dark:text-gray-400">Runs</span>
+        <span className="text-gray-500 dark:text-gray-300">Runs</span>
         <span className="font-mono text-gray-700 dark:text-gray-300">{totalRuns}</span>
       </div>
     </div>
@@ -228,17 +228,7 @@ export default function BatchDetail() {
         <>
           {/* Comparative Matrix */}
           <section className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold">Comparative Matrix</h2>
-              {selectedRuns.length === 2 && (
-                <button
-                  onClick={handleCompare}
-                  className="text-sm px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white transition-colors"
-                >
-                  Compare Selected
-                </button>
-              )}
-            </div>
+            <h2 className="text-lg font-semibold mb-4">Comparative Matrix</h2>
             <MatrixTable
               runs={results.runs}
               onSelect={setSelectedRuns}
@@ -279,7 +269,7 @@ export default function BatchDetail() {
           <section className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
             <h2 className="text-lg font-semibold mb-4">Cost Analysis</h2>
             <table className="w-full text-sm">
-              <thead className="text-gray-500 dark:text-gray-400">
+              <thead className="text-gray-500 dark:text-gray-300">
                 <tr>
                   <th className="text-left pb-2">Model</th>
                   <th className="text-right pb-2">Runs</th>
@@ -301,9 +291,9 @@ export default function BatchDetail() {
                 ).map(([model, { count, total }]) => (
                   <tr key={model}>
                     <td className="py-2 font-mono text-xs">{model}</td>
-                    <td className="py-2 text-right text-gray-600 dark:text-gray-400">{count}</td>
+                    <td className="py-2 text-right text-gray-600 dark:text-gray-300">{count}</td>
                     <td className="py-2 text-right font-medium">${total.toFixed(2)}</td>
-                    <td className="py-2 text-right text-gray-600 dark:text-gray-400">
+                    <td className="py-2 text-right text-gray-600 dark:text-gray-300">
                       ${(total / count).toFixed(3)}
                     </td>
                   </tr>
@@ -321,6 +311,34 @@ export default function BatchDetail() {
             </section>
           )}
         </>
+      )}
+
+      {/* Sticky action bar (item 7) */}
+      {selectedRuns.length > 0 && (
+        <div className="fixed bottom-0 left-0 right-0 z-40 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 shadow-lg">
+          <div className="max-w-screen-xl mx-auto px-4 py-3 flex items-center gap-3">
+            <span className="text-sm text-gray-600 dark:text-gray-300">
+              {selectedRuns.length} run{selectedRuns.length > 1 ? 's' : ''} selected
+            </span>
+            <div className="ml-auto flex items-center gap-2">
+              {selectedRuns.length === 2 && (
+                <button
+                  onClick={handleCompare}
+                  className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:outline-none"
+                >
+                  Compare Selected
+                </button>
+              )}
+              {batchId && <DownloadButton batchId={batchId} label="Download Batch" />}
+              <button
+                onClick={() => setSelectedRuns([])}
+                className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:outline-none"
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

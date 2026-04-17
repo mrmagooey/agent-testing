@@ -43,13 +43,15 @@ test('shows finding titles in table', async ({ page }) => {
 })
 
 test('shows finding severity badges', async ({ page }) => {
-  await expect(page.getByText('critical').first()).toBeVisible()
-  await expect(page.getByText('high').first()).toBeVisible()
+  const table = page.locator('table')
+  await expect(table.getByText('critical', { exact: true }).first()).toBeVisible()
+  await expect(table.getByText('high', { exact: true }).first()).toBeVisible()
 })
 
 test('shows finding match status badges', async ({ page }) => {
-  await expect(page.getByText('tp').first()).toBeVisible()
-  await expect(page.getByText('fp').first()).toBeVisible()
+  const table = page.locator('table')
+  await expect(table.getByText('tp', { exact: true }).first()).toBeVisible()
+  await expect(table.getByText('fp', { exact: true }).first()).toBeVisible()
 })
 
 test('shows file paths in findings table', async ({ page }) => {
@@ -79,4 +81,10 @@ test('expanding conversation transcript shows messages', async ({ page }) => {
 
 test('shows prompt snapshot collapsible', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Prompt Snapshot' })).toBeVisible()
+})
+
+test('expanding prompt snapshot shows injection diff panes when injection present', async ({ page }) => {
+  await page.getByRole('button', { name: 'Prompt Snapshot' }).click()
+  await expect(page.getByTestId('clean-prompt-pane')).toBeVisible()
+  await expect(page.getByTestId('injected-prompt-pane')).toBeVisible()
 })

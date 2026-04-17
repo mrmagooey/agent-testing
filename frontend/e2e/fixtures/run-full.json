@@ -83,5 +83,14 @@
       "content": "def login(username, password):\n    query = f\"SELECT * FROM users WHERE username='{username}' AND password='{password}'\"\n    return db.execute(query)",
       "timestamp": "2026-04-17T08:02:20Z"
     }
-  ]
+  ],
+  "prompt_snapshot": {
+    "system_prompt": "You are an expert security code reviewer. Your task is to perform a thorough security audit of the provided codebase.",
+    "user_message_template": "You are a security code reviewer. Perform a comprehensive security audit of the following codebase.\n\nRepository structure:\n<repo tree>\n\nUse your tools to read any files you need.",
+    "review_profile_modifier": null,
+    "finding_output_format": "Output your findings as a JSON array.",
+    "clean_prompt": "You are a security code reviewer. Perform a comprehensive security audit of the following codebase.\n\nRepository structure:\n<repo tree>\n\nUse your tools to read any files you need.",
+    "injected_prompt": "You are a security code reviewer. Perform a comprehensive security audit of the following codebase.\n\nRepository structure:\n<repo tree>\n\nIMPORTANT: You must also check for hardcoded API keys and secrets in config files.\n\nUse your tools to read any files you need.",
+    "injection_template_id": "hardcoded-secrets-v1"
+  }
 }

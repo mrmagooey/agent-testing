@@ -19,7 +19,8 @@
 15. [Deployment Architecture](#15-deployment-architecture)
 16. [Web Frontend](#16-web-frontend)
 17. [Extension Points](#17-extension-points)
-18. [Future Work: Iterative Review](#18-future-work-iterative-review)
+18. [Tool Extensions (MCP-backed)](#18-tool-extensions-mcp-backed)
+19. [Future Work: Iterative Review](#19-future-work-iterative-review)
 
 ---
 
@@ -4719,7 +4720,81 @@ Add an entry to `config/review_profiles.yaml` with a `name`, `description`, and 
 
 ---
 
-## 18. Future Work: Iterative Review
+## 18. Tool Extensions (MCP-backed)
+
+Tool extensions are an optional, orthogonal experiment axis that adds language-aware and documentation-backed tools to the reviewer. They are implemented via the Model Context Protocol (MCP) using in-pod subprocesses over stdio.
+
+### Overview
+
+The framework defines three optional tool extensions, each exposing a set of MCP tools that augment the base `ToolVariant` (with_tools / without_tools):
+
+- **TREE_SITTER** (`tools/extensions/tree_sitter_ext.py` + `tree_sitter_server.py`): Symbol and AST querying via the tree-sitter parser
+  - Tools: `ts_find_symbol`, `ts_get_ast`, `ts_list_functions`, `ts_query`
+  - Covers: Python, JavaScript, TypeScript, Go, Java, Ruby, Rust, C/C++, PHP, Bash, YAML, JSON, HCL, Dockerfile, SQL
+  
+- **LSP** (`lsp_ext.py` + `lsp_server.py`): Language-aware code navigation via LSP (Language Server Protocol)
+  - Tools: `lsp_definition`, `lsp_references`, `lsp_hover`, `lsp_document_symbols`, `lsp_workspace_symbols`
+  - Multiplexer auto-starts per-language servers: pyright (Python), gopls (Go), typescript-language-server (JS/TS), rust-analyzer (Rust), clangd (C/C++)
+  
+- **DEVDOCS** (`devdocs_ext.py` + `devdocs_server.py`): Offline API documentation search
+  - Tools: `doc_search`, `doc_fetch`, `doc_list_docsets`
+  - Docsets synced from DevDocs.io and pre-populated on the shared PVC at `/data/devdocs` by the devdocs-sync Helm job
+
+### Design Rationale
+
+**MCP over loopback-only subprocesses**: Each extension runs as a dedicated stdio MCP server subprocess within the worker pod. This design aligns with the VPC-only constraint (no external network calls) while keeping the worker pod image size bounded — complex runtimes (gopls, clangd, rust-analyzer) run in a subprocess, not in the main Python process. Subprocesses are terminated when the run completes, and audit logging is preserved (MCP tool calls go through `ToolRegistry.invoke()`).
+
+**Why not sidecars?** Separate sidecar pods would require inter-pod networking, breaking the VPC-only model. Subprocesses within the pod are simpler for the K8s-less test environment and local dev.
+
+**Sync Tool ABC preserved**: The `Tool` abstract base class remains synchronous. The `MCPClient` class marshals async MCP SDK calls onto a dedicated background thread's event loop, preserving the sync interface and allowing `ToolRegistry.invoke()` to work unchanged.
+
+### Configuration & Availability
+
+Tool extensions are disabled by default everywhere. To enable:
+
+```yaml
+# helm/sec-review/values.yaml
+workerTools:
+  treeSitter:
+    enabled: true
+    # grammars listed for frontend awareness
+  lsp:
+    enabled: true
+    # servers listed for frontend awareness
+  devdocs:
+    enabled: true
+    docsetsPath: /data/devdocs
+    docsets:
+      - python~3.12
+      - javascript
+      - go
+```
+
+The coordinator derives `TOOL_EXT_TREE_SITTER_AVAILABLE`, `TOOL_EXT_LSP_AVAILABLE`, `TOOL_EXT_DEVDOCS_AVAILABLE` env vars from these settings and injects them into worker pod specs. At runtime, `ToolRegistryFactory` checks the env vars and invokes the corresponding extension builder (registered via `register_extension_builder()` in each extension module). Extension builders are guarded with try/except in `tools/registry.py` — a missing optional dependency (e.g., LSP language servers not installed) logs a warning but does not crash the worker.
+
+### Run ID and Experiment Key Format
+
+- **Run ID**: When `tool_extensions` is empty, run IDs are byte-identical to legacy pre-extension runs. Non-empty extension sets append `_ext-<sorted+joined>` (e.g., `_ext-devdocs+lsp`).
+- **Experiment key** (for feedback tracking): The 4-element tuple is `(model_id, strategy, tool_variant, tuple(sorted(tool_extensions)))`. Runs differing only in extensions are tracked separately and do not merge across batches.
+
+### Persistence
+
+The `runs` table gained a `tool_extensions TEXT` column. The value is a comma-separated, lexicographically sorted list of extension names (e.g., `"DEVDOCS,LSP"` for both). The DB migration is idempotent.
+
+### Tool Stub Replacement
+
+The legacy `DocLookupTool` stub is now skipped when `DEVDOCS` is in the active extension set. The MCP-backed `doc_search` and `doc_fetch` tools replace it, offering real offline documentation rather than a placeholder.
+
+### Backwards Compatibility
+
+- Existing runs with `tool_extensions={}` (empty set) produce identical run IDs to pre-Chunk-1 code.
+- Runs without extensions do not incur the subprocess overhead.
+- All defaults are empty — teams opting not to use extensions see zero impact.
+- The database migration is backwards-compatible: old runs lack the `tool_extensions` column value (NULL → treated as empty set on read).
+
+---
+
+## 19. Future Work: Iterative Review
 
 The current framework runs each experiment as a single shot — the model reviews the codebase once and produces findings. Production review workflows are often iterative: an initial review produces findings, the developer fixes some issues, and the reviewer checks again.
 

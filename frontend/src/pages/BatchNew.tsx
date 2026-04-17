@@ -6,11 +6,31 @@ import {
   listStrategies,
   listProfiles,
   submitBatch,
+  listToolExtensions,
   type Dataset,
   type BatchConfig,
+  type ToolExtension,
 } from '../api/client'
 import { useEstimate } from '../hooks/useEstimate'
 import CostEstimate from '../components/CostEstimate'
+
+/**
+ * Generate the power-set of a list of strings.
+ * Example: ["a", "b"] => [[], ["a"], ["b"], ["a", "b"]]
+ */
+export function generatePowerSet(items: string[]): string[][] {
+  const result: string[][] = []
+  for (let i = 0; i < 2 ** items.length; i++) {
+    const subset: string[] = []
+    for (let j = 0; j < items.length; j++) {
+      if ((i >> j) & 1) {
+        subset.push(items[j])
+      }
+    }
+    result.push(subset)
+  }
+  return result
+}
 
 function CheckboxGroup({
   label,
@@ -18,12 +38,14 @@ function CheckboxGroup({
   selected,
   onChange,
   error,
+  disabledOptions,
 }: {
   label: string
-  options: string[]
+  options: (string | { value: string; label: string })[]
   selected: string[]
   onChange: (vals: string[]) => void
   error?: string
+  disabledOptions?: string[]
 }) {
   const toggle = (val: string) => {
     onChange(
@@ -43,17 +65,27 @@ function CheckboxGroup({
         )}
       </div>
       <div className="flex flex-wrap gap-2">
-        {options.map((opt) => (
-          <label key={opt} className="flex items-center gap-1.5 cursor-pointer text-sm">
-            <input
-              type="checkbox"
-              checked={selected.includes(opt)}
-              onChange={() => toggle(opt)}
-              className="rounded"
-            />
-            <span className="font-mono text-xs text-gray-700 dark:text-gray-300">{opt}</span>
-          </label>
-        ))}
+        {options.map((opt) => {
+          const isObj = typeof opt === 'object'
+          const value = isObj ? opt.value : opt
+          const label = isObj ? opt.label : opt
+          const isDisabled = disabledOptions?.includes(value)
+          return (
+            <label
+              key={value}
+              className={`flex items-center gap-1.5 text-sm ${isDisabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+            >
+              <input
+                type="checkbox"
+                checked={selected.includes(value)}
+                onChange={() => toggle(value)}
+                disabled={isDisabled}
+                className="rounded disabled:cursor-not-allowed"
+              />
+              <span className="font-mono text-xs text-gray-700 dark:text-gray-300">{label}</span>
+            </label>
+          )
+        })}
       </div>
       {error && (
         <p className="mt-1.5 text-xs text-red-600 dark:text-red-400">{error}</p>
@@ -68,6 +100,7 @@ export default function BatchNew() {
   const [models, setModels] = useState<string[]>([])
   const [strategies, setStrategies] = useState<string[]>([])
   const [profiles, setProfiles] = useState<string[]>([])
+  const [toolExtensions, setToolExtensions] = useState<ToolExtension[]>([])
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [submitAttempted, setSubmitAttempted] = useState(false)
@@ -78,9 +111,19 @@ export default function BatchNew() {
   const [selectedStrategies, setSelectedStrategies] = useState<string[]>([])
   const [selectedProfile, setSelectedProfile] = useState('')
   const [toolVariants, setToolVariants] = useState<string[]>(['with_tools', 'without_tools'])
+  const [selectedToolExtensions, setSelectedToolExtensions] = useState<string[]>([])
+  const [toolExtensionsPowerSet, setToolExtensionsPowerSet] = useState(true)
   const [verification, setVerification] = useState<string[]>(['none'])
   const [repetitions, setRepetitions] = useState(1)
   const [spendCapInput, setSpendCapInput] = useState('')
+
+  // Build tool_extension_sets based on power-set toggle
+  const toolExtensionSets: string[][] | undefined =
+    selectedToolExtensions.length === 0
+      ? undefined
+      : toolExtensionsPowerSet
+        ? generatePowerSet(selectedToolExtensions)
+        : [selectedToolExtensions]
 
   const config: Partial<BatchConfig> = {
     dataset: selectedDataset || undefined,
@@ -88,6 +131,7 @@ export default function BatchNew() {
     strategies: selectedStrategies,
     profiles: selectedProfile ? [selectedProfile] : undefined,
     tool_variants: toolVariants,
+    tool_extension_sets: toolExtensionSets,
     verification,
     repetitions,
   }
@@ -95,12 +139,13 @@ export default function BatchNew() {
   const { estimate, loading: estimateLoading } = useEstimate(config)
 
   useEffect(() => {
-    Promise.all([listDatasets(), listModels(), listStrategies(), listProfiles()])
-      .then(([ds, ms, ss, ps]) => {
+    Promise.all([listDatasets(), listModels(), listStrategies(), listProfiles(), listToolExtensions()])
+      .then(([ds, ms, ss, ps, te]) => {
         setDatasets(ds)
         setModels(ms)
         setStrategies(ss)
         setProfiles(ps)
+        setToolExtensions(te)
         if (ps.length > 0) setSelectedProfile(ps[0])
       })
       .catch((e) => setError(e.message))
@@ -128,6 +173,7 @@ export default function BatchNew() {
         strategies: selectedStrategies,
         profiles: selectedProfile ? [selectedProfile] : [],
         tool_variants: toolVariants,
+        tool_extension_sets: toolExtensionSets,
         verification,
         repetitions,
         spend_cap_usd: spendCapInput ? parseFloat(spendCapInput) : undefined,
@@ -234,6 +280,26 @@ export default function BatchNew() {
                   selected={toolVariants}
                   onChange={setToolVariants}
                 />
+                <CheckboxGroup
+                  label="Tool extensions"
+                  options={toolExtensions.map((te) => ({ value: te.key, label: te.label }))}
+                  selected={selectedToolExtensions}
+                  onChange={setSelectedToolExtensions}
+                  disabledOptions={toolExtensions.filter((te) => !te.available).map((te) => te.key)}
+                />
+                <div className="flex items-center gap-2">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={toolExtensionsPowerSet}
+                      onChange={(e) => setToolExtensionsPowerSet(e.target.checked)}
+                      className="rounded"
+                    />
+                    <span className="text-sm text-gray-700 dark:text-gray-300">
+                      Generate all combinations (power-set)
+                    </span>
+                  </label>
+                </div>
                 <CheckboxGroup
                   label="Verification"
                   options={['none', 'with_verification']}

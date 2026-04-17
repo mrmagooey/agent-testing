@@ -1,0 +1,10 @@
+{
+  "models": ["claude-opus-4", "gpt-4o"],
+  "strategies": ["per_file", "single_agent"],
+  "cells": [
+    { "model": "claude-opus-4", "strategy": "per_file",     "accuracy": 0.851, "run_count": 2 },
+    { "model": "claude-opus-4", "strategy": "single_agent", "accuracy": 0.912, "run_count": 3 },
+    { "model": "gpt-4o",        "strategy": "per_file",     "accuracy": 0.634, "run_count": 2 },
+    { "model": "gpt-4o",        "strategy": "single_agent", "accuracy": 0.743, "run_count": 3 }
+  ]
+}

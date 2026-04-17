@@ -30,7 +30,8 @@ class BatchComparison:
 def _experiment_key(result) -> tuple:
     """Stable key for matching runs across batches."""
     exp = result.experiment
-    return (exp.model_id, exp.strategy.value, exp.tool_variant.value)
+    ext_tuple = tuple(sorted(e.value for e in (exp.tool_extensions or frozenset())))
+    return (exp.model_id, exp.strategy.value, exp.tool_variant.value, ext_tuple)
 
 
 def _finding_identities(result) -> set[str]:
@@ -80,7 +81,8 @@ class FeedbackTracker:
         shared_keys = set(a_by_key.keys()) & set(b_by_key.keys())
         for key in shared_keys:
             model_id = key[0]
-            exp_label = f"{key[0]}/{key[1]}/{key[2]}"
+            ext_part = ("+".join(key[3]) if key[3] else "none")
+            exp_label = f"{key[0]}/{key[1]}/{key[2]}/ext:{ext_part}"
 
             # Use first result for each batch (repetition 0 or just the first)
             r_a = a_by_key[key][0]

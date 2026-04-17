@@ -1,16 +1,111 @@
 FROM python:3.14-slim
 
-# Build deps for C extensions that lack py3.14 wheels yet (ruamel.yaml.clib via semgrep).
+WORKDIR /app
+
+# ---------------------------------------------------------------------------
+# System toolchain dependencies
+#
+# Base packages required by:
+#   - semgrep / tree-sitter C extensions (gcc, g++, make)
+#   - clangd LSP server (clangd)
+#   - pyright + typescript-language-server (nodejs, npm)
+#   - gopls: installed from a pre-compiled release binary (no Go toolchain needed)
+#   - rust-analyzer: installed from a pre-compiled release binary
+#
+# Estimated additional image size from LSP tooling: ~400-600 MB
+#   nodejs + npm:              ~120 MB
+#   pyright (npm global):       ~90 MB
+#   typescript-language-server: ~30 MB
+#   typescript:                 ~30 MB
+#   clangd:                     ~50 MB
+#   gopls binary:               ~30 MB
+#   rust-analyzer binary:       ~80 MB
+# ---------------------------------------------------------------------------
 RUN apt-get update \
- && apt-get install -y --no-install-recommends gcc g++ make \
+ && apt-get install -y --no-install-recommends \
+      gcc g++ make \
+      clangd \
+      nodejs npm \
+      curl ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
-# Install framework with worker extras (includes semgrep)
+# ---------------------------------------------------------------------------
+# npm-based LSP servers: pyright, typescript-language-server, typescript.
+# Versions pinned for reproducibility — bump deliberately.
+# ---------------------------------------------------------------------------
+ARG PYRIGHT_VERSION=1.1.409
+ARG TS_LANGUAGE_SERVER_VERSION=5.1.3
+ARG TYPESCRIPT_VERSION=6.0.3
+RUN npm install -g --no-audit --no-fund \
+      pyright@${PYRIGHT_VERSION} \
+      typescript-language-server@${TS_LANGUAGE_SERVER_VERSION} \
+      typescript@${TYPESCRIPT_VERSION} \
+ && npm cache clean --force
+
+# ---------------------------------------------------------------------------
+# gopls — pre-compiled binary (avoids ~150 MB Go toolchain in the image).
+# Pin to a specific release; update the version and SHA-256 when upgrading.
+# ---------------------------------------------------------------------------
+ARG GOPLS_VERSION=0.16.1
+ARG GOPLS_SHA256=7b893a3d02b0e4dc13a0b8f7a1b87e18e36db07db5de9e1c2f479cdc0fa6e8db
+RUN curl -fsSL \
+      "https://github.com/golang/tools/releases/download/gopls%2Fv${GOPLS_VERSION}/gopls_linux_amd64.tar.gz" \
+      -o /tmp/gopls.tar.gz \
+ && echo "${GOPLS_SHA256}  /tmp/gopls.tar.gz" | sha256sum -c - \
+ && tar -xzf /tmp/gopls.tar.gz -C /tmp \
+ && mv /tmp/gopls /usr/local/bin/gopls \
+ && chmod +x /usr/local/bin/gopls \
+ && rm /tmp/gopls.tar.gz
+
+# ---------------------------------------------------------------------------
+# rust-analyzer — pre-compiled binary (single static binary, no Rust toolchain).
+# Pin to a specific release tag; update SHA-256 when upgrading.
+# ---------------------------------------------------------------------------
+ARG RUST_ANALYZER_VERSION=2024-10-28
+ARG RUST_ANALYZER_SHA256=a4f8f21e78efcfeed7c21b6e7093a3c51f9f3e01d09b0c7b7d61ddf7edab31c2
+RUN curl -fsSL \
+      "https://github.com/rust-lang/rust-analyzer/releases/download/${RUST_ANALYZER_VERSION}/rust-analyzer-x86_64-unknown-linux-gnu.gz" \
+      -o /tmp/rust-analyzer.gz \
+ && echo "${RUST_ANALYZER_SHA256}  /tmp/rust-analyzer.gz" | sha256sum -c - \
+ && gunzip -c /tmp/rust-analyzer.gz > /usr/local/bin/rust-analyzer \
+ && chmod +x /usr/local/bin/rust-analyzer \
+ && rm /tmp/rust-analyzer.gz
+
+# Install framework with worker extras against a stub source tree so this
+# heavy layer (semgrep + tree-sitter deps) is cached unless pyproject.toml changes.
 COPY pyproject.toml .
-COPY src/ src/
-RUN pip install --no-cache-dir ".[worker]" && semgrep --version
+RUN mkdir -p src/sec_review_framework \
+ && touch src/sec_review_framework/__init__.py \
+ && pip install --no-cache-dir ".[worker]" \
+ && semgrep --version \
+ && rm -rf src
+
+# Pre-download tree-sitter grammars for offline use at runtime.
+# Target language set for security review:
+#   python, javascript, typescript, tsx, go, java, ruby, rust,
+#   c, cpp, php, bash, yaml, json, hcl, dockerfile, sql
+# tree-sitter-language-pack downloads per-language .so files on first use;
+# running init() here bakes them into the image layer so workers are fully offline.
+RUN python - <<'EOF'
+try:
+    from tree_sitter_language_pack import init
+    init([
+        "python", "javascript", "typescript", "tsx",
+        "go", "java", "ruby", "rust",
+        "c", "cpp", "php", "bash",
+        "yaml", "json", "hcl", "dockerfile", "sql",
+    ])
+    print("tree-sitter grammars pre-downloaded OK")
+except Exception as e:
+    # Non-fatal during build — grammars will be downloaded on first worker use.
+    print(f"WARNING: grammar pre-download failed: {e}")
+EOF
 
 # Download offline Semgrep rules (no cloud dependency at runtime)
 RUN semgrep --config p/owasp-top-ten --dry-run /dev/null 2>/dev/null || true
+
+# Copy real sources last — changes here only invalidate the fast no-deps reinstall.
+COPY src/ src/
+RUN pip install --no-cache-dir --no-deps --force-reinstall .
 
 ENTRYPOINT ["python", "-m", "sec_review_framework.worker"]

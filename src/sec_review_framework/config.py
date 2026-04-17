@@ -1,5 +1,6 @@
 """Pydantic configuration loaders for all YAML config files."""
 
+import os
 from pathlib import Path
 
 import yaml
@@ -157,6 +158,33 @@ class ExperimentFileConfig(BaseModel):
     @classmethod
     def from_yaml(cls, path: Path) -> "ExperimentFileConfig":
         return cls.model_validate(load_yaml(path))
+
+
+# --- Tool Extension Availability ---
+
+
+class ToolExtensionAvailability:
+    """Reads TOOL_EXT_* environment variables set by the coordinator Helm template.
+
+    Chunk 6's /api/tool-extensions route should instantiate this and serialise
+    it as JSON — no further wiring required.
+
+    Environment variables:
+      TOOL_EXT_LSP_AVAILABLE          "true"|"false"  (default: "false")
+      TOOL_EXT_TREE_SITTER_AVAILABLE  "true"|"false"  (default: "false")
+    """
+
+    def __init__(self) -> None:
+        self.lsp: bool = os.environ.get("TOOL_EXT_LSP_AVAILABLE", "false").lower() == "true"
+        self.tree_sitter: bool = os.environ.get("TOOL_EXT_TREE_SITTER_AVAILABLE", "false").lower() == "true"
+        self.devdocs: bool = os.environ.get("TOOL_EXT_DEVDOCS_AVAILABLE", "false").lower() == "true"
+
+    def as_dict(self) -> dict[str, bool]:
+        return {
+            "lsp": self.lsp,
+            "tree_sitter": self.tree_sitter,
+            "devdocs": self.devdocs,
+        }
 
 
 # --- Vuln Class Config ---

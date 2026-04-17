@@ -13,6 +13,10 @@ spec:
       {{- include "sec-review.coordinator.selectorLabels" . | nindent 6 }}
   template:
     metadata:
+      {{- with .Values.coordinator.imageDigest }}
+      annotations:
+        sec-review.io/coordinator-image-digest: {{ . | quote }}
+      {{- end }}
       labels:
         {{- include "sec-review.labels" . | nindent 8 }}
         {{- include "sec-review.coordinator.selectorLabels" . | nindent 8 }}
@@ -51,6 +55,19 @@ spec:
               value: {{ .Values.coordinator.configMapName | quote }}
             - name: WORKER_IMAGE_PULL_POLICY
               value: {{ .Values.image.worker.pullPolicy | quote }}
+            # Tool-extension availability flags — consumed by the coordinator's
+            # /api/tool-extensions endpoint (Chunk 6).  Set from workerTools values
+            # so operators can disable an extension in one place without rebuilding.
+            - name: TOOL_EXT_LSP_AVAILABLE
+              value: {{ .Values.workerTools.lsp.enabled | toString | quote }}
+            - name: TOOL_EXT_TREE_SITTER_AVAILABLE
+              value: {{ .Values.workerTools.treeSitter.enabled | toString | quote }}
+            - name: TOOL_EXT_DEVDOCS_AVAILABLE
+              value: {{ .Values.workerTools.devdocs.enabled | toString | quote }}
+            - name: DEVDOCS_ROOT
+              value: {{ .Values.workerTools.devdocs.docsetsPath | quote }}
+            - name: DEVDOCS_ALLOW_DOCSETS
+              value: {{ .Values.workerTools.devdocs.docsets | join "," | quote }}
             {{- with .Values.coordinator.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

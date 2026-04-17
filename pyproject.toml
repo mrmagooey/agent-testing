@@ -23,6 +23,14 @@ coordinator = [
 ]
 worker = [
     "semgrep>=1.100",
+    "mcp>=1.0",
+    # Tree-sitter extension (ToolExtension.TREE_SITTER)
+    # tree-sitter>=0.25 uses the new binding API (Language.query, etc.)
+    "tree-sitter>=0.25.2",
+    # Single-package grammar bundle: 305 pre-compiled parsers, on-demand download.
+    # Covers all security-review target languages: python, javascript, typescript,
+    # tsx, go, java, ruby, rust, c, cpp, php, bash, yaml, json, hcl, dockerfile, sql.
+    "tree-sitter-language-pack>=1.6.0",
 ]
 dev = [
     "pytest>=8.3",

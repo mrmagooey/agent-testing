@@ -2,8 +2,13 @@
 FROM node:22-slim AS frontend-build
 
 WORKDIR /frontend
-COPY frontend/ .
+
+# Install JS deps first — cached unless package manifests change.
+COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
+
+# Copy sources and build — only invalidated when frontend files change.
+COPY frontend/ .
 RUN npm run build
 
 # Stage 2: Python coordinator image
@@ -11,9 +16,17 @@ FROM python:3.14-slim
 
 WORKDIR /app
 
+# Install Python dependencies against a stub source tree so the heavy
+# dep-install layer is cached unless pyproject.toml changes.
 COPY pyproject.toml .
+RUN mkdir -p src/sec_review_framework \
+ && touch src/sec_review_framework/__init__.py \
+ && pip install --no-cache-dir ".[coordinator]" \
+ && rm -rf src
+
+# Copy real sources and reinstall only the local package (deps already satisfied).
 COPY src/ src/
-RUN pip install --no-cache-dir ".[coordinator]"
+RUN pip install --no-cache-dir --no-deps --force-reinstall .
 
 # Copy the built frontend static assets
 COPY --from=frontend-build /frontend/dist /app/frontend/dist

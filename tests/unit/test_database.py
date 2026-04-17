@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
+from sec_review_framework.data.experiment import ToolExtension
 from sec_review_framework.db import Database
 
 
@@ -234,3 +235,67 @@ async def test_get_batch_spend_missing_batch_returns_zero(db: Database):
     """get_batch_spend on a non-existent batch returns 0.0."""
     total = await db.get_batch_spend("non-existent")
     assert total == pytest.approx(0.0)
+
+
+# ---------------------------------------------------------------------------
+# tool_extensions persistence
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_run_tool_extensions_empty(db: Database):
+    """create_run with no tool_extensions stores empty string."""
+    await _create_batch(db)
+    await db.create_run(
+        run_id="run-ext-empty",
+        batch_id="batch-1",
+        config_json="{}",
+        model_id="m",
+        strategy="single_agent",
+        tool_variant="with_tools",
+        review_profile="default",
+        verification_variant="none",
+    )
+    row = await db.get_run("run-ext-empty")
+    assert row is not None
+    assert row["tool_extensions"] == ""
+
+
+@pytest.mark.asyncio
+async def test_create_run_tool_extensions_persisted(db: Database):
+    """create_run with tool_extensions stores them as sorted comma-joined string."""
+    await _create_batch(db)
+    await db.create_run(
+        run_id="run-ext-lsp-ts",
+        batch_id="batch-1",
+        config_json="{}",
+        model_id="m",
+        strategy="single_agent",
+        tool_variant="with_tools",
+        review_profile="default",
+        verification_variant="none",
+        tool_extensions=frozenset({ToolExtension.TREE_SITTER, ToolExtension.LSP}),
+    )
+    row = await db.get_run("run-ext-lsp-ts")
+    assert row is not None
+    assert row["tool_extensions"] == "lsp,tree_sitter"
+
+
+@pytest.mark.asyncio
+async def test_create_run_tool_extensions_single(db: Database):
+    """create_run with a single tool_extension persists it correctly."""
+    await _create_batch(db)
+    await db.create_run(
+        run_id="run-ext-devdocs",
+        batch_id="batch-1",
+        config_json="{}",
+        model_id="m",
+        strategy="single_agent",
+        tool_variant="with_tools",
+        review_profile="default",
+        verification_variant="none",
+        tool_extensions=frozenset({ToolExtension.DEVDOCS}),
+    )
+    row = await db.get_run("run-ext-devdocs")
+    assert row is not None
+    assert row["tool_extensions"] == "devdocs"

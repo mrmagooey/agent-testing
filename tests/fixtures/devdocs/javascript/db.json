@@ -1,0 +1,8 @@
+{
+  "global_objects/eval": "<h2>eval()</h2><p>The <strong>eval()</strong> function evaluates JavaScript code represented as a string and returns its completion value.</p><p><strong>Security warning:</strong> Running JavaScript from a string is an enormous security risk. It is far too easy for a bad actor to run arbitrary code when you use eval().</p>",
+  "global_objects/json/parse": "<h2>JSON.parse()</h2><p>The <strong>JSON.parse()</strong> static method parses a JSON string, constructing the JavaScript value or object described by the string.</p>",
+  "global_objects/fetch": "<h2>fetch()</h2><p>The global <strong>fetch()</strong> method starts the process of fetching a resource from the network, returning a promise which is fulfilled once the response is available.</p>",
+  "xmlhttprequest": "<h2>XMLHttpRequest</h2><p><strong>XMLHttpRequest (XHR)</strong> objects are used to interact with servers. You can retrieve data from a URL without having to do a full page refresh.</p>",
+  "web_storage_api/localstorage": "<h2>localStorage</h2><p>The <strong>localStorage</strong> read-only property of the window interface allows you to access a Storage object for the Document's origin.</p>",
+  "document/queryselector": "<h2>Document.querySelector()</h2><p>The <strong>querySelector()</strong> method of the Document interface returns the first Element within the document that matches the specified CSS selector, or group of CSS selectors.</p>"
+}

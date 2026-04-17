@@ -96,3 +96,5 @@ class StrategyOutput(BaseModel):
     pre_dedup_count: int
     post_dedup_count: int
     dedup_log: list[DedupEntry]
+    system_prompt: str | None = None
+    user_message: str | None = None

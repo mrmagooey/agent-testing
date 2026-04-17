@@ -62,7 +62,9 @@ class ExperimentWorker:
         labels = LabelStore(datasets_dir).load(run.dataset_name, run.dataset_version)
         model = ModelProviderFactory().create(run.model_id, run.model_config)
         strategy = StrategyFactory().create(run.strategy)
-        tools = ToolRegistryFactory().create(run.tool_variant, target)
+        tools = ToolRegistryFactory().create(
+            run.tool_variant, target, tool_extensions=run.tool_extensions
+        )
         profile = ProfileRegistry().get(run.review_profile)
 
         config = {**run.strategy_config, "review_profile": profile, "parallel": run.parallel}
@@ -96,6 +98,8 @@ class ExperimentWorker:
             )
             status = RunStatus.FAILED
             error = str(e)
+        finally:
+            tools.close()
 
         duration = time.monotonic() - start
 
@@ -116,10 +120,9 @@ class ExperimentWorker:
             run.model_id, total_input, total_output
         )
 
-        # Prompt snapshot is captured by strategies; use a placeholder here if not attached.
         prompt_snapshot = PromptSnapshot.capture(
-            system_prompt="",
-            user_message_template="",
+            system_prompt=strategy_output.system_prompt or "",
+            user_message_template=strategy_output.user_message or "",
             finding_output_format="",
         )
 

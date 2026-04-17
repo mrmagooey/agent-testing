@@ -1,0 +1,8 @@
+Perform a security audit of the following file.
+You may use tools to read related files if context is needed.
+
+File: {file_path}
+```
+{file_content}
+```
+{finding_output_format}

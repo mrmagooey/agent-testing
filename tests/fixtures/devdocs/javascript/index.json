@@ -1,0 +1,8 @@
+[
+  {"name": "eval", "path": "global_objects/eval", "type": "function"},
+  {"name": "JSON.parse", "path": "global_objects/json/parse", "type": "method"},
+  {"name": "fetch", "path": "global_objects/fetch", "type": "function"},
+  {"name": "XMLHttpRequest", "path": "xmlhttprequest", "type": "class"},
+  {"name": "localStorage.setItem", "path": "web_storage_api/localstorage", "type": "method"},
+  {"name": "document.querySelector", "path": "document/queryselector", "type": "method"}
+]

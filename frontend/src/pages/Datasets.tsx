@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { listDatasets, type Dataset } from '../api/client'
+import { PageLoadingSpinner } from '../components/Skeleton'
 
 function humanBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -74,9 +75,7 @@ export default function Datasets() {
     })
   }, [filtered, sortKey, sortDir])
 
-  if (loading) {
-    return <div className="flex items-center justify-center h-64 text-gray-400">Loading...</div>
-  }
+  if (loading) return <PageLoadingSpinner />
 
   if (error) {
     return (

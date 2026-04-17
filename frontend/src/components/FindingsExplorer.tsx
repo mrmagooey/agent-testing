@@ -3,25 +3,11 @@ import type { Finding } from '../api/client'
 import { reclassifyFinding } from '../api/client'
 import CodeViewer from './CodeViewer'
 import FindingsSearch from './FindingsSearch'
+import { SEVERITY_COLORS, MATCH_STATUS_COLORS } from '../constants/colors'
 
 export interface FindingsExplorerProps {
   batchId: string
   findings: Finding[]
-}
-
-const MATCH_BADGE: Record<string, string> = {
-  tp: 'bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200',
-  fp: 'bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200',
-  fn: 'bg-orange-100 dark:bg-orange-900 text-orange-800 dark:text-orange-200',
-  unlabeled_real: 'bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200',
-}
-
-const SEVERITY_BADGE: Record<string, string> = {
-  critical: 'bg-red-600 text-white',
-  high: 'bg-orange-500 text-white',
-  medium: 'bg-yellow-400 text-gray-900',
-  low: 'bg-blue-400 text-white',
-  info: 'bg-gray-400 text-white',
 }
 
 export default function FindingsExplorer({ batchId, findings: initialFindings }: FindingsExplorerProps) {
@@ -131,7 +117,7 @@ export default function FindingsExplorer({ batchId, findings: initialFindings }:
                   className="cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
                 >
                   <td className="px-3 py-2">
-                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${MATCH_BADGE[finding.match_status] ?? ''}`}>
+                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${MATCH_STATUS_COLORS[finding.match_status] ?? ''}`}>
                       {finding.match_status}
                     </span>
                   </td>
@@ -139,14 +125,14 @@ export default function FindingsExplorer({ batchId, findings: initialFindings }:
                     {finding.title}
                   </td>
                   <td className="px-3 py-2">
-                    <span className={`px-2 py-0.5 rounded text-xs font-medium ${SEVERITY_BADGE[finding.severity] ?? ''}`}>
+                    <span className={`px-2 py-0.5 rounded text-xs font-medium ${SEVERITY_COLORS[finding.severity] ?? ''}`}>
                       {finding.severity}
                     </span>
                   </td>
                   <td className="px-3 py-2 text-gray-600 dark:text-gray-400 font-mono text-xs">
                     {finding.vuln_class}
                   </td>
-                  <td className="px-3 py-2 text-gray-500 dark:text-gray-400 font-mono text-xs truncate max-w-xs">
+                  <td className="px-3 py-2 text-gray-500 dark:text-gray-400 font-mono text-xs truncate max-w-xs" title={finding.file_path ?? ''}>
                     {finding.file_path ?? '—'}
                   </td>
                   <td className="px-3 py-2 text-gray-500 dark:text-gray-400 font-mono text-xs">

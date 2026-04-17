@@ -14,6 +14,7 @@ from sec_review_framework.data.experiment import (
     RunResult,
     RunStatus,
     StrategyName,
+    ToolExtension,
     ToolVariant,
     VerificationVariant,
 )
@@ -323,3 +324,104 @@ def test_prompt_snapshot_id_is_16_chars():
         finding_output_format="f",
     )
     assert len(snap.snapshot_id) == 16
+
+
+# ---------------------------------------------------------------------------
+# ToolExtension / tool_extension_sets tests
+# ---------------------------------------------------------------------------
+
+
+def test_expand_tool_extension_sets_produces_correct_run_ids():
+    """Matrix with 3 extension sets, 1 model, 1 strategy → 3 runs with correct suffixes."""
+    matrix = _minimal_matrix(
+        tool_extension_sets=[
+            frozenset(),
+            frozenset({ToolExtension.LSP}),
+            frozenset({ToolExtension.TREE_SITTER, ToolExtension.DEVDOCS}),
+        ],
+    )
+    runs = matrix.expand()
+    assert len(runs) == 3
+    run_ids = [r.id for r in runs]
+
+    # Empty set: no suffix at all (backwards-compat)
+    base = "batch-1_model-a_single_agent_with_tools_default_none"
+    assert base in run_ids
+    assert f"{base}_ext-lsp" in run_ids
+    assert f"{base}_ext-devdocs+tree_sitter" in run_ids
+
+
+def test_expand_empty_extension_set_produces_no_suffix():
+    """Default matrix (tool_extension_sets=[frozenset()]) produces byte-identical run IDs to pre-extension code."""
+    matrix = _minimal_matrix()
+    runs = matrix.expand()
+    assert len(runs) == 1
+    assert runs[0].id == "batch-1_model-a_single_agent_with_tools_default_none"
+
+
+def test_tool_extension_sets_powerset_returns_all_subsets():
+    """powerset({LSP, DEVDOCS}) must return 4 frozensets (including empty set)."""
+    subsets = ExperimentMatrix.tool_extension_sets_powerset({ToolExtension.LSP, ToolExtension.DEVDOCS})
+    assert len(subsets) == 4
+    assert frozenset() in subsets
+    assert frozenset({ToolExtension.LSP}) in subsets
+    assert frozenset({ToolExtension.DEVDOCS}) in subsets
+    assert frozenset({ToolExtension.LSP, ToolExtension.DEVDOCS}) in subsets
+
+
+def test_tool_extension_sets_powerset_empty_set():
+    """powerset of empty set returns exactly [frozenset()]."""
+    subsets = ExperimentMatrix.tool_extension_sets_powerset(set())
+    assert subsets == [frozenset()]
+
+
+def test_experiment_run_tool_extensions_default_is_empty():
+    """ExperimentRun.tool_extensions defaults to empty frozenset."""
+    run = ExperimentRun(
+        id="r1",
+        batch_id="b1",
+        model_id="m1",
+        strategy=StrategyName.SINGLE_AGENT,
+        tool_variant=ToolVariant.WITH_TOOLS,
+        review_profile=ReviewProfileName.DEFAULT,
+        verification_variant=VerificationVariant.NONE,
+        dataset_name="ds",
+        dataset_version="1.0",
+    )
+    assert run.tool_extensions == frozenset()
+
+
+def test_experiment_run_tool_extensions_serializes_sorted():
+    """tool_extensions serializes to a sorted list of string values."""
+    run = ExperimentRun(
+        id="r1",
+        batch_id="b1",
+        model_id="m1",
+        strategy=StrategyName.SINGLE_AGENT,
+        tool_variant=ToolVariant.WITH_TOOLS,
+        review_profile=ReviewProfileName.DEFAULT,
+        verification_variant=VerificationVariant.NONE,
+        dataset_name="ds",
+        dataset_version="1.0",
+        tool_extensions=frozenset({ToolExtension.TREE_SITTER, ToolExtension.LSP}),
+    )
+    dumped = json.loads(run.model_dump_json())
+    assert dumped["tool_extensions"] == ["lsp", "tree_sitter"]
+
+
+def test_experiment_run_tool_extensions_round_trips():
+    """model_dump_json → model_validate_json preserves tool_extensions."""
+    run = ExperimentRun(
+        id="r1",
+        batch_id="b1",
+        model_id="m1",
+        strategy=StrategyName.SINGLE_AGENT,
+        tool_variant=ToolVariant.WITH_TOOLS,
+        review_profile=ReviewProfileName.DEFAULT,
+        verification_variant=VerificationVariant.NONE,
+        dataset_name="ds",
+        dataset_version="1.0",
+        tool_extensions=frozenset({ToolExtension.LSP, ToolExtension.DEVDOCS}),
+    )
+    restored = ExperimentRun.model_validate_json(run.model_dump_json())
+    assert restored.tool_extensions == frozenset({ToolExtension.LSP, ToolExtension.DEVDOCS})

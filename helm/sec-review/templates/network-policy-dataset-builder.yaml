@@ -22,6 +22,17 @@ spec:
         - ipBlock:
             cidr: {{ . }}
         {{- end }}
+    {{- with .Values.networkPolicy.datasetBuilder.docsetsCidrs }}
+    # DevDocs HTTPS (documents.devdocs.io — Fastly CDN)
+    - ports:
+        - protocol: TCP
+          port: 443
+      to:
+        {{- range . }}
+        - ipBlock:
+            cidr: {{ . }}
+        {{- end }}
+    {{- end }}
     # DNS
     - ports:
         - protocol: UDP

@@ -26,6 +26,7 @@ export interface Run {
   model: string
   strategy: string
   tool_variant: string
+  tool_extensions?: string[]
   profile: string
   verification: string
   status: string
@@ -109,6 +110,7 @@ export interface BatchConfig {
   strategies: string[]
   profiles: string[]
   tool_variants: string[]
+  tool_extension_sets?: string[][]
   verification: string[]
   repetitions: number
   spend_cap_usd?: number
@@ -155,6 +157,29 @@ export interface InjectionTemplate {
   anchor_pattern: string
 }
 
+export interface AccuracyMatrixCell {
+  model: string
+  strategy: string
+  accuracy: number
+  run_count: number
+}
+
+export interface AccuracyMatrix {
+  models: string[]
+  strategies: string[]
+  cells: AccuracyMatrixCell[]
+}
+
+export interface PromptSnapshot {
+  system_prompt: string
+  user_message_template: string
+  review_profile_modifier?: string
+  finding_output_format?: string
+  clean_prompt?: string | null
+  injected_prompt?: string | null
+  injection_template_id?: string | null
+}
+
 // ─── Fetch Helper ──────────────────────────────────────────────────────────
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
@@ -175,6 +200,40 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   // 204 No Content
   if (res.status === 204) return undefined as unknown as T
   return res.json() as Promise<T>
+}
+
+// ─── Tool Extensions ──────────────────────────────────────────────────────
+
+export interface ToolExtension {
+  key: string
+  label: string
+  available: boolean
+}
+
+/**
+ * Fetch available tool extensions from the backend.
+ * Falls back to all three extensions as available if the route returns 404
+ * (graceful degradation for older coordinators without MCP support).
+ */
+export async function listToolExtensions(): Promise<ToolExtension[]> {
+  try {
+    return await apiFetch<ToolExtension[]>('/tool-extensions')
+  } catch (err) {
+    // If 404 or other error, assume all three are available (fallback for legacy)
+    if ((err as Error).message.includes('404') || (err as Error).message.includes('not found')) {
+      return [
+        { key: 'tree_sitter', label: 'Tree-sitter', available: true },
+        { key: 'lsp', label: 'LSP', available: true },
+        { key: 'devdocs', label: 'DevDocs', available: true },
+      ]
+    }
+    // For other errors, still provide the fallback
+    return [
+      { key: 'tree_sitter', label: 'Tree-sitter', available: true },
+      { key: 'lsp', label: 'LSP', available: true },
+      { key: 'devdocs', label: 'DevDocs', available: true },
+    ]
+  }
 }
 
 // ─── Batch Endpoints ───────────────────────────────────────────────────────
@@ -202,8 +261,12 @@ export function listRuns(batchId: string): Promise<Run[]> {
 export function getRun(
   batchId: string,
   runId: string
-): Promise<Run & { findings: Finding[]; tool_calls: ToolCall[]; messages: Message[] }> {
+): Promise<Run & { findings: Finding[]; tool_calls: ToolCall[]; messages: Message[]; prompt_snapshot?: PromptSnapshot }> {
   return apiFetch(`/batches/${batchId}/runs/${runId}`)
+}
+
+export function getAccuracyMatrix(): Promise<AccuracyMatrix> {
+  return apiFetch<AccuracyMatrix>('/matrix/accuracy')
 }
 
 export function cancelBatch(batchId: string): Promise<void> {

@@ -1,0 +1,8 @@
+You are scanning this repository for {vuln_class} vulnerabilities only.
+Ignore all other vulnerability types.
+
+Repository structure:
+{repo_summary}
+
+Use your tools to read any files that might contain {vuln_class} issues.
+{finding_output_format}

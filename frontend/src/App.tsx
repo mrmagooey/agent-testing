@@ -11,7 +11,7 @@ import Feedback from './pages/Feedback'
 import ThemeToggle from './components/ThemeToggle'
 
 const navLinkClass = ({ isActive }: { isActive: boolean }) =>
-  `px-3 py-2 rounded text-sm font-medium transition-colors ${
+  `px-3 py-2 rounded text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:outline-none ${
     isActive
       ? 'bg-indigo-100 dark:bg-indigo-900 text-indigo-700 dark:text-indigo-200'
       : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'

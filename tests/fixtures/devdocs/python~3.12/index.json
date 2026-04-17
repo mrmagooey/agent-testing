@@ -1,0 +1,9 @@
+[
+  {"name": "os.path.join", "path": "os.path#os.path.join", "type": "function"},
+  {"name": "subprocess.Popen", "path": "subprocess#subprocess.Popen", "type": "class"},
+  {"name": "subprocess.run", "path": "subprocess#subprocess.run", "type": "function"},
+  {"name": "hashlib.sha256", "path": "hashlib#hashlib.sha256", "type": "function"},
+  {"name": "secrets.token_bytes", "path": "secrets#secrets.token_bytes", "type": "function"},
+  {"name": "urllib.request.urlopen", "path": "urllib.request#urllib.request.urlopen", "type": "function"},
+  {"name": "socket.socket", "path": "socket#socket.socket", "type": "class"}
+]

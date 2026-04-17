@@ -72,4 +72,50 @@ describe('MatrixTable', () => {
     const dashes = screen.getAllByText('—')
     expect(dashes.length).toBeGreaterThanOrEqual(3)
   })
+
+  it('does not show Ext column when no runs have tool_extensions', () => {
+    const runs = [
+      makeRun({ run_id: 'r1', tool_extensions: undefined }),
+      makeRun({ run_id: 'r2', tool_extensions: undefined }),
+    ]
+    renderTable(runs)
+
+    // Should not have 'Ext' header when all runs have undefined extensions
+    const extHeaders = screen.queryAllByRole('columnheader', { name: /ext/i })
+    expect(extHeaders.length).toBe(0)
+  })
+
+  it('shows Ext column when at least one run has tool_extensions', () => {
+    const runs = [
+      makeRun({ run_id: 'r1', tool_extensions: ['lsp'] }),
+      makeRun({ run_id: 'r2', tool_extensions: undefined }),
+    ]
+    renderTable(runs)
+
+    // Should have 'Ext' header when at least one run has extensions
+    const extHeader = screen.getByRole('columnheader', { name: /ext/i })
+    expect(extHeader).toBeInTheDocument()
+  })
+
+  it('renders tool_extensions as badges', () => {
+    const runs = [
+      makeRun({ run_id: 'r1', tool_extensions: ['lsp', 'tree_sitter'] }),
+    ]
+    renderTable(runs)
+
+    // Should show both extension badges
+    expect(screen.getByText('lsp')).toBeInTheDocument()
+    expect(screen.getByText('tree_sitter')).toBeInTheDocument()
+  })
+
+  it('does not show Ext column when tool_extensions is empty array', () => {
+    const runs = [
+      makeRun({ run_id: 'r1', tool_extensions: [] }),
+    ]
+    renderTable(runs)
+
+    // Should not show the Ext column because the array is empty (length === 0)
+    const extHeaders = screen.queryAllByRole('columnheader', { name: /ext/i })
+    expect(extHeaders.length).toBe(0)
+  })
 })

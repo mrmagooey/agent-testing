@@ -1,6 +1,7 @@
 """SQLite-based persistence for the coordinator service. Uses aiosqlite for async access."""
 
 import aiosqlite
+from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
 
@@ -53,6 +54,14 @@ class Database:
             await db.execute(
                 "CREATE INDEX IF NOT EXISTS idx_runs_model_id ON runs(model_id)"
             )
+            # Idempotent migration: add tool_extensions column to existing DBs.
+            try:
+                await db.execute(
+                    "ALTER TABLE runs ADD COLUMN tool_extensions TEXT DEFAULT ''"
+                )
+                await db.commit()
+            except Exception:
+                pass  # Column already exists — safe to ignore
             await db.commit()
 
     async def create_batch(
@@ -114,20 +123,25 @@ class Database:
         review_profile: str,
         verification_variant: str,
         estimated_cost_usd: float | None = None,
+        tool_extensions: "frozenset | Iterable[str] | None" = None,
     ) -> None:
+        if tool_extensions is None:
+            ext_str = ""
+        else:
+            ext_str = ",".join(sorted(str(e.value if hasattr(e, "value") else e) for e in tool_extensions))
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 """
                 INSERT INTO runs (
                     id, batch_id, config_json, status, model_id, strategy,
                     tool_variant, review_profile, verification_variant,
-                    estimated_cost_usd, created_at
-                ) VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)
+                    estimated_cost_usd, created_at, tool_extensions
+                ) VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id, batch_id, config_json, model_id, strategy,
                     tool_variant, review_profile, verification_variant,
-                    estimated_cost_usd, datetime.utcnow().isoformat(),
+                    estimated_cost_usd, datetime.utcnow().isoformat(), ext_str,
                 ),
             )
             await db.commit()

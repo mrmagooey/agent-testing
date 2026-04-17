@@ -20,6 +20,7 @@ from sec_review_framework.data.experiment import (
     ReviewProfileName,
     RunResult,
     StrategyName,
+    ToolExtension,
     ToolVariant,
     VerificationVariant,
 )
@@ -27,8 +28,17 @@ from sec_review_framework.db import Database
 from sec_review_framework.profiles.review_profiles import BUILTIN_PROFILES, ProfileRegistry
 from sec_review_framework.feedback.tracker import FeedbackTracker
 from sec_review_framework.cost.calculator import CostCalculator
+from sec_review_framework.config import ToolExtensionAvailability
 
 logger = logging.getLogger(__name__)
+
+AUDIT_URL_CHECK_EXEMPT_PREFIXES = ("doc_", "ts_", "lsp_")
+
+_TOOL_EXTENSION_LABELS: dict[ToolExtension, str] = {
+    ToolExtension.TREE_SITTER: "Tree-sitter",
+    ToolExtension.LSP: "LSP",
+    ToolExtension.DEVDOCS: "DevDocs",
+}
 
 # Kubernetes is optional — not available in dev environments
 try:
@@ -139,6 +149,7 @@ class BatchCoordinator:
                 tool_variant=run.tool_variant.value,
                 review_profile=run.review_profile.value,
                 verification_variant=run.verification_variant.value,
+                tool_extensions=run.tool_extensions,
             )
 
         # Persist run configs to shared storage for worker pods to read
@@ -256,7 +267,11 @@ class BatchCoordinator:
                                 env=[
                                     kubernetes.client.V1EnvVar(
                                         name="CONFIG_DIR", value="/app/config"
-                                    )
+                                    ),
+                                    kubernetes.client.V1EnvVar(
+                                        name="TOOL_EXTENSIONS",
+                                        value=",".join(sorted(e.value for e in run.tool_extensions)),
+                                    ),
                                 ],
                                 env_from=[
                                     kubernetes.client.V1EnvFromSource(
@@ -328,6 +343,47 @@ class BatchCoordinator:
                 except Exception as e:
                     logger.error(f"Failed to parse result from {result_file}: {e}")
         return results
+
+    def get_accuracy_matrix(self) -> dict:
+        outputs_dir = self.storage_root / "outputs"
+        cells: dict[tuple[str, str], list[float]] = {}
+        if outputs_dir.exists():
+            for batch_dir in outputs_dir.iterdir():
+                if not batch_dir.is_dir():
+                    continue
+                for run_dir in batch_dir.iterdir():
+                    if not run_dir.is_dir():
+                        continue
+                    result_file = run_dir / "run_result.json"
+                    if not result_file.exists():
+                        continue
+                    try:
+                        result = RunResult.model_validate_json(result_file.read_text())
+                        if result.evaluation is None:
+                            continue
+                        model = result.experiment.model_id
+                        strategy = result.experiment.strategy.value
+                        key = (model, strategy)
+                        cells.setdefault(key, []).append(result.evaluation.recall)
+                    except Exception as e:
+                        logger.warning(f"Skipping result in {result_file}: {e}")
+
+        all_models = sorted({k[0] for k in cells})
+        all_strategies = sorted({k[1] for k in cells})
+        cell_list = []
+        for (model, strategy), recalls in cells.items():
+            avg_recall = sum(recalls) / len(recalls)
+            cell_list.append({
+                "model": model,
+                "strategy": strategy,
+                "accuracy": round(avg_recall, 4),
+                "run_count": len(recalls),
+            })
+        return {
+            "models": all_models,
+            "strategies": all_strategies,
+            "cells": cell_list,
+        }
 
     async def finalize_batch(self, batch_id: str) -> None:
         results = self.collect_results(batch_id)
@@ -438,8 +494,41 @@ class BatchCoordinator:
     # Result access
     # ------------------------------------------------------------------
 
+    async def _serialize_batch_summary(self, row: dict) -> dict:
+        batch_id = row["id"]
+        counts = await self.db.count_runs_by_status(batch_id)
+        dataset = ""
+        try:
+            config = json.loads(row.get("config_json") or "{}")
+            dataset = config.get("dataset_name", "") or ""
+        except (json.JSONDecodeError, TypeError):
+            pass
+        return {
+            "batch_id": batch_id,
+            "status": row.get("status") or "pending",
+            "dataset": dataset,
+            "created_at": row.get("created_at") or "",
+            "completed_at": row.get("completed_at"),
+            "total_runs": row.get("total_runs") or 0,
+            "completed_runs": counts.get("completed", 0),
+            "running_runs": counts.get("running", 0),
+            "pending_runs": counts.get("pending", 0),
+            "failed_runs": counts.get("failed", 0),
+            "total_cost_usd": float(row.get("spent_usd") or 0.0),
+            "spend_cap_usd": (
+                float(row["max_cost_usd"]) if row.get("max_cost_usd") is not None else None
+            ),
+        }
+
     async def list_batches(self) -> list[dict]:
-        return await self.db.list_batches()
+        rows = await self.db.list_batches()
+        return [await self._serialize_batch_summary(r) for r in rows]
+
+    async def get_batch_detail(self, batch_id: str) -> dict:
+        row = await self.db.get_batch(batch_id)
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Batch {batch_id} not found")
+        return await self._serialize_batch_summary(row)
 
     async def list_runs(self, batch_id: str) -> list[dict]:
         return await self.db.list_runs(batch_id)
@@ -534,8 +623,9 @@ class BatchCoordinator:
                 entry = json.loads(line)
                 tool_name = entry.get("tool_name", "unknown")
                 counts[tool_name] = counts.get(tool_name, 0) + 1
-                if url_pattern.search(json.dumps(entry.get("inputs", {}))):
-                    suspicious.append(entry)
+                if not tool_name.startswith(AUDIT_URL_CHECK_EXEMPT_PREFIXES):
+                    if url_pattern.search(json.dumps(entry.get("inputs", {}))):
+                        suspicious.append(entry)
             except Exception:
                 pass
 
@@ -737,6 +827,18 @@ class BatchCoordinator:
             for s in StrategyName
         ]
 
+    def list_tool_extensions(self) -> list[dict]:
+        availability = ToolExtensionAvailability()
+        avail_map = availability.as_dict()
+        return [
+            {
+                "key": ext.value,
+                "label": _TOOL_EXTENSION_LABELS[ext],
+                "available": avail_map.get(ext.value, False),
+            }
+            for ext in ToolExtension
+        ]
+
     def list_profiles(self) -> list[dict]:
         return [
             {"name": name.value, "description": profile.description}
@@ -813,6 +915,14 @@ AVG_TOKENS_PER_KLOC = 1400  # prompt + completion, calibrated empirically
 
 app = FastAPI(title="Security Review Framework", version="1.0.0")
 coordinator: BatchCoordinator = None  # type: ignore[assignment]  # initialized at startup
+
+
+@app.middleware("http")
+async def strip_api_prefix(request, call_next):
+    if request.scope["path"].startswith("/api/"):
+        request.scope["path"] = request.scope["path"][4:]
+        request.scope["raw_path"] = request.scope["path"].encode()
+    return await call_next(request)
 
 
 def build_coordinator_from_env() -> BatchCoordinator:
@@ -973,8 +1083,8 @@ async def estimate_batch(req: EstimateRequest) -> dict:
 
 @app.get("/batches/{batch_id}")
 async def get_batch(batch_id: str) -> dict:
-    """Batch status: total/completed/failed/running/pending counts, cost so far."""
-    return (await coordinator.get_batch_status(batch_id)).model_dump()
+    """Batch summary: dataset, status, per-status run counts, cost so far and cap."""
+    return await coordinator.get_batch_detail(batch_id)
 
 
 @app.get("/batches/{batch_id}/results")
@@ -1123,6 +1233,14 @@ def get_fp_patterns(batch_id: str) -> list[dict]:
     return coordinator.get_fp_patterns(batch_id)
 
 
+# --- Matrix ---
+
+@app.get("/matrix/accuracy")
+def get_accuracy_matrix() -> dict:
+    """Accuracy heatmap data: recall averaged across completed runs, grouped by model × strategy."""
+    return coordinator.get_accuracy_matrix()
+
+
 # --- Reference ---
 
 @app.get("/models")
@@ -1147,6 +1265,12 @@ def list_profiles() -> list[dict]:
 def list_templates() -> list[dict]:
     """List available vulnerability injection templates."""
     return coordinator.list_templates()
+
+
+@app.get("/tool-extensions")
+def list_tool_extensions() -> list[dict]:
+    """List available MCP tool extensions with availability status."""
+    return coordinator.list_tool_extensions()
 
 
 # Static files — mount last so all API routes take priority

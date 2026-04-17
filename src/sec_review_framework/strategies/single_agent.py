@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from sec_review_framework.data.findings import StrategyOutput
+from sec_review_framework.prompts.loader import load_system_prompt, load_user_prompt
 from sec_review_framework.strategies.base import ScanStrategy
 from sec_review_framework.strategies.common import (
     FINDING_OUTPUT_FORMAT,
@@ -34,13 +35,7 @@ class SingleAgentStrategy(ScanStrategy):
     # ------------------------------------------------------------------
 
     def _base_system_prompt(self) -> str:
-        return (
-            "You are an expert security code reviewer. "
-            "Your task is to perform a thorough security audit of the provided codebase. "
-            "Look for vulnerabilities across all classes: injection flaws, authentication "
-            "issues, cryptographic weaknesses, insecure dependencies, logic bugs, and more. "
-            "Be precise — report only genuine findings with evidence from the code."
-        )
+        return load_system_prompt("single_agent.txt")
 
     def _build_repo_summary(self, target) -> str:
         """Return a text representation of the repository file tree."""
@@ -66,14 +61,10 @@ class SingleAgentStrategy(ScanStrategy):
         repo_summary = self._build_repo_summary(target)
         experiment_id = config.get("experiment_id", "")
 
-        user_message = f"""You are a security code reviewer. Perform a comprehensive security audit \
-of the following codebase.
-
-Repository structure:
-{repo_summary}
-
-Use your tools to read any files you need. Cover all vulnerability classes.
-{FINDING_OUTPUT_FORMAT}"""
+        user_message = load_user_prompt("single_agent.txt").format(
+            repo_summary=repo_summary,
+            finding_output_format=FINDING_OUTPUT_FORMAT,
+        )
 
         raw_output = run_agentic_loop(
             model,
@@ -95,4 +86,6 @@ Use your tools to read any files you need. Cover all vulnerability classes.
             pre_dedup_count=len(findings),
             post_dedup_count=len(findings),
             dedup_log=[],
+            system_prompt=system_prompt,
+            user_message=user_message,
         )
