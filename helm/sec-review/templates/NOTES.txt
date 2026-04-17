@@ -1,0 +1,37 @@
+
+{{ .Chart.Name }} {{ .Chart.AppVersion }} installed into namespace {{ .Release.Namespace | quote }}.
+
+Resources created:
+  Deployment   {{ include "sec-review.fullname" . }}-coordinator
+  Service      {{ include "sec-review.fullname" . }}-coordinator ({{ .Values.coordinator.service.type }}:{{ .Values.coordinator.service.port }})
+  PVC          {{ .Values.storage.existingClaim | default (printf "%s-data" (include "sec-review.fullname" .)) }}  ({{ .Values.storage.size }}, {{ .Values.storage.accessMode }}, {{ .Values.storage.storageClassName }})
+{{- if .Values.secrets.create }}
+  Secret       {{ .Values.secrets.name }}
+{{- end }}
+{{- if .Values.networkPolicy.enabled }}
+  NetworkPolicy worker-egress, dataset-builder-egress
+{{- end }}
+{{- if .Values.serviceMonitor.enabled }}
+  ServiceMonitor (Prometheus scrape at {{ .Values.serviceMonitor.path }})
+{{- end }}
+{{- if .Values.gatekeeper.enabled }}
+  Gatekeeper ConstraintTemplate + Constraint
+{{- end }}
+
+Access the coordinator UI:
+
+{{- if eq .Values.coordinator.service.type "NodePort" }}
+  minikube service {{ include "sec-review.fullname" . }}-coordinator -n {{ .Release.Namespace }}
+{{- else if eq .Values.coordinator.service.type "LoadBalancer" }}
+  kubectl get svc -n {{ .Release.Namespace }} {{ include "sec-review.fullname" . }}-coordinator
+{{- else }}
+  kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "sec-review.fullname" . }}-coordinator {{ .Values.coordinator.service.port }}:{{ .Values.coordinator.service.port }}
+  then browse http://localhost:{{ .Values.coordinator.service.port }}
+{{- end }}
+
+{{- if and .Values.secrets.create (not (or .Values.secrets.apiKeys.openai .Values.secrets.apiKeys.anthropic .Values.secrets.apiKeys.gemini .Values.secrets.apiKeys.mistral .Values.secrets.apiKeys.cohere .Values.secrets.apiKeys.openrouter)) }}
+
+WARNING: llm-api-keys Secret was created with no keys set. The coordinator will
+start but worker pods will fail to authenticate with LLM providers. Set at
+least one key via --set-string secrets.apiKeys.<provider>=...
+{{- end }}

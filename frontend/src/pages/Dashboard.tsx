@@ -1,6 +1,16 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { listBatches, runSmokeTest, type Batch } from '../api/client'
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+} from 'recharts'
+
+const POLL_INTERVAL_MS = 15_000
 
 function formatElapsed(createdAt: string): string {
   const ms = Date.now() - new Date(createdAt).getTime()
@@ -15,6 +25,14 @@ function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, {
     month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
   })
+}
+
+function formatLastUpdated(ms: number): string {
+  const s = Math.floor((Date.now() - ms) / 1000)
+  if (s < 5) return 'just now'
+  if (s < 60) return `${s}s ago`
+  const m = Math.floor(s / 60)
+  return `${m}m ago`
 }
 
 function SimpleProgressBar({ completed, total }: { completed: number; total: number }) {
@@ -46,12 +64,74 @@ type SmokeTestState =
   | { status: 'success'; batch_id: string; message: string }
   | { status: 'error'; message: string }
 
+function SparklineChart({ data, dataKey, color, label }: {
+  data: Array<Record<string, unknown>>
+  dataKey: string
+  color: string
+  label: string
+}) {
+  if (data.length < 2) return null
+  return (
+    <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+      <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2">{label}</p>
+      <ResponsiveContainer width="100%" height={64}>
+        <LineChart data={data} margin={{ top: 2, right: 4, left: 0, bottom: 2 }}>
+          <XAxis dataKey="label" hide />
+          <YAxis hide />
+          <Tooltip
+            contentStyle={{
+              backgroundColor: '#1f2937',
+              border: '1px solid #374151',
+              borderRadius: 4,
+              fontSize: 11,
+            }}
+            labelStyle={{ color: '#f9fafb' }}
+            itemStyle={{ color: '#d1d5db' }}
+          />
+          <Line
+            type="monotone"
+            dataKey={dataKey}
+            stroke={color}
+            strokeWidth={1.5}
+            dot={false}
+            activeDot={{ r: 3 }}
+          />
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+  )
+}
+
+function PollingIndicator({ polling, lastUpdated }: { polling: boolean; lastUpdated: number | null }) {
+  const [tick, setTick] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 5000)
+    return () => clearInterval(id)
+  }, [])
+
+  return (
+    <div className="flex items-center gap-2 text-xs text-gray-400 dark:text-gray-500">
+      {polling ? (
+        <span className="inline-block h-2 w-2 rounded-full bg-blue-500 animate-pulse" />
+      ) : (
+        <span className="inline-block h-2 w-2 rounded-full bg-gray-300 dark:bg-gray-600" />
+      )}
+      {lastUpdated !== null && (
+        <span>{formatLastUpdated(lastUpdated)}</span>
+      )}
+    </div>
+  )
+}
+
 export default function Dashboard() {
   const navigate = useNavigate()
   const [batches, setBatches] = useState<Batch[]>([])
   const [loading, setLoading] = useState(true)
+  const [polling, setPolling] = useState(false)
+  const [lastUpdated, setLastUpdated] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [smokeTest, setSmokeTest] = useState<SmokeTestState>({ status: 'idle' })
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   async function handleSmokeTest() {
     if (smokeTest.status === 'running') return
@@ -64,18 +144,38 @@ export default function Dashboard() {
     }
   }
 
-  useEffect(() => {
-    listBatches()
-      .then(setBatches)
-      .catch((e) => setError(e.message))
-      .finally(() => setLoading(false))
+  const fetchBatches = useCallback(async (isInitial = false) => {
+    if (!isInitial) setPolling(true)
+    try {
+      const data = await listBatches()
+      setBatches(data)
+      setLastUpdated(Date.now())
+    } catch (e) {
+      if (isInitial) setError((e as Error).message)
+    } finally {
+      if (isInitial) setLoading(false)
+      setPolling(false)
+    }
   }, [])
+
+  useEffect(() => {
+    fetchBatches(true)
+    pollingRef.current = setInterval(() => fetchBatches(false), POLL_INTERVAL_MS)
+    return () => {
+      if (pollingRef.current) clearInterval(pollingRef.current)
+    }
+  }, [fetchBatches])
 
   const active = batches.filter((b) => b.status === 'running' || b.status === 'pending')
   const completed = batches
     .filter((b) => b.status === 'completed')
     .sort((a, b) => new Date(b.completed_at ?? b.created_at).getTime() - new Date(a.completed_at ?? a.created_at).getTime())
     .slice(0, 10)
+
+  const costSparkData = completed.slice().reverse().map((b, i) => ({
+    label: `#${i + 1}`,
+    cost: b.total_cost_usd,
+  }))
 
   if (loading) {
     return <div className="flex items-center justify-center h-64 text-gray-400">Loading...</div>
@@ -147,9 +247,18 @@ export default function Dashboard() {
 
       {/* Active Batches */}
       <section className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
-        <h2 className="text-lg font-semibold mb-4">Active Batches</h2>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold">Active Batches</h2>
+          <PollingIndicator polling={polling} lastUpdated={lastUpdated} />
+        </div>
         {active.length === 0 ? (
-          <p className="text-sm text-gray-400 dark:text-gray-500">No active batches.</p>
+          <div className="flex flex-col items-center justify-center py-10 text-gray-400 dark:text-gray-500">
+            <svg className="w-10 h-10 mb-3 opacity-40" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <p className="text-sm font-medium">No active batches.</p>
+            <p className="text-xs mt-1">Start a new batch to see it here.</p>
+          </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -200,7 +309,13 @@ export default function Dashboard() {
       <section className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
         <h2 className="text-lg font-semibold mb-4">Recent Batches</h2>
         {completed.length === 0 ? (
-          <p className="text-sm text-gray-400 dark:text-gray-500">No completed batches yet.</p>
+          <div className="flex flex-col items-center justify-center py-10 text-gray-400 dark:text-gray-500">
+            <svg className="w-10 h-10 mb-3 opacity-40" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+            </svg>
+            <p className="text-sm font-medium">No completed batches yet.</p>
+            <p className="text-xs mt-1">Completed batches will appear here.</p>
+          </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -238,6 +353,21 @@ export default function Dashboard() {
           </div>
         )}
       </section>
+
+      {/* Sparklines */}
+      {costSparkData.length >= 2 && (
+        <section>
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-3">Trends</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <SparklineChart
+              data={costSparkData}
+              dataKey="cost"
+              color="#6366f1"
+              label="Cost per batch (USD)"
+            />
+          </div>
+        </section>
+      )}
 
       {/* System Health */}
       <section className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">

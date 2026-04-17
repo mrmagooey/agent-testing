@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 import time
 from datetime import datetime
 from pathlib import Path
@@ -107,7 +108,11 @@ class ExperimentWorker:
         )
         total_input = sum(t.input_tokens for t in model.token_log)
         total_output = sum(t.output_tokens for t in model.token_log)
-        estimated_cost = CostCalculator.from_config().compute(
+        config_dir = os.environ.get("CONFIG_DIR")
+        cost_calculator = CostCalculator.from_config(
+            Path(config_dir) if config_dir else None
+        )
+        estimated_cost = cost_calculator.compute(
             run.model_id, total_input, total_output
         )
 

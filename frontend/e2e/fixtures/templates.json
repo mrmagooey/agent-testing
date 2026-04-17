@@ -1,0 +1,20 @@
+[
+  {
+    "template_id": "sqli-string-concat",
+    "language": "python",
+    "cwe": "CWE-89",
+    "severity": "critical",
+    "description": "Inserts SQL injection via string concatenation: {{user_input}} in query",
+    "vuln_class": "sqli",
+    "anchor_pattern": "def.*query.*:"
+  },
+  {
+    "template_id": "xss-reflected",
+    "language": "javascript",
+    "cwe": "CWE-79",
+    "severity": "high",
+    "description": "Reflected XSS via innerHTML assignment with {{user_var}}",
+    "vuln_class": "xss",
+    "anchor_pattern": "innerHTML"
+  }
+]

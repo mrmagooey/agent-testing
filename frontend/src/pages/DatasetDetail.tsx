@@ -8,9 +8,10 @@ import {
   previewInjection,
   injectVuln,
   type Label,
-  type FileTree,
+  type FileTree as FileTreeData,
   type InjectionTemplate,
 } from '../api/client'
+import Breadcrumbs from '../components/Breadcrumbs'
 import FileTree from '../components/FileTree'
 import CodeViewer from '../components/CodeViewer'
 import DiffViewer from '../components/DiffViewer'
@@ -19,7 +20,7 @@ type InjectStep = 1 | 2 | 3 | 4 | 5
 
 export default function DatasetDetail() {
   const { name: datasetName } = useParams<{ name: string }>()
-  const [tree, setTree] = useState<FileTree>({})
+  const [tree, setTree] = useState<FileTreeData>({})
   const [labels, setLabels] = useState<Label[]>([])
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
   const [fileContent, setFileContent] = useState<{ content: string; language: string } | null>(null)
@@ -72,7 +73,6 @@ export default function DatasetDetail() {
 
   const handleTemplateSelect = (t: InjectionTemplate) => {
     setSelectedTemplate(t)
-    // Extract placeholders from template description
     const matches = t.description.match(/\{\{(\w+)\}\}/g) ?? []
     const placeholders = matches.map((m) => m.slice(2, -2))
     const initial = Object.fromEntries(placeholders.map((p) => [p, '']))
@@ -110,6 +110,21 @@ export default function DatasetDetail() {
     }
   }
 
+  const hasUnsavedSubstitutions = Object.values(substitutions).some((v) => v.trim() !== '')
+
+  const handleCloseModal = () => {
+    if (hasUnsavedSubstitutions && injectStep !== null && injectStep < 5) {
+      const confirmed = window.confirm('Discard unsaved changes?')
+      if (!confirmed) return
+    }
+    setInjectStep(null)
+    setPreview(null)
+    setInjectSuccess(null)
+    setSubstitutions({})
+    setSelectedTemplate(null)
+    setInjectFile(null)
+  }
+
   if (loading) {
     return <div className="flex items-center justify-center h-64 text-gray-400">Loading dataset...</div>
   }
@@ -124,6 +139,8 @@ export default function DatasetDetail() {
 
   return (
     <div className="space-y-6">
+      <Breadcrumbs items={[{ label: 'Datasets', to: '/datasets' }, { label: datasetName ?? '' }]} />
+
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold font-mono text-gray-900 dark:text-gray-100">{datasetName}</h1>
         <button
@@ -223,7 +240,7 @@ export default function DatasetDetail() {
                 Inject Vulnerability — Step {injectStep}/5
               </h2>
               <button
-                onClick={() => { setInjectStep(null); setPreview(null); setInjectSuccess(null) }}
+                onClick={handleCloseModal}
                 className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-xl"
               >
                 ×

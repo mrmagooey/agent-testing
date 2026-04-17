@@ -1,0 +1,38 @@
+{{- if .Values.networkPolicy.enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "sec-review.fullname" . }}-worker-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sec-review.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: sec-review-worker
+  policyTypes:
+    - Egress
+  egress:
+    # DNS
+    - to: []
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # LLM providers over HTTPS
+    - to:
+        {{- range .Values.networkPolicy.worker.llmEgressCidrs }}
+        - ipBlock:
+            cidr: {{ . }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 443
+    # NFS within the namespace (shared storage)
+    - to:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.nfsPort }}
+{{- end }}

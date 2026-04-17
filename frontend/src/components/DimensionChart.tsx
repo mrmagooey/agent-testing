@@ -14,6 +14,7 @@ export interface DimensionChartProps {
   yKey: string
   title: string
   color?: string
+  isRatio?: boolean
 }
 
 export default function DimensionChart({
@@ -22,7 +23,15 @@ export default function DimensionChart({
   yKey,
   title,
   color = '#6366f1',
+  isRatio,
 }: DimensionChartProps) {
+  const values = data.map((d) => d[yKey] as number).filter((v) => typeof v === 'number' && !isNaN(v))
+  const maxVal = values.length > 0 ? Math.max(...values) : 1
+
+  const domainMax = isRatio === false
+    ? Math.ceil(maxVal * 1.1 * 10) / 10
+    : Math.min(1, Math.ceil(maxVal * 1.1 * 10) / 10) || 1
+
   return (
     <div className="bg-white dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-700">
       <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-4">{title}</h3>
@@ -39,7 +48,7 @@ export default function DimensionChart({
             tick={{ fontSize: 11, fill: '#9ca3af' }}
             axisLine={false}
             tickLine={false}
-            domain={[0, 1]}
+            domain={[0, domainMax]}
             tickFormatter={(v) => (typeof v === 'number' ? v.toFixed(1) : v)}
           />
           <Tooltip

@@ -22,19 +22,19 @@ function NavBar() {
     <nav className="bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 sticky top-0 z-50">
       <div className="max-w-screen-xl mx-auto px-4 flex items-center justify-between h-14">
         <div className="flex items-center gap-1">
-          <NavLink to="/" end className={navLinkClass}>
+          <NavLink to="/" end className={navLinkClass} aria-current="page">
             Dashboard
           </NavLink>
-          <NavLink to="/batches/new" className={navLinkClass}>
+          <NavLink to="/batches/new" className={navLinkClass} aria-current="page">
             New Batch
           </NavLink>
-          <NavLink to="/datasets" end className={navLinkClass}>
+          <NavLink to="/datasets" end className={navLinkClass} aria-current="page">
             Datasets
           </NavLink>
-          <NavLink to="/datasets/discover" className={navLinkClass}>
+          <NavLink to="/datasets/discover" className={navLinkClass} aria-current="page">
             CVE Discovery
           </NavLink>
-          <NavLink to="/feedback" className={navLinkClass}>
+          <NavLink to="/feedback" className={navLinkClass} aria-current="page">
             Feedback
           </NavLink>
         </div>

@@ -1,0 +1,160 @@
+# -----------------------------------------------------------------------------
+# Default values for sec-review.
+# Defaults are production-oriented — see values-minikube.yaml for local dev.
+# -----------------------------------------------------------------------------
+
+nameOverride: ""
+fullnameOverride: ""
+
+# -----------------------------------------------------------------------------
+# Images
+#
+# All runtime images. The coordinator uses image.worker.* to set the
+# WORKER_IMAGE env var, so changing the worker image here automatically
+# updates what K8s Job pods pull.
+# -----------------------------------------------------------------------------
+image:
+  coordinator:
+    repository: sec-review-coordinator
+    tag: latest
+    pullPolicy: IfNotPresent
+  worker:
+    repository: sec-review-worker
+    tag: latest
+    pullPolicy: IfNotPresent
+  datasetBuilder:
+    repository: sec-review-dataset-builder
+    tag: latest
+    pullPolicy: IfNotPresent
+  # imagePullSecrets: applied to coordinator pod; worker pods inherit via the
+  # coordinator's ServiceAccount.
+  pullSecrets: []
+  # - name: ghcr-pull-secret
+
+# -----------------------------------------------------------------------------
+# Coordinator deployment
+# -----------------------------------------------------------------------------
+coordinator:
+  replicas: 1
+
+  service:
+    type: ClusterIP
+    port: 8080
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+  # Extra environment variables merged into the coordinator container.
+  extraEnv: []
+  # - name: LOG_LEVEL
+  #   value: INFO
+
+  # STORAGE_ROOT controls where the coordinator reads/writes run artifacts.
+  # Must point at the mount path of the shared PVC.
+  storageRoot: /data
+
+  # Name of the ConfigMap containing config/*.yaml; rendered into /app/config
+  configMapName: experiment-config
+
+# -----------------------------------------------------------------------------
+# Shared storage
+#
+# Minikube default storage class (`standard`) supports only ReadWriteOnce.
+# Production clusters with EFS/NFS should use ReadWriteMany so multiple
+# worker pods can write concurrently.
+# -----------------------------------------------------------------------------
+storage:
+  storageClassName: efs-sc
+  accessMode: ReadWriteMany
+  size: 50Gi
+  # Set to an existing PVC name to skip PVC creation:
+  existingClaim: ""
+
+# -----------------------------------------------------------------------------
+# LLM API key secret
+#
+# PRODUCTION: set secrets.create=false and manage llm-api-keys via
+# external-secrets, sealed-secrets, or an AWS Secrets Manager CSI driver.
+# Any key left blank is omitted from the rendered Secret.
+# -----------------------------------------------------------------------------
+secrets:
+  create: true
+  name: llm-api-keys
+  apiKeys:
+    openai: ""
+    anthropic: ""
+    gemini: ""
+    mistral: ""
+    cohere: ""
+    openrouter: ""
+
+# -----------------------------------------------------------------------------
+# Network policies
+#
+# Require a CNI with NetworkPolicy support (Calico, Cilium, …). Minikube
+# default CNI does not enforce them — disable in values-minikube.yaml.
+# -----------------------------------------------------------------------------
+networkPolicy:
+  enabled: true
+  worker:
+    # CIDR(s) the worker is allowed to reach on :443 (LLM providers).
+    # Narrow to specific provider ranges for tighter egress control.
+    llmEgressCidrs:
+      - 0.0.0.0/0
+  datasetBuilder:
+    # CIDR(s) the dataset-builder can reach for cloning repos.
+    githubCidrs:
+      - 140.82.112.0/20
+      - 192.30.252.0/22
+  # NFS port used for intra-namespace shared-storage traffic.
+  nfsPort: 2049
+
+# -----------------------------------------------------------------------------
+# Prometheus ServiceMonitor
+# Requires the Prometheus Operator CRDs to be installed in the cluster.
+# -----------------------------------------------------------------------------
+serviceMonitor:
+  enabled: true
+  interval: 15s
+  path: /metrics
+
+# -----------------------------------------------------------------------------
+# Gatekeeper ConstraintTemplate + Constraint
+# Requires Gatekeeper to be installed in the cluster.
+#
+# If allowedImages is empty, the list is auto-populated from image.worker and
+# image.datasetBuilder. Override with an explicit list in production to pin
+# exact digests.
+# -----------------------------------------------------------------------------
+gatekeeper:
+  enabled: true
+  allowedImages: []
+  # - ghcr.io/myorg/sec-review/worker:v1.0.0
+  # - ghcr.io/myorg/sec-review/dataset-builder:v1.0.0
+
+# -----------------------------------------------------------------------------
+# Fluentd log shipper config
+# The ConfigMap targets the `logging` namespace (external to this release)
+# and assumes Loki is reachable at lokiUrl.
+# -----------------------------------------------------------------------------
+fluentd:
+  enabled: true
+  namespace: logging
+  configMapName: fluentd-worker-config
+  lokiUrl: http://loki.monitoring.svc.cluster.local:3100
+  flushIntervalSeconds: 5
+
+# -----------------------------------------------------------------------------
+# ServiceAccount / RBAC
+# -----------------------------------------------------------------------------
+serviceAccount:
+  create: true
+  name: coordinator-sa
+
+rbac:
+  create: true

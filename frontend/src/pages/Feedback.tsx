@@ -153,7 +153,18 @@ export default function Feedback() {
                         const isRegression = (precision_delta ?? 0) < -0.05 || (recall_delta ?? 0) < -0.05
                         return (
                           <tr key={i} className={isRegression ? 'bg-red-50 dark:bg-red-950/30' : ''}>
-                            <td className="px-3 py-2 font-mono text-xs">{String(row.experiment_id ?? '—')}</td>
+                            <td className="px-3 py-2 font-mono text-xs">
+                              <span className="flex items-center gap-1.5">
+                                {isRegression && (
+                                  <span title="Regression" className="text-red-600 dark:text-red-400 shrink-0">
+                                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.962-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                                    </svg>
+                                  </span>
+                                )}
+                                {String(row.experiment_id ?? '—')}
+                              </span>
+                            </td>
                             <td className="px-3 py-2">
                               {precision_delta !== undefined ? <DeltaCell value={precision_delta} /> : '—'}
                             </td>
@@ -179,14 +190,6 @@ export default function Feedback() {
                 <FPPatternsTable patterns={comparison.fp_patterns} />
               </div>
             )}
-
-            {/* Stability */}
-            <div>
-              <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Stability Analysis</h3>
-              <p className="text-sm text-gray-400 dark:text-gray-500">
-                Stability analysis details coming soon.
-              </p>
-            </div>
           </div>
         )}
       </section>
@@ -246,7 +249,14 @@ function FPPatternsTable({ patterns }: { patterns: FPPattern[] }) {
             <tr key={i} className="hover:bg-gray-50 dark:hover:bg-gray-800/50">
               <td className="px-3 py-2 font-mono text-xs">{p.model}</td>
               <td className="px-3 py-2 font-mono text-xs">{p.vuln_class}</td>
-              <td className="px-3 py-2 text-gray-600 dark:text-gray-400 max-w-xs">{p.pattern}</td>
+              <td className="px-3 py-2 text-gray-600 dark:text-gray-400 max-w-xs">
+                <span className="flex items-center gap-1.5">
+                  <svg className="w-3.5 h-3.5 shrink-0 text-orange-500 dark:text-orange-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
+                  </svg>
+                  {p.pattern}
+                </span>
+              </td>
               <td className="px-3 py-2 text-center font-medium">{p.count}</td>
               <td className="px-3 py-2 text-gray-500 dark:text-gray-400 text-xs">{p.suggested_action}</td>
             </tr>

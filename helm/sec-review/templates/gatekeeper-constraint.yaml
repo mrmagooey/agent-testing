@@ -1,7 +1,10 @@
+{{- if .Values.gatekeeper.enabled -}}
 apiVersion: templates.gatekeeper.sh/v1
 kind: ConstraintTemplate
 metadata:
   name: secreviewjobimage
+  labels:
+    {{- include "sec-review.labels" . | nindent 4 }}
 spec:
   crd:
     spec:
@@ -40,6 +43,8 @@ apiVersion: constraints.gatekeeper.sh/v1beta1
 kind: SecReviewJobImage
 metadata:
   name: restrict-sec-review-job-images
+  labels:
+    {{- include "sec-review.labels" . | nindent 4 }}
 spec:
   enforcementAction: deny
   match:
@@ -47,8 +52,8 @@ spec:
       - apiGroups: ["batch"]
         kinds: ["Job"]
     namespaces:
-      - sec-review
+      - {{ .Release.Namespace }}
   parameters:
     allowedImages:
-      - "ghcr.io/myorg/sec-review/worker:v1.0.0"
-      - "ghcr.io/myorg/sec-review/dataset-builder:v1.0.0"
+      {{- include "sec-review.gatekeeperAllowedImages" . | nindent 6 }}
+{{- end }}

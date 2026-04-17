@@ -35,6 +35,7 @@ class GroundTruthLabel(BaseModel):
     created_at: datetime
     notes: str | None = None
     introduced_in_diff: bool | None = None
+    patch_lines_changed: int | None = None
 
 
 # --- Evaluation ---
@@ -64,6 +65,21 @@ class MatchedFinding(BaseModel):
     evidence_quality: EvidenceQuality = EvidenceQuality.NOT_ASSESSED
 
 
+class StratifiedMetric(BaseModel):
+    """Label-attributable metrics for a single stratum (e.g. patch-size bucket).
+
+    Precision/FPR are not reported per-stratum: false positives have no matched
+    label and therefore cannot be attributed to a bucket. Overall precision/FPR
+    remain on EvaluationResult.
+    """
+
+    bucket: str
+    total_labels: int
+    true_positives: int
+    false_negatives: int
+    recall: float
+
+
 class EvaluationResult(BaseModel):
     """Metrics and details from evaluating findings against ground truth."""
 
@@ -82,6 +98,7 @@ class EvaluationResult(BaseModel):
     matched_findings: list[MatchedFinding]
     unmatched_labels: list[GroundTruthLabel]
     evidence_quality_counts: dict[str, int]
+    patch_size_strata: list[StratifiedMetric] = []
 
 
 # --- Verification ---

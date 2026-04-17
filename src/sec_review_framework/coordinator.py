@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import os
 import shutil
 import threading
 import zipfile
@@ -92,6 +93,10 @@ class BatchCoordinator:
         cost_calculator: CostCalculator,
         default_cap: int = 4,
         worker_resources=None,
+        pvc_name: str = "sec-review-data",
+        llm_secret_name: str = "llm-api-keys",
+        config_map_name: str = "experiment-config",
+        worker_image_pull_policy: str = "IfNotPresent",
     ):
         self.k8s_client = k8s_client
         self.storage_root = storage_root
@@ -103,6 +108,10 @@ class BatchCoordinator:
         self.cost_calculator = cost_calculator
         self.default_cap = default_cap
         self.worker_resources = worker_resources
+        self.pvc_name = pvc_name
+        self.llm_secret_name = llm_secret_name
+        self.config_map_name = config_map_name
+        self.worker_image_pull_policy = worker_image_pull_policy
         self._cost_trackers: dict[str, BatchCostTracker] = {}
         self._feedback_tracker = FeedbackTracker()
 
@@ -184,21 +193,47 @@ class BatchCoordinator:
             if pending:
                 await asyncio.sleep(10)
 
+    @staticmethod
+    def _k8s_safe(value: str, max_len: int = 63) -> str:
+        """Coerce an arbitrary string into an RFC 1123 subdomain / label value.
+
+        Replaces any character outside [a-z0-9-.] with '-', lowercases, strips
+        leading/trailing non-alphanumerics, and truncates to max_len.
+        """
+        import re
+        sanitized = re.sub(r"[^a-z0-9.-]", "-", value.lower())
+        sanitized = re.sub(r"^[^a-z0-9]+|[^a-z0-9]+$", "", sanitized)
+        return sanitized[:max_len] or "x"
+
     def _create_k8s_job(self, batch_id: str, run) -> None:
         if not K8S_AVAILABLE or self.k8s_client is None:
             logger.warning(f"K8s not available — skipping job creation for run {run.id}")
             return
 
+        # K8s Job name is at most 63 chars and must be an RFC 1123 subdomain.
+        # Append a short hash of the full run.id so names remain unique even
+        # after aggressive truncation of structurally similar IDs.
+        import hashlib
+        run_hash = hashlib.sha1(run.id.encode()).hexdigest()[:8]
+        job_name = self._k8s_safe(f"exp-{run.id}-{run_hash}", max_len=52)
+        # Guarantee the hash stays in the name even if slugification dropped it.
+        if run_hash not in job_name:
+            job_name = f"{job_name[: 63 - len(run_hash) - 1]}-{run_hash}"
+
         job = kubernetes.client.V1Job(
             metadata=kubernetes.client.V1ObjectMeta(
-                name=f"exp-{run.id[:50]}",
+                name=job_name,
                 namespace=self.namespace,
                 labels={
                     "app": "sec-review-worker",
-                    "batch": batch_id,
-                    "model": run.model_id,
-                    "strategy": run.strategy.value,
-                    "run-id": run.id,
+                    "batch": self._k8s_safe(batch_id),
+                    "model": self._k8s_safe(run.model_id),
+                    "strategy": self._k8s_safe(run.strategy.value),
+                    "run-hash": run_hash,
+                },
+                annotations={
+                    "sec-review.io/run-id": run.id,
+                    "sec-review.io/batch-id": batch_id,
                 },
             ),
             spec=kubernetes.client.V1JobSpec(
@@ -211,16 +246,22 @@ class BatchCoordinator:
                             kubernetes.client.V1Container(
                                 name="worker",
                                 image=self.worker_image,
+                                image_pull_policy=self.worker_image_pull_policy,
                                 command=[
                                     "python", "-m", "sec_review_framework.worker",
                                     "--run-config", f"/data/config/runs/{run.id}.json",
                                     "--output-dir", f"/data/outputs/{batch_id}/{run.id}",
                                     "--datasets-dir", "/data/datasets",
                                 ],
+                                env=[
+                                    kubernetes.client.V1EnvVar(
+                                        name="CONFIG_DIR", value="/app/config"
+                                    )
+                                ],
                                 env_from=[
                                     kubernetes.client.V1EnvFromSource(
                                         secret_ref=kubernetes.client.V1SecretEnvSource(
-                                            name="llm-api-keys"
+                                            name=self.llm_secret_name
                                         )
                                     )
                                 ],
@@ -228,7 +269,11 @@ class BatchCoordinator:
                                     kubernetes.client.V1VolumeMount(
                                         name="shared-data",
                                         mount_path="/data",
-                                    )
+                                    ),
+                                    kubernetes.client.V1VolumeMount(
+                                        name="config",
+                                        mount_path="/app/config",
+                                    ),
                                 ],
                             )
                         ],
@@ -236,9 +281,15 @@ class BatchCoordinator:
                             kubernetes.client.V1Volume(
                                 name="shared-data",
                                 persistent_volume_claim=kubernetes.client.V1PersistentVolumeClaimVolumeSource(
-                                    claim_name="sec-review-data"
+                                    claim_name=self.pvc_name
                                 ),
-                            )
+                            ),
+                            kubernetes.client.V1Volume(
+                                name="config",
+                                config_map=kubernetes.client.V1ConfigMapVolumeSource(
+                                    name=self.config_map_name
+                                ),
+                            ),
                         ],
                     )
                 ),
@@ -764,8 +815,67 @@ app = FastAPI(title="Security Review Framework", version="1.0.0")
 coordinator: BatchCoordinator = None  # type: ignore[assignment]  # initialized at startup
 
 
+def build_coordinator_from_env() -> BatchCoordinator:
+    """Build a BatchCoordinator from env vars + files mounted at CONFIG_DIR.
+
+    Env vars (set by the Helm chart):
+        STORAGE_ROOT  — shared storage mount path (default: /data)
+        WORKER_IMAGE  — image used for worker K8s Jobs
+        NAMESPACE     — namespace to create Jobs in
+        CONFIG_DIR    — directory containing pricing.yaml + concurrency.yaml
+                        (default: /app/config)
+    """
+    from sec_review_framework.config import ConcurrencyConfig
+    from sec_review_framework.reporting.markdown import MarkdownReportGenerator
+
+    storage_root = Path(os.environ.get("STORAGE_ROOT", "/data"))
+    worker_image = os.environ.get("WORKER_IMAGE", "sec-review-worker:latest")
+    namespace = os.environ.get("NAMESPACE", "sec-review")
+    config_dir = Path(os.environ.get("CONFIG_DIR", "/app/config"))
+
+    k8s_client = None
+    if K8S_AVAILABLE:
+        try:
+            kubernetes.config.load_incluster_config()
+            k8s_client = kubernetes.client.BatchV1Api()
+        except Exception as exc:
+            logger.warning("Not running in-cluster, K8s job creation disabled: %s", exc)
+
+    concurrency_path = config_dir / "concurrency.yaml"
+    if concurrency_path.exists():
+        cc = ConcurrencyConfig.from_yaml(concurrency_path)
+        caps, default_cap = cc.per_model, cc.default_cap
+    else:
+        caps, default_cap = {}, 4
+
+    storage_root.mkdir(parents=True, exist_ok=True)
+    db = Database(storage_root / "coordinator.db")
+
+    return BatchCoordinator(
+        k8s_client=k8s_client,
+        storage_root=storage_root,
+        concurrency_caps=caps,
+        worker_image=worker_image,
+        namespace=namespace,
+        db=db,
+        reporter=MarkdownReportGenerator(),
+        cost_calculator=CostCalculator.from_config(config_dir),
+        default_cap=default_cap,
+        pvc_name=os.environ.get("SHARED_PVC_NAME", "sec-review-data"),
+        llm_secret_name=os.environ.get("LLM_SECRET_NAME", "llm-api-keys"),
+        config_map_name=os.environ.get("CONFIG_MAP_NAME", "experiment-config"),
+        worker_image_pull_policy=os.environ.get(
+            "WORKER_IMAGE_PULL_POLICY", "IfNotPresent"
+        ),
+    )
+
+
 @app.on_event("startup")
 async def startup() -> None:
+    global coordinator
+    if coordinator is None:
+        coordinator = build_coordinator_from_env()
+        await coordinator.db.init()
     await coordinator.reconcile()
     asyncio.create_task(
         retention_cleanup_loop(coordinator.storage_root, retention_days=30)

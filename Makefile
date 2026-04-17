@@ -1,15 +1,26 @@
 .PHONY: minikube-start minikube-stop minikube-delete minikube-dashboard \
         docker-build-worker docker-build-coordinator docker-build-all \
-        k8s-apply k8s-delete \
+        helm-lint helm-template helm-install-minikube helm-upgrade-minikube helm-uninstall \
         dev-coordinator dev-frontend \
         test lint format sync
+
+# Chart release name + release namespace — override on the command line:
+#   make helm-install-minikube RELEASE=my-release NAMESPACE=my-ns
+RELEASE   ?= sec-review
+NAMESPACE ?= sec-review
+CHART_DIR := ./helm/sec-review
+
+# Minikube VM sizing — override on the command line if needed:
+#   make minikube-start MINIKUBE_MEMORY=8192
+MINIKUBE_CPUS   ?= 4
+MINIKUBE_MEMORY ?= 6144
 
 # ---------------------------------------------------------------------------
 # Minikube
 # ---------------------------------------------------------------------------
 
 minikube-start:
-	minikube start -p agent-testing --cpus=4 --memory=8192
+	minikube start -p agent-testing --cpus=$(MINIKUBE_CPUS) --memory=$(MINIKUBE_MEMORY)
 
 minikube-stop:
 	minikube stop -p agent-testing
@@ -33,14 +44,25 @@ docker-build-coordinator:
 docker-build-all: docker-build-worker docker-build-coordinator
 
 # ---------------------------------------------------------------------------
-# Kubernetes
+# Helm chart
 # ---------------------------------------------------------------------------
 
-k8s-apply:
-	kubectl apply -f k8s/ --context agent-testing
+helm-lint:
+	helm lint $(CHART_DIR)
 
-k8s-delete:
-	kubectl delete -f k8s/ --context agent-testing
+helm-template:
+	helm template $(RELEASE) $(CHART_DIR) --namespace $(NAMESPACE) --values $(CHART_DIR)/values-minikube.yaml
+
+helm-install-minikube:
+	helm upgrade --install $(RELEASE) $(CHART_DIR) \
+		--namespace $(NAMESPACE) --create-namespace \
+		--values $(CHART_DIR)/values-minikube.yaml \
+		--kube-context agent-testing
+
+helm-upgrade-minikube: helm-install-minikube
+
+helm-uninstall:
+	helm uninstall $(RELEASE) --namespace $(NAMESPACE) --kube-context agent-testing
 
 # ---------------------------------------------------------------------------
 # Local development
@@ -57,7 +79,7 @@ dev-frontend:
 # ---------------------------------------------------------------------------
 
 test:
-	python -m pytest tests/ -x
+	uv run pytest tests/ -x
 
 lint:
 	ruff check src/ tests/

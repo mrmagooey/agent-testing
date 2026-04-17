@@ -1,0 +1,35 @@
+{{- if .Values.rbac.create -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "sec-review.fullname" . }}-job-manager
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sec-review.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "sec-review.fullname" . }}-job-manager
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sec-review.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "sec-review.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: {{ include "sec-review.fullname" . }}-job-manager
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}

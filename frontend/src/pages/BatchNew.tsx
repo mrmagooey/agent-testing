@@ -17,11 +17,13 @@ function CheckboxGroup({
   options,
   selected,
   onChange,
+  error,
 }: {
   label: string
   options: string[]
   selected: string[]
   onChange: (vals: string[]) => void
+  error?: string
 }) {
   const toggle = (val: string) => {
     onChange(
@@ -30,7 +32,16 @@ function CheckboxGroup({
   }
   return (
     <div>
-      <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">{label}</p>
+      <div className="flex items-center gap-2 mb-2">
+        {label && (
+          <p className="text-sm font-medium text-gray-700 dark:text-gray-300">{label}</p>
+        )}
+        {selected.length > 0 && (
+          <span className="px-1.5 py-0.5 rounded-full text-xs font-semibold bg-indigo-100 dark:bg-indigo-900 text-indigo-700 dark:text-indigo-300">
+            {selected.length} selected
+          </span>
+        )}
+      </div>
       <div className="flex flex-wrap gap-2">
         {options.map((opt) => (
           <label key={opt} className="flex items-center gap-1.5 cursor-pointer text-sm">
@@ -44,6 +55,9 @@ function CheckboxGroup({
           </label>
         ))}
       </div>
+      {error && (
+        <p className="mt-1.5 text-xs text-red-600 dark:text-red-400">{error}</p>
+      )}
     </div>
   )
 }
@@ -56,9 +70,9 @@ export default function BatchNew() {
   const [profiles, setProfiles] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
+  const [submitAttempted, setSubmitAttempted] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // Form state
   const [selectedDataset, setSelectedDataset] = useState('')
   const [selectedModels, setSelectedModels] = useState<string[]>([])
   const [selectedStrategies, setSelectedStrategies] = useState<string[]>([])
@@ -93,11 +107,17 @@ export default function BatchNew() {
       .finally(() => setLoading(false))
   }, [])
 
+  const datasetError = submitAttempted && !selectedDataset ? 'Please select a dataset' : undefined
+  const modelsError = submitAttempted && selectedModels.length === 0 ? 'Select at least one model' : undefined
+  const strategiesError = submitAttempted && selectedStrategies.length === 0 ? 'Select at least one strategy' : undefined
+
+  const isValid = !!selectedDataset && selectedModels.length > 0 && selectedStrategies.length > 0
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!selectedDataset) { setError('Please select a dataset'); return }
-    if (selectedModels.length === 0) { setError('Select at least one model'); return }
-    if (selectedStrategies.length === 0) { setError('Select at least one strategy'); return }
+    setSubmitAttempted(true)
+
+    if (!isValid) return
 
     setSubmitting(true)
     setError(null)
@@ -138,13 +158,16 @@ export default function BatchNew() {
       <form onSubmit={handleSubmit}>
         <div className="grid lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 space-y-6">
-            {/* Dataset */}
             <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
               <h2 className="font-semibold mb-3">Dataset</h2>
               <select
                 value={selectedDataset}
                 onChange={(e) => setSelectedDataset(e.target.value)}
-                className="w-full text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2"
+                className={`w-full text-sm rounded-lg border px-3 py-2 bg-white dark:bg-gray-900 ${
+                  datasetError
+                    ? 'border-red-400 dark:border-red-600'
+                    : 'border-gray-200 dark:border-gray-700'
+                }`}
               >
                 <option value="">Select a dataset…</option>
                 {datasets.map((d) => (
@@ -153,31 +176,37 @@ export default function BatchNew() {
                   </option>
                 ))}
               </select>
+              {datasetError && (
+                <p className="mt-1.5 text-xs text-red-600 dark:text-red-400">{datasetError}</p>
+              )}
             </div>
 
-            {/* Models */}
-            <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
+            <div className={`bg-white dark:bg-gray-800 rounded-xl border p-5 ${
+              modelsError ? 'border-red-400 dark:border-red-600' : 'border-gray-200 dark:border-gray-700'
+            }`}>
               <h2 className="font-semibold mb-3">Models</h2>
               <CheckboxGroup
                 label=""
                 options={models}
                 selected={selectedModels}
                 onChange={setSelectedModels}
+                error={modelsError}
               />
             </div>
 
-            {/* Strategies */}
-            <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
+            <div className={`bg-white dark:bg-gray-800 rounded-xl border p-5 ${
+              strategiesError ? 'border-red-400 dark:border-red-600' : 'border-gray-200 dark:border-gray-700'
+            }`}>
               <h2 className="font-semibold mb-3">Strategies</h2>
               <CheckboxGroup
                 label=""
                 options={strategies}
                 selected={selectedStrategies}
                 onChange={setSelectedStrategies}
+                error={strategiesError}
               />
             </div>
 
-            {/* Profile */}
             <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
               <h2 className="font-semibold mb-3">Profile</h2>
               <div className="flex flex-wrap gap-3">
@@ -196,7 +225,6 @@ export default function BatchNew() {
               </div>
             </div>
 
-            {/* Dimensions */}
             <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
               <h2 className="font-semibold mb-4">Dimensions</h2>
               <div className="space-y-4">
@@ -228,7 +256,6 @@ export default function BatchNew() {
               </div>
             </div>
 
-            {/* Spend cap */}
             <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
               <h2 className="font-semibold mb-3">Spend Cap (USD)</h2>
               <input
@@ -247,16 +274,20 @@ export default function BatchNew() {
             </div>
           </div>
 
-          {/* Sidebar */}
           <div className="space-y-4">
             <CostEstimate estimate={estimate} loading={estimateLoading} />
             <button
               type="submit"
-              disabled={submitting}
+              disabled={submitting || (submitAttempted && !isValid)}
               className="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold transition-colors disabled:opacity-50"
             >
               {submitting ? 'Submitting…' : 'Submit Batch'}
             </button>
+            {submitAttempted && !isValid && (
+              <p className="text-xs text-red-600 dark:text-red-400 text-center">
+                Fill in all required fields above
+              </p>
+            )}
           </div>
         </div>
       </form>

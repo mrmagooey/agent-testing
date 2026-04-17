@@ -1,0 +1,38 @@
+[
+  {
+    "label_id": "label-001",
+    "dataset": "cve-2024-python",
+    "file_path": "src/auth/login.py",
+    "line_start": 42,
+    "line_end": 47,
+    "vuln_class": "sqli",
+    "cwe": "CWE-89",
+    "severity": "critical",
+    "description": "SQL injection via unsanitized user input in login query",
+    "source": "cve"
+  },
+  {
+    "label_id": "label-002",
+    "dataset": "cve-2024-python",
+    "file_path": "src/api/users.py",
+    "line_start": 103,
+    "line_end": 108,
+    "vuln_class": "ssrf",
+    "cwe": "CWE-918",
+    "severity": "high",
+    "description": "SSRF via user-controlled URL in image fetch endpoint",
+    "source": "cve"
+  },
+  {
+    "label_id": "label-003",
+    "dataset": "cve-2024-python",
+    "file_path": "src/files/download.py",
+    "line_start": 15,
+    "line_end": 20,
+    "vuln_class": "path_traversal",
+    "cwe": "CWE-22",
+    "severity": "high",
+    "description": "Path traversal in file download handler",
+    "source": "cve"
+  }
+]

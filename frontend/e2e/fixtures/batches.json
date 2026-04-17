@@ -1,0 +1,44 @@
+[
+  {
+    "batch_id": "aaaaaaaa-0001-0001-0001-000000000001",
+    "status": "completed",
+    "dataset": "cve-2024-python",
+    "created_at": "2026-04-17T08:00:00Z",
+    "completed_at": "2026-04-17T09:30:00Z",
+    "total_runs": 40,
+    "completed_runs": 40,
+    "running_runs": 0,
+    "pending_runs": 0,
+    "failed_runs": 0,
+    "total_cost_usd": 12.45,
+    "spend_cap_usd": 50.00
+  },
+  {
+    "batch_id": "bbbbbbbb-0002-0002-0002-000000000002",
+    "status": "running",
+    "dataset": "cve-2024-js",
+    "created_at": "2026-04-17T10:00:00Z",
+    "completed_at": null,
+    "total_runs": 40,
+    "completed_runs": 15,
+    "running_runs": 5,
+    "pending_runs": 20,
+    "failed_runs": 0,
+    "total_cost_usd": 4.67,
+    "spend_cap_usd": 50.00
+  },
+  {
+    "batch_id": "cccccccc-0003-0003-0003-000000000003",
+    "status": "completed",
+    "dataset": "cve-2023-java",
+    "created_at": "2026-04-16T06:00:00Z",
+    "completed_at": "2026-04-16T08:45:00Z",
+    "total_runs": 40,
+    "completed_runs": 38,
+    "running_runs": 0,
+    "pending_runs": 0,
+    "failed_runs": 2,
+    "total_cost_usd": 11.20,
+    "spend_cap_usd": null
+  }
+]

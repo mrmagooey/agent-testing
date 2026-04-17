@@ -8,12 +8,12 @@ vi.mock('../../api/client', () => ({
   getBatch: vi.fn(),
 }))
 
-import { getBatch } from '../../api/client'
+import { getBatch, type Batch } from '../../api/client'
 const mockGetBatch = vi.mocked(getBatch)
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function makeBatch(overrides: Record<string, unknown> = {}) {
+function makeBatch(overrides: Partial<Batch> = {}): Batch {
   return {
     batch_id: 'b1',
     status: 'running',

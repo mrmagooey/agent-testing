@@ -88,3 +88,20 @@ def test_inject_modifies_file(injector, tmp_path):
     assert result.template_id == "sqli_format_string_python"
     modified = source.read_text()
     assert "SELECT * FROM users" in modified
+
+
+def test_inject_label_records_patch_lines_changed(injector, tmp_path):
+    """The label attached to the InjectionResult carries patch_lines_changed matching lines_added."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    source = repo / "views.py"
+    source.write_text("def search(request):\n    pass\n")
+
+    result = injector.inject(
+        repo_path=repo,
+        template_id="sqli_format_string_python",
+        target_file="views.py",
+    )
+
+    assert result.lines_added > 0
+    assert result.label.patch_lines_changed == result.lines_added

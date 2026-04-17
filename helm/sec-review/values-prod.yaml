@@ -1,0 +1,68 @@
+# -----------------------------------------------------------------------------
+# Production overrides (example)
+#
+# Usage:
+#   helm upgrade --install sec-review ./helm/sec-review \
+#     --namespace sec-review --create-namespace \
+#     --values ./helm/sec-review/values-prod.yaml
+#
+# LLM API keys must come from external-secrets / sealed-secrets — do NOT
+# commit real keys here. This file assumes an existing `llm-api-keys` Secret
+# is already present in the release namespace.
+# -----------------------------------------------------------------------------
+
+image:
+  coordinator:
+    repository: ghcr.io/myorg/sec-review/coordinator
+    tag: v1.0.0
+    pullPolicy: IfNotPresent
+  worker:
+    repository: ghcr.io/myorg/sec-review/worker
+    tag: v1.0.0
+    pullPolicy: IfNotPresent
+  datasetBuilder:
+    repository: ghcr.io/myorg/sec-review/dataset-builder
+    tag: v1.0.0
+    pullPolicy: IfNotPresent
+  pullSecrets:
+    - name: ghcr-pull-secret
+
+storage:
+  storageClassName: efs-sc
+  accessMode: ReadWriteMany
+  size: 100Gi
+
+# Secret is managed out-of-band (e.g. external-secrets-operator).
+secrets:
+  create: false
+  name: llm-api-keys
+
+networkPolicy:
+  enabled: true
+  worker:
+    # Narrow to known LLM provider egress ranges in production.
+    llmEgressCidrs:
+      - 0.0.0.0/0
+
+serviceMonitor:
+  enabled: true
+
+gatekeeper:
+  enabled: true
+  allowedImages:
+    - ghcr.io/myorg/sec-review/worker:v1.0.0
+    - ghcr.io/myorg/sec-review/dataset-builder:v1.0.0
+
+fluentd:
+  enabled: true
+  lokiUrl: http://loki.monitoring.svc.cluster.local:3100
+
+coordinator:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2000m
+      memory: 2Gi

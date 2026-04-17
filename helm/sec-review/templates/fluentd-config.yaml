@@ -1,15 +1,17 @@
+{{- if .Values.fluentd.enabled -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: fluentd-worker-config
-  namespace: logging
+  name: {{ .Values.fluentd.configMapName }}
+  namespace: {{ .Values.fluentd.namespace }}
   labels:
+    {{- include "sec-review.labels" . | nindent 4 }}
     app: fluentd
 data:
   fluent.conf: |
     <source>
       @type tail
-      path /var/log/pods/sec-review_*/*/*.log
+      path /var/log/pods/{{ .Release.Namespace }}_*/*/*.log
       pos_file /var/log/fluentd-worker.pos
       tag kubernetes.worker.*
       <parse>
@@ -27,11 +29,12 @@ data:
 
     <match kubernetes.worker.**>
       @type loki
-      url http://loki.monitoring.svc.cluster.local:3100
-      flush_interval 5s
+      url {{ .Values.fluentd.lokiUrl }}
+      flush_interval {{ .Values.fluentd.flushIntervalSeconds }}s
       <label>
         app $.kubernetes.labels.app
         batch_id $.kubernetes.labels.batch_id
         run_id $.kubernetes.labels.run_id
       </label>
     </match>
+{{- end }}

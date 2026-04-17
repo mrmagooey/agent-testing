@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "sec-review.fullname" . }}-coordinator
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sec-review.labels" . | nindent 4 }}
+    app.kubernetes.io/component: coordinator
+spec:
+  type: {{ .Values.coordinator.service.type }}
+  selector:
+    {{- include "sec-review.coordinator.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.coordinator.service.port }}
+      targetPort: http
+      {{- if eq .Values.coordinator.service.type "NodePort" }}
+      {{- with .Values.coordinator.service.nodePort }}
+      nodePort: {{ . }}
+      {{- end }}
+      {{- end }}

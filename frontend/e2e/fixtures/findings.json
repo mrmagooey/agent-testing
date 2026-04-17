@@ -1,0 +1,50 @@
+[
+  {
+    "finding_id": "find-001",
+    "run_id": "run-001-aaa",
+    "batch_id": "aaaaaaaa-0001-0001-0001-000000000001",
+    "title": "SQL Injection in user login handler",
+    "description": "User-supplied input is concatenated directly into a SQL query without parameterization.",
+    "vuln_class": "sqli",
+    "severity": "critical",
+    "match_status": "tp",
+    "file_path": "src/auth/login.py",
+    "line_start": 42,
+    "line_end": 47,
+    "recommendation": "Use parameterized queries or an ORM to prevent SQL injection.",
+    "evidence_quality": "strong",
+    "matched_label_id": "label-001"
+  },
+  {
+    "finding_id": "find-002",
+    "run_id": "run-001-aaa",
+    "batch_id": "aaaaaaaa-0001-0001-0001-000000000001",
+    "title": "Reflected XSS in search results",
+    "description": "The search query parameter is reflected in the response without HTML encoding.",
+    "vuln_class": "xss",
+    "severity": "high",
+    "match_status": "fp",
+    "file_path": "src/search/results.py",
+    "line_start": 88,
+    "line_end": 92,
+    "recommendation": "Encode all user-supplied data before rendering in HTML context.",
+    "evidence_quality": "adequate",
+    "matched_label_id": null
+  },
+  {
+    "finding_id": "find-003",
+    "run_id": "run-001-aaa",
+    "batch_id": "aaaaaaaa-0001-0001-0001-000000000001",
+    "title": "Path traversal in file download endpoint",
+    "description": "The file path parameter is not sanitized, allowing traversal outside the allowed directory.",
+    "vuln_class": "path_traversal",
+    "severity": "high",
+    "match_status": "tp",
+    "file_path": "src/files/download.py",
+    "line_start": 15,
+    "line_end": 20,
+    "recommendation": "Validate and normalize file paths before use. Use os.path.realpath and check it is within allowed directories.",
+    "evidence_quality": "strong",
+    "matched_label_id": "label-003"
+  }
+]

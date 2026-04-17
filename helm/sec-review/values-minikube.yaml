@@ -1,0 +1,40 @@
+# -----------------------------------------------------------------------------
+# Minikube overrides
+#
+# Usage:
+#   helm install sec-review ./helm/sec-review \
+#     --namespace sec-review --create-namespace \
+#     --values ./helm/sec-review/values-minikube.yaml \
+#     --set-string secrets.apiKeys.openrouter=$OPENROUTER_TEST_KEY
+# -----------------------------------------------------------------------------
+
+# Images built inside minikube's docker daemon — never pull from a registry.
+image:
+  coordinator:
+    pullPolicy: Never
+  worker:
+    pullPolicy: Never
+  datasetBuilder:
+    pullPolicy: Never
+
+# Minikube's default storage class supports only ReadWriteOnce.
+storage:
+  storageClassName: standard
+  accessMode: ReadWriteOnce
+  size: 10Gi
+
+# Expose the coordinator via NodePort so `minikube service coordinator` works.
+coordinator:
+  service:
+    type: NodePort
+
+# Disable cluster features not available out-of-the-box on minikube.
+# Enable individually if you install the corresponding addon / operator.
+networkPolicy:
+  enabled: false    # enable after `minikube addons enable calico`
+serviceMonitor:
+  enabled: false    # requires Prometheus Operator (kube-prometheus-stack)
+gatekeeper:
+  enabled: false    # requires Gatekeeper installed
+fluentd:
+  enabled: false    # requires `logging` namespace + Loki

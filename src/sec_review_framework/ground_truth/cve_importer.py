@@ -80,6 +80,7 @@ class CVEImportSpec(BaseModel):
     severity: Severity
     description: str
     affected_files: list[str] | None = None
+    patch_lines_changed: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -566,6 +567,7 @@ class CVEImporter:
             severity=resolved.severity,
             description=resolved.description,
             affected_files=resolved.affected_files or None,
+            patch_lines_changed=resolved.lines_changed or None,
         )
         return self.import_from_spec(spec)
 
@@ -581,6 +583,14 @@ class CVEImporter:
         affected = spec.affected_files or self._parse_diff(
             repo_path, spec.fix_commit_sha
         )
+        if spec.patch_lines_changed is None:
+            spec = spec.model_copy(
+                update={
+                    "patch_lines_changed": self._count_diff_lines(
+                        repo_path, spec.fix_commit_sha
+                    )
+                }
+            )
         labels = self._build_labels(spec, affected)
         self._install_repo(repo_path, spec.dataset_name)
         return labels
@@ -617,6 +627,32 @@ class CVEImporter:
         )
         return [line for line in result.stdout.splitlines() if line.strip()]
 
+    def _count_diff_lines(self, repo_path: Path, fix_sha: str) -> int | None:
+        """Return total insertions + deletions in the fix commit, or None on failure."""
+        try:
+            result = subprocess.run(
+                ["git", "diff", f"{fix_sha}~1", fix_sha, "--numstat"],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except subprocess.SubprocessError:
+            return None
+        total = 0
+        for line in result.stdout.splitlines():
+            parts = line.split("\t")
+            if len(parts) < 2:
+                continue
+            added, removed = parts[0], parts[1]
+            if added == "-" or removed == "-":
+                continue  # binary file
+            try:
+                total += int(added) + int(removed)
+            except ValueError:
+                continue
+        return total if total > 0 else None
+
     def _build_labels(
         self, spec: CVEImportSpec, affected_files: list[str]
     ) -> list[GroundTruthLabel]:
@@ -637,6 +673,7 @@ class CVEImporter:
                 source_ref=spec.cve_id,
                 confidence="confirmed",
                 created_at=datetime.utcnow(),
+                patch_lines_changed=spec.patch_lines_changed,
             )
             labels.append(label)
         return labels

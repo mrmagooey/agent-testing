@@ -1,0 +1,23 @@
+{
+  "src": {
+    "auth": {
+      "login.py": null,
+      "logout.py": null
+    },
+    "api": {
+      "users.py": null,
+      "products.py": null
+    },
+    "files": {
+      "download.py": null,
+      "upload.py": null
+    },
+    "search": {
+      "results.py": null
+    }
+  },
+  "tests": {
+    "test_auth.py": null,
+    "test_api.py": null
+  }
+}

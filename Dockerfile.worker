@@ -1,5 +1,10 @@
 FROM python:3.14-slim
 
+# Build deps for C extensions that lack py3.14 wheels yet (ruamel.yaml.clib via semgrep).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends gcc g++ make \
+ && rm -rf /var/lib/apt/lists/*
+
 # Install framework with worker extras (includes semgrep)
 COPY pyproject.toml .
 COPY src/ src/

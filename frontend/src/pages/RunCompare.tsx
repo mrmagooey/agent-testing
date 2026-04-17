@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom'
 import { compareRuns, type RunComparison, type Finding } from '../api/client'
+import Breadcrumbs from '../components/Breadcrumbs'
 import CodeViewer from '../components/CodeViewer'
 
 function delta(a?: number, b?: number): React.ReactNode {
@@ -84,6 +85,14 @@ export default function RunCompare() {
 
   return (
     <div className="space-y-6">
+      <Breadcrumbs
+        items={[
+          { label: 'Dashboard', to: '/' },
+          { label: batchId ?? '', to: `/batches/${batchId}` },
+          { label: 'Compare' },
+        ]}
+      />
+
       {/* Header comparison */}
       <div className="grid grid-cols-2 gap-4">
         {[

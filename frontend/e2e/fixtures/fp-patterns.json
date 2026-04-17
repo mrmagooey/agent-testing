@@ -1,0 +1,16 @@
+[
+  {
+    "model": "gpt-4o",
+    "vuln_class": "xss",
+    "pattern": "Template engine auto-escaping misidentified as XSS",
+    "count": 5,
+    "suggested_action": "Add template engine context to system prompt"
+  },
+  {
+    "model": "claude-3-5-sonnet-20241022",
+    "vuln_class": "sqli",
+    "pattern": "ORM query builder flagged as raw SQL",
+    "count": 3,
+    "suggested_action": "Include ORM documentation in context"
+  }
+]

@@ -1,0 +1,16 @@
+{{- if not .Values.storage.existingClaim -}}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "sec-review.fullname" . }}-data
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sec-review.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - {{ .Values.storage.accessMode }}
+  resources:
+    requests:
+      storage: {{ .Values.storage.size }}
+  storageClassName: {{ .Values.storage.storageClassName }}
+{{- end }}

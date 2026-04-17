@@ -1,0 +1,17 @@
+apiVersion: v2
+name: sec-review
+description: AI/LLM Security Code Review Testing Framework — coordinator, workers, and supporting resources.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - security
+  - llm
+  - code-review
+  - experiment-framework
+home: https://github.com/mrmagooey/agent-testing-framework
+sources:
+  - https://github.com/mrmagooey/agent-testing-framework
+maintainers:
+  - name: mrmagooey
+    url: https://github.com/mrmagooey

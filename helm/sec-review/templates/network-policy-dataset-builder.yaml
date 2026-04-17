@@ -1,8 +1,11 @@
+{{- if .Values.networkPolicy.enabled -}}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: dataset-builder-egress
-  namespace: sec-review
+  name: {{ include "sec-review.fullname" . }}-dataset-builder-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sec-review.labels" . | nindent 4 }}
 spec:
   podSelector:
     matchLabels:
@@ -15,17 +18,18 @@ spec:
         - protocol: TCP
           port: 443
       to:
+        {{- range .Values.networkPolicy.datasetBuilder.githubCidrs }}
         - ipBlock:
-            cidr: 140.82.112.0/20   # github.com (verify current ranges)
-        - ipBlock:
-            cidr: 192.30.252.0/22
+            cidr: {{ . }}
+        {{- end }}
     # DNS
     - ports:
         - protocol: UDP
           port: 53
         - protocol: TCP
           port: 53
-    # NFS/EFS
+    # NFS / shared storage
     - ports:
         - protocol: TCP
-          port: 2049
+          port: {{ .Values.networkPolicy.nfsPort }}
+{{- end }}

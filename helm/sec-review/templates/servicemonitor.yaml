@@ -1,0 +1,18 @@
+{{- if .Values.serviceMonitor.enabled -}}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "sec-review.fullname" . }}-coordinator
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sec-review.labels" . | nindent 4 }}
+    app.kubernetes.io/component: coordinator
+spec:
+  selector:
+    matchLabels:
+      {{- include "sec-review.coordinator.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: http
+      path: {{ .Values.serviceMonitor.path }}
+      interval: {{ .Values.serviceMonitor.interval }}
+{{- end }}

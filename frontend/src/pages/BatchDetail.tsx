@@ -7,6 +7,7 @@ import {
   type Finding,
 } from '../api/client'
 import { useBatch } from '../hooks/useBatch'
+import Breadcrumbs from '../components/Breadcrumbs'
 import ProgressBar from '../components/ProgressBar'
 import MatrixTable from '../components/MatrixTable'
 import FindingsExplorer from '../components/FindingsExplorer'
@@ -35,6 +36,70 @@ function buildModelChart(runs: Run[]) {
   }))
 }
 
+function CancelConfirmModal({
+  onConfirm,
+  onCancel,
+  confirming,
+}: {
+  onConfirm: () => void
+  onCancel: () => void
+  confirming: boolean
+}) {
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl max-w-sm w-full p-6">
+        <h3 className="font-semibold text-gray-900 dark:text-gray-100 mb-2">Stop all pending runs?</h3>
+        <p className="text-sm text-gray-600 dark:text-gray-400 mb-6">
+          This will cancel all pending and running jobs in this batch. Completed runs will not be affected.
+        </p>
+        <div className="flex justify-end gap-3">
+          <button
+            onClick={onCancel}
+            disabled={confirming}
+            className="px-4 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors disabled:opacity-50"
+          >
+            Keep running
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={confirming}
+            className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-medium transition-colors disabled:opacity-50"
+          >
+            {confirming ? 'Cancelling…' : 'Stop batch'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function TokenMeter({ runs }: { runs: Run[] }) {
+  const totalCost = runs.reduce((sum, r) => sum + (r.cost_usd ?? 0), 0)
+  const totalRuns = runs.length
+  const avgCost = totalRuns > 0 ? totalCost / totalRuns : 0
+
+  return (
+    <div className="flex flex-wrap items-center gap-4 text-sm mt-4 pt-4 border-t border-gray-100 dark:border-gray-700">
+      <div className="flex items-center gap-2">
+        <span className="text-gray-500 dark:text-gray-400">Batch total</span>
+        <span className="font-semibold font-mono text-gray-900 dark:text-gray-100">
+          ${totalCost.toFixed(2)}
+        </span>
+      </div>
+      <div className="flex items-center gap-2">
+        <span className="text-gray-500 dark:text-gray-400">Avg/run</span>
+        <span className="font-mono text-gray-700 dark:text-gray-300">
+          ${avgCost.toFixed(3)}
+        </span>
+      </div>
+      <div className="flex items-center gap-2">
+        <span className="text-gray-500 dark:text-gray-400">Runs</span>
+        <span className="font-mono text-gray-700 dark:text-gray-300">{totalRuns}</span>
+      </div>
+    </div>
+  )
+}
+
 export default function BatchDetail() {
   const { id: batchId } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -43,6 +108,7 @@ export default function BatchDetail() {
   const [resultsLoading, setResultsLoading] = useState(false)
   const [selectedRuns, setSelectedRuns] = useState<string[]>([])
   const [cancelling, setCancelling] = useState(false)
+  const [showCancelModal, setShowCancelModal] = useState(false)
 
   const isTerminal = batch && ['completed', 'failed', 'cancelled'].includes(batch.status)
 
@@ -55,13 +121,18 @@ export default function BatchDetail() {
       .finally(() => setResultsLoading(false))
   }, [batchId, isTerminal])
 
-  const handleCancel = async () => {
+  const handleCancelRequest = () => {
+    setShowCancelModal(true)
+  }
+
+  const handleCancelConfirm = async () => {
     if (!batchId || cancelling) return
     setCancelling(true)
     try {
       await cancelBatch(batchId)
     } finally {
       setCancelling(false)
+      setShowCancelModal(false)
     }
   }
 
@@ -87,6 +158,16 @@ export default function BatchDetail() {
 
   return (
     <div className="space-y-6">
+      {showCancelModal && (
+        <CancelConfirmModal
+          onConfirm={handleCancelConfirm}
+          onCancel={() => setShowCancelModal(false)}
+          confirming={cancelling}
+        />
+      )}
+
+      <Breadcrumbs items={[{ label: 'Dashboard', to: '/' }, { label: batch.batch_id }]} />
+
       {/* Header */}
       <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
         <div className="flex items-start justify-between mb-4">
@@ -100,11 +181,11 @@ export default function BatchDetail() {
             </span>
             {!isTerminal && (
               <button
-                onClick={handleCancel}
+                onClick={handleCancelRequest}
                 disabled={cancelling}
                 className="px-3 py-1 rounded-lg text-sm border border-red-300 dark:border-red-700 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950 transition-colors disabled:opacity-50"
               >
-                {cancelling ? 'Cancelling…' : 'Cancel'}
+                Cancel
               </button>
             )}
             {isTerminal && batchId && <DownloadButton batchId={batchId} />}
@@ -229,6 +310,7 @@ export default function BatchDetail() {
                 ))}
               </tbody>
             </table>
+            <TokenMeter runs={results.runs} />
           </section>
 
           {/* Findings Explorer */}

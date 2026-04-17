@@ -185,6 +185,7 @@ class VulnInjector:
             confidence="confirmed",
             created_at=datetime.utcnow(),
             introduced_in_diff=None,
+            patch_lines_changed=result.lines_added if result.lines_added > 0 else None,
         )
 
     # ------------------------------------------------------------------
@@ -275,4 +276,5 @@ class VulnInjector:
             source_ref=template.id,
             confidence="confirmed",
             created_at=datetime.utcnow(),
+            patch_lines_changed=lines_added if lines_added > 0 else None,
         )

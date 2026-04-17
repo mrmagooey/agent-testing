@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "sec-review.fullname" . }}-coordinator
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sec-review.labels" . | nindent 4 }}
+    app.kubernetes.io/component: coordinator
+spec:
+  replicas: {{ .Values.coordinator.replicas }}
+  selector:
+    matchLabels:
+      {{- include "sec-review.coordinator.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "sec-review.labels" . | nindent 8 }}
+        {{- include "sec-review.coordinator.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "sec-review.serviceAccountName" . }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: coordinator
+          image: {{ include "sec-review.coordinatorImage" . | quote }}
+          imagePullPolicy: {{ .Values.image.coordinator.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.coordinator.service.port }}
+          volumeMounts:
+            - name: shared-data
+              mountPath: {{ .Values.coordinator.storageRoot }}
+            - name: config
+              mountPath: /app/config
+          env:
+            - name: STORAGE_ROOT
+              value: {{ .Values.coordinator.storageRoot | quote }}
+            - name: WORKER_IMAGE
+              value: {{ include "sec-review.workerImage" . | quote }}
+            - name: NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            - name: CONFIG_DIR
+              value: /app/config
+            - name: SHARED_PVC_NAME
+              value: {{ .Values.storage.existingClaim | default (printf "%s-data" (include "sec-review.fullname" .)) | quote }}
+            - name: LLM_SECRET_NAME
+              value: {{ .Values.secrets.name | quote }}
+            - name: CONFIG_MAP_NAME
+              value: {{ .Values.coordinator.configMapName | quote }}
+            - name: WORKER_IMAGE_PULL_POLICY
+              value: {{ .Values.image.worker.pullPolicy | quote }}
+            {{- with .Values.coordinator.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.coordinator.resources | nindent 12 }}
+      volumes:
+        - name: shared-data
+          persistentVolumeClaim:
+            claimName: {{ .Values.storage.existingClaim | default (printf "%s-data" (include "sec-review.fullname" .)) }}
+        - name: config
+          configMap:
+            name: {{ .Values.coordinator.configMapName }}

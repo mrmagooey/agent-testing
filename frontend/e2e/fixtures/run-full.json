@@ -1,0 +1,87 @@
+{
+  "run_id": "run-001-aaa",
+  "batch_id": "aaaaaaaa-0001-0001-0001-000000000001",
+  "experiment_id": "gpt-4o__zero_shot__with_tools__default__none",
+  "model": "gpt-4o",
+  "strategy": "zero_shot",
+  "tool_variant": "with_tools",
+  "profile": "default",
+  "verification": "none",
+  "status": "completed",
+  "precision": 0.812,
+  "recall": 0.743,
+  "f1": 0.776,
+  "fpr": 0.045,
+  "tp_count": 52,
+  "fp_count": 12,
+  "fn_count": 18,
+  "cost_usd": 0.312,
+  "duration_seconds": 145,
+  "started_at": "2026-04-17T08:02:00Z",
+  "completed_at": "2026-04-17T08:04:25Z",
+  "findings": [
+    {
+      "finding_id": "find-001",
+      "run_id": "run-001-aaa",
+      "batch_id": "aaaaaaaa-0001-0001-0001-000000000001",
+      "title": "SQL Injection in user login handler",
+      "description": "User-supplied input is concatenated directly into a SQL query without parameterization.",
+      "vuln_class": "sqli",
+      "severity": "critical",
+      "match_status": "tp",
+      "file_path": "src/auth/login.py",
+      "line_start": 42,
+      "line_end": 47,
+      "recommendation": "Use parameterized queries or an ORM to prevent SQL injection.",
+      "evidence_quality": "strong",
+      "matched_label_id": "label-001"
+    },
+    {
+      "finding_id": "find-002",
+      "run_id": "run-001-aaa",
+      "batch_id": "aaaaaaaa-0001-0001-0001-000000000001",
+      "title": "Reflected XSS in search results",
+      "description": "The search query parameter is reflected in the response without HTML encoding.",
+      "vuln_class": "xss",
+      "severity": "high",
+      "match_status": "fp",
+      "file_path": "src/search/results.py",
+      "line_start": 88,
+      "line_end": 92,
+      "recommendation": "Encode all user-supplied data before rendering in HTML context.",
+      "evidence_quality": "adequate",
+      "matched_label_id": null
+    }
+  ],
+  "tool_calls": [
+    {
+      "tool_name": "read_file",
+      "input": {"path": "src/auth/login.py"},
+      "timestamp": "2026-04-17T08:02:15Z",
+      "flagged": false
+    },
+    {
+      "tool_name": "search_code",
+      "input": {"query": "SELECT", "path": "src/"},
+      "timestamp": "2026-04-17T08:02:30Z",
+      "flagged": false
+    }
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": "Analyze the codebase for security vulnerabilities.",
+      "timestamp": "2026-04-17T08:02:00Z"
+    },
+    {
+      "role": "assistant",
+      "content": "I'll systematically review the codebase for security issues. Let me start by examining the authentication module.",
+      "timestamp": "2026-04-17T08:02:10Z"
+    },
+    {
+      "role": "tool",
+      "content": "def login(username, password):\n    query = f\"SELECT * FROM users WHERE username='{username}' AND password='{password}'\"\n    return db.execute(query)",
+      "timestamp": "2026-04-17T08:02:20Z"
+    }
+  ]
+}

@@ -12,11 +12,11 @@ type SortKey = keyof Run
 type SortDir = 'asc' | 'desc'
 
 function metricCell(value: number | undefined) {
-  if (value === undefined || value === null) return { text: '—', cls: '' }
+  if (value === undefined || value === null) return { text: '—', label: '', cls: '' }
   const text = value.toFixed(3)
-  if (value >= 0.8) return { text, cls: 'bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200' }
-  if (value >= 0.6) return { text, cls: 'bg-yellow-100 dark:bg-yellow-900 text-yellow-800 dark:text-yellow-200' }
-  return { text, cls: 'bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200' }
+  if (value >= 0.8) return { text, label: 'PASS', cls: 'bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200' }
+  if (value >= 0.6) return { text, label: 'WARN', cls: 'bg-yellow-100 dark:bg-yellow-900 text-yellow-800 dark:text-yellow-200' }
+  return { text, label: 'FAIL', cls: 'bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200' }
 }
 
 const COLUMNS: { key: keyof Run; label: string; heatmap?: boolean }[] = [
@@ -69,7 +69,6 @@ export default function MatrixTable({ runs, onSelect, selectedIds = [] }: Matrix
       } else if (prev.length < 2) {
         next = [...prev, runId]
       } else {
-        // Replace oldest selection
         next = [prev[1], runId]
       }
       onSelect?.(next)
@@ -126,10 +125,17 @@ export default function MatrixTable({ runs, onSelect, selectedIds = [] }: Matrix
                 {COLUMNS.map((col) => {
                   const raw = run[col.key]
                   if (col.heatmap) {
-                    const { text, cls } = metricCell(raw as number | undefined)
+                    const { text, label, cls } = metricCell(raw as number | undefined)
                     return (
                       <td key={col.key} className={`px-3 py-2 font-mono text-xs rounded ${cls}`}>
-                        {text}
+                        {text !== '—' ? (
+                          <span className="flex items-center gap-1.5">
+                            <span>{text}</span>
+                            <span className="text-[10px] font-semibold opacity-70 tracking-wide">{label}</span>
+                          </span>
+                        ) : (
+                          text
+                        )}
                       </td>
                     )
                   }
@@ -156,6 +162,9 @@ export default function MatrixTable({ runs, onSelect, selectedIds = [] }: Matrix
           </tbody>
         </table>
       </div>
+      <p className="mt-2 text-xs text-gray-400 dark:text-gray-500">
+        Virtualization skipped — typical batch sizes (5 models × 4 strategies × 2 variants = 40 rows) do not require it.
+      </p>
     </div>
   )
 }
