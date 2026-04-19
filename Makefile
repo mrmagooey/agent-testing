@@ -3,7 +3,8 @@
         helm-lint helm-template helm-install-minikube helm-upgrade-minikube helm-uninstall \
         redeploy redeploy-clean \
         dev-coordinator dev-frontend \
-        test lint format sync
+        test lint format sync \
+        kind-e2e-up kind-e2e-down kind-e2e-pytest kind-e2e-playwright
 
 # Chart release name + release namespace — override on the command line:
 #   make helm-install-minikube RELEASE=my-release NAMESPACE=my-ns
@@ -141,3 +142,27 @@ format:
 
 sync:
 	uv sync --all-extras
+
+# ---------------------------------------------------------------------------
+# Kind live-e2e
+#
+# Requires kind and OPENROUTER_TEST_KEY to be set.
+# Typical workflow:
+#   make kind-e2e-up                    # build images, deploy to kind
+#   ./scripts/e2e-live/port-forward.sh &  # forward coordinator port
+#   make kind-e2e-pytest                # run backend live tests
+#   make kind-e2e-playwright            # run frontend live tests
+#   make kind-e2e-down                  # tear down cluster
+# ---------------------------------------------------------------------------
+
+kind-e2e-up:
+	bash scripts/e2e-live/bootstrap.sh
+
+kind-e2e-down:
+	bash scripts/e2e-live/teardown.sh
+
+kind-e2e-pytest:
+	uv run pytest tests/e2e/live/ -m k8s_live -v
+
+kind-e2e-playwright:
+	cd frontend && E2E_LIVE=1 E2E_LIVE_BASE_URL=http://localhost:8080 npx playwright test --grep @live

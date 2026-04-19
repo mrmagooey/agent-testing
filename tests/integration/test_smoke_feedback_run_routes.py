@@ -21,10 +21,25 @@ from sec_review_framework.db import Database
 from tests.integration.test_coordinator_api import _make_coordinator
 
 
+def _seed_coordinator_prerequisites(tmp_path: Path) -> None:
+    """Seed a minimal models.yaml and dataset directory so smoke-test preconditions pass."""
+    import yaml
+
+    config_dir = tmp_path / "config"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    models_yaml = config_dir / "models.yaml"
+    models_yaml.write_text(yaml.dump({"providers": {"gpt-4o-mini": {"label": "GPT-4o mini"}}}))
+
+    dataset_dir = tmp_path / "storage" / "datasets" / "smoke-test-dataset"
+    dataset_dir.mkdir(parents=True, exist_ok=True)
+    (dataset_dir / "labels.json").write_text("[]")
+
+
 @pytest.fixture
 async def coordinator_client(tmp_path: Path):
     db = Database(tmp_path / "test.db")
     await db.init()
+    _seed_coordinator_prerequisites(tmp_path)
     c = _make_coordinator(tmp_path, db)
     with patch.object(coord_module, "coordinator", c):
         with patch.object(c, "reconcile", return_value=None):
@@ -112,6 +127,81 @@ def test_smoke_test_503_when_coordinator_none():
     finally:
         app.router.on_startup.clear()
         app.router.on_startup.extend(original_handlers)
+
+
+def test_smoke_test_sets_max_turns_10(coordinator_client):
+    """submit_batch receives a matrix with strategy_configs max_turns=10."""
+    client, c, _ = coordinator_client
+    captured = {}
+
+    original = c.submit_batch
+
+    async def _capture(matrix):
+        captured["matrix"] = matrix
+        return await original(matrix)
+
+    with patch.object(c, "submit_batch", side_effect=_capture):
+        resp = client.post("/smoke-test")
+    assert resp.status_code == 200
+    assert captured["matrix"].strategy_configs["single_agent"]["max_turns"] == 10
+
+
+def test_smoke_test_returns_412_when_no_models(coordinator_client):
+    """POST /smoke-test returns 412 when no models are configured."""
+    client, c, _ = coordinator_client
+    with patch.object(c, "list_models", return_value=[]):
+        resp = client.post("/smoke-test")
+    assert resp.status_code == 412
+    assert "model" in resp.json()["detail"].lower()
+
+
+def test_smoke_test_returns_412_when_no_datasets(coordinator_client):
+    """POST /smoke-test returns 412 when no datasets are registered."""
+    client, c, _ = coordinator_client
+    with patch.object(c, "list_datasets", return_value=[]):
+        resp = client.post("/smoke-test")
+    assert resp.status_code == 412
+    assert "dataset" in resp.json()["detail"].lower()
+
+
+def test_smoke_test_returns_409_when_already_running(coordinator_client):
+    """Second POST /smoke-test returns 409 while the first is still non-terminal."""
+    client, *_ = coordinator_client
+    first = client.post("/smoke-test")
+    assert first.status_code == 200
+    first_id = first.json()["batch_id"]
+
+    second = client.post("/smoke-test")
+    assert second.status_code == 409
+    assert first_id in second.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_smoke_test_allows_new_after_previous_completes(tmp_path: Path):
+    """POST /smoke-test succeeds after the previous smoke batch is completed."""
+    from unittest.mock import patch as _patch
+    import sec_review_framework.coordinator as _coord_mod
+
+    db = Database(tmp_path / "test.db")
+    await db.init()
+    _seed_coordinator_prerequisites(tmp_path)
+    c = _make_coordinator(tmp_path, db)
+
+    with patch.object(coord_module, "coordinator", c):
+        with patch.object(c, "reconcile", return_value=None):
+            with TestClient(app, raise_server_exceptions=True) as client:
+                with _patch("sec_review_framework.coordinator.datetime") as mock_dt:
+                    mock_dt.utcnow.return_value.timestamp.return_value = 1000000
+                    first = client.post("/smoke-test")
+                assert first.status_code == 200
+                first_id = first.json()["batch_id"]
+
+                await c.db.update_batch_status(first_id, "completed")
+
+                with _patch("sec_review_framework.coordinator.datetime") as mock_dt:
+                    mock_dt.utcnow.return_value.timestamp.return_value = 1000001
+                    second = client.post("/smoke-test")
+                assert second.status_code == 200
 
 
 # ---------------------------------------------------------------------------

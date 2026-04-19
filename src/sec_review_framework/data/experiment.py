@@ -199,8 +199,12 @@ class ExperimentMatrix(BaseModel):
                                             )
                                         else:
                                             ext_suffix = ""
+                                        # Sanitize model_id: LiteLLM IDs like
+                                        # "openrouter/meta-llama/llama-3.1-8b-instruct"
+                                        # contain "/" which leaks into filesystem paths.
+                                        safe_model_id = model_id.replace("/", "--")
                                         run_id = (
-                                            f"{self.batch_id}_{model_id}_{strategy.value}"
+                                            f"{self.batch_id}_{safe_model_id}_{strategy.value}"
                                             f"_{tool_variant.value}_{profile.value}_{verif.value}"
                                             f"{rep_suffix}{ext_suffix}"
                                         )

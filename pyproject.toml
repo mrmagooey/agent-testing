@@ -59,6 +59,7 @@ markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "integration: requires temp database or mock services",
     "infra: requires Docker or K8s tools",
+    "k8s_live: requires a live Kubernetes cluster via scripts/e2e-live/bootstrap.sh",
 ]
 
 [dependency-groups]

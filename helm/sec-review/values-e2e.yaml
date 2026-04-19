@@ -1,0 +1,80 @@
+# -----------------------------------------------------------------------------
+# kind / CI end-to-end overrides
+#
+# Used by the live e2e test suite run against a local kind cluster
+# (sec-review-e2e) or in GitHub Actions. Images are loaded directly into kind
+# with `kind load docker-image` rather than pulled from a registry, so
+# pullPolicy is IfNotPresent.
+#
+# Usage:
+#   helm upgrade --install sec-review-e2e ./helm/sec-review \
+#     --namespace sec-review-e2e --create-namespace \
+#     --values ./helm/sec-review/values-e2e.yaml \
+#     --set image.coordinator.tag=e2e \
+#     --set image.worker.tag=e2e \
+#     --set-string secrets.apiKeys.openrouter=$OPENROUTER_TEST_KEY
+#
+# Bring up the full stack:   make kind-e2e-up
+# Tear down:                 make kind-e2e-down
+# Run backend tests:         make kind-e2e-pytest
+# Run frontend tests:        make kind-e2e-playwright
+# -----------------------------------------------------------------------------
+
+# Images are loaded into kind directly — never attempt a registry pull.
+image:
+  coordinator:
+    pullPolicy: IfNotPresent
+  worker:
+    pullPolicy: IfNotPresent
+  datasetBuilder:
+    pullPolicy: IfNotPresent
+
+# kind's default storage class is `standard` (hostPath, ReadWriteOnce).
+# Keep the claim tiny so the node disk isn't stressed during CI.
+storage:
+  storageClassName: standard
+  accessMode: ReadWriteOnce
+  size: 2Gi
+
+# Expose the coordinator as ClusterIP only; callers reach it via port-forward.
+coordinator:
+  service:
+    type: ClusterIP
+  # Keep resource requests tiny so the cluster fits on a GitHub-hosted runner.
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# No ingress controller in the kind cluster.
+ingress:
+  enabled: false
+
+# kind uses kindnet which does not enforce NetworkPolicy.
+networkPolicy:
+  enabled: false
+
+# No Prometheus Operator in the kind cluster.
+serviceMonitor:
+  enabled: false
+
+# No Gatekeeper in the kind cluster.
+gatekeeper:
+  enabled: false
+
+# No Loki / Fluentd in the kind cluster.
+fluentd:
+  enabled: false
+
+# Tool extensions: tree-sitter only.  LSP images are large and slow CI;
+# devdocs sync requires external network access not available in kind.
+workerTools:
+  treeSitter:
+    enabled: true
+  lsp:
+    enabled: false
+  devdocs:
+    enabled: false

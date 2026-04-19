@@ -22,6 +22,14 @@ A leaf subagent should almost never run the same model as the coordinator that
 spawned it. If it does, that is a signal the decomposition is too shallow —
 the coordinator is just forwarding, not dividing the work.
 
+## Test coverage
+
+Any change must be covered by tests. New behavior needs new tests; modified
+behavior needs updated tests; bug fixes need a regression test that fails
+without the fix. Do not report work as complete until the relevant tests
+exist and pass. If a change is genuinely untestable (e.g. pure formatting),
+say so explicitly rather than skipping silently.
+
 ## Code review
 
 Any significant work must be reviewed by a separate subagent specialized in

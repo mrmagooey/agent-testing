@@ -34,6 +34,7 @@ function json(route: Route, body: unknown, status = 200) {
 }
 
 export async function mockApi(page: Page) {
+  if (process.env.E2E_LIVE === '1') return
   await page.route('**/api/**', (route) => {
     const url = new URL(route.request().url())
     const path = url.pathname.replace(/^\/api/, '')
@@ -44,6 +45,20 @@ export async function mockApi(page: Page) {
       return json(route, batches)
     }
     if (path === '/batches' && method === 'POST') {
+      // Validate the submitted config shape the way the real coordinator does, so
+      // UI-level regressions (e.g. submitting with empty tool_variants) surface in
+      // e2e tests instead of being silently accepted.
+      const body = route.request().postDataJSON() as Partial<Record<string, unknown>>
+      const requiredArrayFields = ['models', 'strategies', 'tool_variants', 'verification'] as const
+      for (const field of requiredArrayFields) {
+        const value = body[field]
+        if (!Array.isArray(value) || value.length === 0) {
+          return json(route, { detail: `${field} must be a non-empty array` }, 422)
+        }
+      }
+      if (!body.dataset) {
+        return json(route, { detail: 'dataset is required' }, 422)
+      }
       const newBatch = {
         ...(batches[0] as Record<string, unknown>),
         batch_id: 'newbatch-1111-1111-1111-111111111111',

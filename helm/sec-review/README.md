@@ -19,7 +19,7 @@ See `values.yaml` for all available options. Key sections:
 - `coordinator.replicas` — number of API/frontend replicas (default: 1)
 - `coordinator.service.port` — port to expose (default: 8080)
 - `coordinator.storageRoot` — where to read/write run artifacts (default: /data)
-- `coordinator.configMapName` — name of the ConfigMap containing `config/*.yaml`
+- `coordinator.configMapName` — name of the ConfigMap containing `config/*.yaml`; automatically populated from the repo's `config/` directory via `helm/sec-review/files -> ../../config` symlink at chart-render time
 
 ### Storage
 

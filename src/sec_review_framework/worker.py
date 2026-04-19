@@ -146,7 +146,10 @@ class ExperimentWorker:
         )
 
         output_dir.mkdir(parents=True, exist_ok=True)
-        (output_dir / "run_result.json").write_text(result.model_dump_json(indent=2))
+        _result_file = output_dir / "run_result.json"
+        _result_tmp = _result_file.with_suffix(".json.tmp")
+        _result_tmp.write_text(result.model_dump_json(indent=2))
+        _result_tmp.replace(_result_file)
         self._write_jsonl(output_dir / "findings.jsonl", findings)
         self._write_jsonl(output_dir / "tool_calls.jsonl", tools.audit_log.entries)
         self._write_jsonl(output_dir / "conversation.jsonl", model.conversation_log)

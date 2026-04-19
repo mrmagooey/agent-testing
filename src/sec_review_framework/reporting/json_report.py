@@ -123,7 +123,7 @@ class JSONReportGenerator(ReportGenerator):
 
     def _build_matrix_data(self, results: list[RunResult]) -> dict:
         if not results:
-            return {"runs": [], "dimension_analysis": {}, "cost_analysis": {}}
+            return {"runs": [], "findings": [], "dimension_analysis": {}, "cost_analysis": {}}
 
         batch_id = results[0].experiment.batch_id
         dataset_name = results[0].experiment.dataset_name
@@ -148,6 +148,15 @@ class JSONReportGenerator(ReportGenerator):
 
         cost_analysis = self._build_cost_analysis(results)
 
+        # Aggregate findings across all runs so the UI's FindingsExplorer
+        # can render them without a separate fetch per run.
+        findings_data: list[dict] = []
+        for run in results:
+            for finding in run.findings:
+                record = finding.model_dump()
+                record.setdefault("run_id", run.experiment.id)
+                findings_data.append(record)
+
         return {
             "batch_id": batch_id,
             "dataset": {
@@ -156,6 +165,7 @@ class JSONReportGenerator(ReportGenerator):
             },
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "runs": runs_data,
+            "findings": findings_data,
             "dimension_analysis": dimension_analysis,
             "cost_analysis": cost_analysis,
         }

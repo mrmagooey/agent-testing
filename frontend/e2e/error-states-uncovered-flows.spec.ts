@@ -102,30 +102,32 @@ test.describe('RunCompare error state', () => {
 
 test.describe('Loading skeleton states', () => {
   test('Dashboard shows loading spinner during initial fetch', async ({ page }) => {
-    // Verify the spinner component class exists in the DOM source
-    // (Cannot reliably catch the transient spinner state in parallel workers)
-    // Instead we verify the spinner appears in the component source — a structural test
-    await page.route('**/api/batches', async (route) => {
-      // No delay — just serve immediately
-      route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
-    })
-    await page.route('**/api/matrix/accuracy', (route) => {
-      route.fulfill({ status: 200, contentType: 'application/json', body: '{}' })
+    await mockApi(page)
+    await page.route('**/api/batches', (route) => {
+      const url = new URL(route.request().url())
+      if (url.pathname.replace(/^\/api/, '') === '/batches' && route.request().method() === 'GET') {
+        return route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
+      }
+      return route.fallback()
     })
     await page.goto('/')
-    // After page load, dashboard renders successfully
-    await expect(page.locator('[class*="Dashboard"], h1')).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible()
   })
 })
 
 test.describe('EmptyState components', () => {
   // Both empty-state messages appear in a single Dashboard render when batches=[]
   test('Dashboard shows empty active batches message when batches list is empty', async ({ page }) => {
+    // Install the full mockApi first so every route is handled, then override batches with []
+    await mockApi(page)
     await page.route('**/api/batches', (route) => {
-      route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
-    })
-    await page.route('**/api/matrix/accuracy', (route) => {
-      route.fulfill({ status: 200, contentType: 'application/json', body: '{}' })
+      const url = new URL(route.request().url())
+      // Only intercept the bare /batches list route — let sub-paths fall through to mockApi
+      if (url.pathname.replace(/^\/api/, '') === '/batches' && route.request().method() === 'GET') {
+        route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
+      } else {
+        route.fallback()
+      }
     })
     await page.goto('/')
     // Wait for the "Active Batches" card heading to confirm Dashboard rendered
@@ -134,11 +136,14 @@ test.describe('EmptyState components', () => {
   })
 
   test('Dashboard shows empty completed batches message', async ({ page }) => {
+    await mockApi(page)
     await page.route('**/api/batches', (route) => {
-      route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
-    })
-    await page.route('**/api/matrix/accuracy', (route) => {
-      route.fulfill({ status: 200, contentType: 'application/json', body: '{}' })
+      const url = new URL(route.request().url())
+      if (url.pathname.replace(/^\/api/, '') === '/batches' && route.request().method() === 'GET') {
+        route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
+      } else {
+        route.fallback()
+      }
     })
     await page.goto('/')
     await expect(page.getByRole('heading', { name: 'Recent Batches' })).toBeVisible({ timeout: 10000 })

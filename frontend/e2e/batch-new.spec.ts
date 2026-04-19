@@ -84,6 +84,50 @@ test('successful form submission navigates to batch detail', async ({ page }) =>
   await expect(page).toHaveURL(/\/batches\/newbatch-1111/)
 })
 
+test('submitted POST body contains non-empty required arrays', async ({ page }) => {
+  const postPromise = page.waitForRequest(
+    (req) => req.url().includes('/api/batches') && req.method() === 'POST'
+  )
+
+  await page.locator('select').first().selectOption('cve-2024-python')
+  await page.locator('label').filter({ hasText: 'gpt-4o' }).first().locator('input[type="checkbox"]').check()
+  await page.locator('label').filter({ hasText: 'zero_shot' }).locator('input[type="checkbox"]').check()
+  await page.getByRole('button', { name: 'Submit Batch' }).click()
+
+  const req = await postPromise
+  const body = req.postDataJSON()
+
+  expect(body.dataset).toBe('cve-2024-python')
+  expect(body.models).toEqual(['gpt-4o'])
+  expect(body.strategies).toEqual(['zero_shot'])
+  // Previously-uncaught regression: submit must refuse to send empty dimension arrays.
+  expect(Array.isArray(body.tool_variants)).toBe(true)
+  expect(body.tool_variants.length).toBeGreaterThan(0)
+  expect(Array.isArray(body.verification)).toBe(true)
+  expect(body.verification.length).toBeGreaterThan(0)
+})
+
+test('validates at least one tool variant required', async ({ page }) => {
+  await page.locator('select').first().selectOption('cve-2024-python')
+  await page.locator('label').filter({ hasText: 'gpt-4o' }).first().locator('input[type="checkbox"]').check()
+  await page.locator('label').filter({ hasText: 'zero_shot' }).locator('input[type="checkbox"]').check()
+  await page.locator('label').filter({ hasText: /^with_tools$/ }).locator('input[type="checkbox"]').uncheck()
+  await page.locator('label').filter({ hasText: /^without_tools$/ }).locator('input[type="checkbox"]').uncheck()
+  await page.getByRole('button', { name: 'Submit Batch' }).click()
+  await expect(page.getByText('Select at least one tool variant')).toBeVisible()
+  await expect(page).not.toHaveURL(/\/batches\/newbatch/)
+})
+
+test('validates at least one verification option required', async ({ page }) => {
+  await page.locator('select').first().selectOption('cve-2024-python')
+  await page.locator('label').filter({ hasText: 'gpt-4o' }).first().locator('input[type="checkbox"]').check()
+  await page.locator('label').filter({ hasText: 'zero_shot' }).locator('input[type="checkbox"]').check()
+  await page.locator('label').filter({ hasText: /^none$/ }).locator('input[type="checkbox"]').uncheck()
+  await page.getByRole('button', { name: 'Submit Batch' }).click()
+  await expect(page.getByText('Select at least one verification option')).toBeVisible()
+  await expect(page).not.toHaveURL(/\/batches\/newbatch/)
+})
+
 test('can select multiple models and strategies', async ({ page }) => {
   const gpt4oCheckbox = page.locator('label').filter({ hasText: 'gpt-4o' }).first().locator('input[type="checkbox"]')
   const claudeCheckbox = page.locator('label').filter({ hasText: 'claude-3-5-sonnet-20241022' }).locator('input[type="checkbox"]')

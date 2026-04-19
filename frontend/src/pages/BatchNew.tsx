@@ -155,8 +155,15 @@ export default function BatchNew() {
   const datasetError = submitAttempted && !selectedDataset ? 'Please select a dataset' : undefined
   const modelsError = submitAttempted && selectedModels.length === 0 ? 'Select at least one model' : undefined
   const strategiesError = submitAttempted && selectedStrategies.length === 0 ? 'Select at least one strategy' : undefined
+  const toolVariantsError = submitAttempted && toolVariants.length === 0 ? 'Select at least one tool variant' : undefined
+  const verificationError = submitAttempted && verification.length === 0 ? 'Select at least one verification option' : undefined
 
-  const isValid = !!selectedDataset && selectedModels.length > 0 && selectedStrategies.length > 0
+  const isValid =
+    !!selectedDataset &&
+    selectedModels.length > 0 &&
+    selectedStrategies.length > 0 &&
+    toolVariants.length > 0 &&
+    verification.length > 0
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -279,6 +286,7 @@ export default function BatchNew() {
                   options={['with_tools', 'without_tools']}
                   selected={toolVariants}
                   onChange={setToolVariants}
+                  error={toolVariantsError}
                 />
                 <CheckboxGroup
                   label="Tool extensions"
@@ -305,6 +313,7 @@ export default function BatchNew() {
                   options={['none', 'with_verification']}
                   selected={verification}
                   onChange={setVerification}
+                  error={verificationError}
                 />
                 <div>
                   <label className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1 block">

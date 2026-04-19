@@ -48,6 +48,8 @@ def _make_coordinator(tmp_path: Path, db: Database) -> BatchCoordinator:
             "claude-opus-4": ModelPricing(input_per_million=15.0, output_per_million=75.0),
         }
     )
+    config_dir = tmp_path / "config"
+    config_dir.mkdir(parents=True, exist_ok=True)
     return BatchCoordinator(
         k8s_client=None,
         storage_root=tmp_path / "storage",
@@ -57,6 +59,7 @@ def _make_coordinator(tmp_path: Path, db: Database) -> BatchCoordinator:
         db=db,
         reporter=MarkdownReportGenerator(),
         cost_calculator=cost_calc,
+        config_dir=config_dir,
         default_cap=4,
     )
 

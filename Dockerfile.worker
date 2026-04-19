@@ -1,3 +1,10 @@
+# ---------------------------------------------------------------------------
+# Build stage: compile gopls from source using the Go toolchain.
+# The Go toolchain is NOT carried into the final image — only the binary.
+# ---------------------------------------------------------------------------
+FROM golang:1.24-alpine AS gopls-builder
+RUN go install golang.org/x/tools/gopls@v0.16.2
+
 FROM python:3.14-slim
 
 WORKDIR /app
@@ -43,26 +50,18 @@ RUN npm install -g --no-audit --no-fund \
  && npm cache clean --force
 
 # ---------------------------------------------------------------------------
-# gopls — pre-compiled binary (avoids ~150 MB Go toolchain in the image).
-# Pin to a specific release; update the version and SHA-256 when upgrading.
+# gopls — copied from the gopls-builder stage (compiled from source).
+# The Go toolchain stays in the build stage; only the ~30 MB binary ships here.
+# To upgrade: change the version in the gopls-builder stage above.
 # ---------------------------------------------------------------------------
-ARG GOPLS_VERSION=0.16.1
-ARG GOPLS_SHA256=7b893a3d02b0e4dc13a0b8f7a1b87e18e36db07db5de9e1c2f479cdc0fa6e8db
-RUN curl -fsSL \
-      "https://github.com/golang/tools/releases/download/gopls%2Fv${GOPLS_VERSION}/gopls_linux_amd64.tar.gz" \
-      -o /tmp/gopls.tar.gz \
- && echo "${GOPLS_SHA256}  /tmp/gopls.tar.gz" | sha256sum -c - \
- && tar -xzf /tmp/gopls.tar.gz -C /tmp \
- && mv /tmp/gopls /usr/local/bin/gopls \
- && chmod +x /usr/local/bin/gopls \
- && rm /tmp/gopls.tar.gz
+COPY --from=gopls-builder /go/bin/gopls /usr/local/bin/gopls
 
 # ---------------------------------------------------------------------------
 # rust-analyzer — pre-compiled binary (single static binary, no Rust toolchain).
 # Pin to a specific release tag; update SHA-256 when upgrading.
 # ---------------------------------------------------------------------------
 ARG RUST_ANALYZER_VERSION=2024-10-28
-ARG RUST_ANALYZER_SHA256=a4f8f21e78efcfeed7c21b6e7093a3c51f9f3e01d09b0c7b7d61ddf7edab31c2
+ARG RUST_ANALYZER_SHA256=9c62085e707352ba9459bfe5ebaac5f68c084b067167679077644ec108474baa
 RUN curl -fsSL \
       "https://github.com/rust-lang/rust-analyzer/releases/download/${RUST_ANALYZER_VERSION}/rust-analyzer-x86_64-unknown-linux-gnu.gz" \
       -o /tmp/rust-analyzer.gz \

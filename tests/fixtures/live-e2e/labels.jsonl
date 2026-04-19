@@ -1,0 +1,1 @@
+{"id": "lbl-sqli-live-e2e", "dataset_version": "1.0.0", "file_path": "app.py", "line_start": 5, "line_end": 5, "cwe_id": "CWE-89", "vuln_class": "sqli", "severity": "high", "description": "SQL injection via string formatting", "source": "injected", "confidence": "confirmed", "created_at": "2026-01-01T00:00:00+00:00"}

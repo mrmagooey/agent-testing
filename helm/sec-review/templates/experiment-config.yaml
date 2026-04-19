@@ -1,0 +1,17 @@
+# Option C: symlink helm/sec-review/files -> ../../config (relative, committed).
+# Helm's .Files is rooted at the chart directory, so .Files.Glob "files/*.yaml"
+# resolves through the symlink to repo-root config/*.yaml at helm-template time.
+# No duplication — the config/ directory stays canonical at the repo root.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.coordinator.configMapName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sec-review.labels" . | nindent 4 }}
+data:
+  {{- (.Files.Glob "files/*.yaml").AsConfig | nindent 2 }}
+  {{- range $path, $content := .Files.Glob "files/prompts/*" }}
+  {{ printf "prompts/%s" (base $path) }}: |
+    {{- $content | toString | nindent 4 }}
+  {{- end }}

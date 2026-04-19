@@ -51,3 +51,10 @@ gatekeeper:
   enabled: false    # requires Gatekeeper installed
 fluentd:
   enabled: false    # requires `logging` namespace + Loki
+
+# Disable the devdocs-sync post-upgrade hook for local dev.
+# The hook requires sec-review-dataset-builder:latest which is not built
+# by `make redeploy`. Enable and build the image separately if needed.
+workerTools:
+  devdocs:
+    enabled: false

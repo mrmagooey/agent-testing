@@ -123,7 +123,8 @@ export default function CVEDiscovery() {
           <form onSubmit={handleSearch} className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 space-y-5">
             <div>
               <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Languages</p>
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <AnyButton active={languages.length === 0} onClick={() => setLanguages([])} />
                 {LANGUAGES.map((l) => (
                   <label key={l} className="flex items-center gap-1.5 cursor-pointer text-sm">
                     <input
@@ -140,7 +141,8 @@ export default function CVEDiscovery() {
 
             <div>
               <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Vuln Classes</p>
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <AnyButton active={vulnClasses.length === 0} onClick={() => setVulnClasses([])} />
                 {VULN_CLASSES.map((v) => (
                   <label key={v} className="flex items-center gap-1.5 cursor-pointer text-sm">
                     <input
@@ -157,7 +159,8 @@ export default function CVEDiscovery() {
 
             <div>
               <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Severity</p>
-              <div className="flex gap-4">
+              <div className="flex flex-wrap items-center gap-4">
+                <AnyButton active={severities.length === 0} onClick={() => setSeverities([])} />
                 {SEVERITIES.map((s) => (
                   <label key={s} className="flex items-center gap-1.5 cursor-pointer text-sm">
                     <input
@@ -295,5 +298,22 @@ export default function CVEDiscovery() {
         </div>
       )}
     </div>
+  )
+}
+
+function AnyButton({ active, onClick }: { active: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${
+        active
+          ? 'bg-indigo-600 border-indigo-600 text-white'
+          : 'border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:border-indigo-500 hover:text-indigo-600 dark:hover:text-indigo-400'
+      }`}
+    >
+      Any
+    </button>
   )
 }

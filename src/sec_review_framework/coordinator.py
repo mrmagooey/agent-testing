@@ -5,14 +5,29 @@ import json
 import logging
 import os
 import shutil
+import subprocess
 import threading
 import zipfile
 from datetime import datetime, timedelta
 from pathlib import Path
+
+RECONCILE_INTERVAL_S = int(os.environ.get("RECONCILE_INTERVAL_S", "5"))
+RUN_STALL_TIMEOUT_S = int(os.environ.get("RUN_STALL_TIMEOUT_S", "300"))
+
+# Resolve the frontend dist directory once at import time.
+# In the container the layout is /app/src/...coordinator.py and /app/frontend/dist,
+# so __file__ is 3 levels deep inside /app/src/sec_review_framework/.
+# Allow override via FRONTEND_DIST_DIR for non-standard layouts / tests.
+_MODULE_DIR = Path(__file__).resolve().parent          # .../sec_review_framework/
+_REPO_ROOT = _MODULE_DIR.parent.parent                 # /app  (or repo root in dev)
+FRONTEND_DIST_DIR = Path(
+    os.environ.get("FRONTEND_DIST_DIR", str(_REPO_ROOT / "frontend" / "dist"))
+)
+
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from sec_review_framework.data.experiment import (
     BatchStatus,
@@ -29,6 +44,16 @@ from sec_review_framework.profiles.review_profiles import BUILTIN_PROFILES, Prof
 from sec_review_framework.feedback.tracker import FeedbackTracker
 from sec_review_framework.cost.calculator import CostCalculator
 from sec_review_framework.config import ToolExtensionAvailability
+from sec_review_framework.data.evaluation import GroundTruthLabel
+from sec_review_framework.ground_truth.cve_importer import (
+    CVECandidate as _CVECandidate,
+    CVEDiscovery,
+    CVEImportSpec,
+    CVEImporter,
+    CVEResolver,
+    CVESelectionCriteria,
+)
+from sec_review_framework.ground_truth.vuln_injector import VulnInjector
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +126,7 @@ class BatchCoordinator:
         db: Database,
         reporter,                         # ReportGenerator instance
         cost_calculator: CostCalculator,
+        config_dir: Path | None = None,
         default_cap: int = 4,
         worker_resources=None,
         pvc_name: str = "sec-review-data",
@@ -116,6 +142,7 @@ class BatchCoordinator:
         self.db = db
         self.reporter = reporter
         self.cost_calculator = cost_calculator
+        self.config_dir = config_dir
         self.default_cap = default_cap
         self.worker_resources = worker_resources
         self.pvc_name = pvc_name
@@ -180,12 +207,16 @@ class BatchCoordinator:
         """
         Schedules K8s Jobs respecting per-model concurrency caps.
         Uses a polling loop: check running counts, schedule where under cap, sleep, repeat.
+        Runs that fail to schedule MAX_SCHEDULE_ATTEMPTS times are marked failed and dropped.
         """
+        MAX_SCHEDULE_ATTEMPTS = 3
         pending = list(runs)
         running_by_model: dict[str, int] = {}
+        attempt_counts: dict[str, int] = {}
 
         while pending:
             scheduled_this_round = []
+            failed_this_round = []
             for run in pending:
                 cap = self.concurrency_caps.get(run.model_id, self.default_cap)
                 current = running_by_model.get(run.model_id, 0)
@@ -196,9 +227,26 @@ class BatchCoordinator:
                         running_by_model[run.model_id] = current + 1
                         scheduled_this_round.append(run)
                     except Exception as e:
-                        logger.error(f"Failed to create K8s job for run {run.id}: {e}")
+                        attempt_counts[run.id] = attempt_counts.get(run.id, 0) + 1
+                        logger.error(
+                            f"Failed to create K8s job for run {run.id} "
+                            f"(attempt {attempt_counts[run.id]}/{MAX_SCHEDULE_ATTEMPTS}): {e}"
+                        )
+                        if attempt_counts[run.id] >= MAX_SCHEDULE_ATTEMPTS:
+                            logger.error(
+                                f"Run {run.id} exceeded max schedule attempts; marking failed"
+                            )
+                            try:
+                                await self.db.update_run(
+                                    run.id,
+                                    status="failed",
+                                    error=f"K8s job creation failed after {MAX_SCHEDULE_ATTEMPTS} attempts: {e}",
+                                )
+                            except Exception as db_err:
+                                logger.error(f"Could not mark run {run.id} failed in DB: {db_err}")
+                            failed_this_round.append(run)
 
-            for run in scheduled_this_round:
+            for run in scheduled_this_round + failed_this_round:
                 pending.remove(run)
 
             if pending:
@@ -410,6 +458,13 @@ class BatchCoordinator:
                         cancelled += 1
             except Exception as e:
                 logger.error(f"Error cancelling K8s jobs for batch {batch_id}: {e}")
+        # Flip any non-terminal runs to "cancelled" so status counts reflect the
+        # batch state. Runs that already completed/failed on disk keep their
+        # terminal status.
+        runs = await self.db.list_runs(batch_id)
+        for run in runs:
+            if run["status"] in ("pending", "running"):
+                await self.db.update_run(run["id"], status="cancelled")
         await self.db.update_batch_status(batch_id, "cancelled")
         return cancelled
 
@@ -469,6 +524,16 @@ class BatchCoordinator:
                 for run_data in orphaned:
                     run_config_path = config_dir / f"{run_data['id']}.json"
                     if not run_config_path.exists():
+                        logger.warning(
+                            "Run %s has no config file — batch likely deleted; "
+                            "marking failed",
+                            run_data["id"],
+                        )
+                        await self.db.update_run(
+                            run_data["id"],
+                            status="failed",
+                            error="run config missing — batch likely deleted",
+                        )
                         continue
                     from sec_review_framework.data.experiment import ExperimentRun
                     run = ExperimentRun.model_validate_json(run_config_path.read_text())
@@ -489,6 +554,293 @@ class BatchCoordinator:
             status = await self.get_batch_status(batch_id)
             if status.running == 0 and status.pending == 0 and status.total > 0:
                 await self.finalize_batch(batch_id)
+
+    # ------------------------------------------------------------------
+    # Periodic reconcile loop (flips running → completed / failed)
+    # ------------------------------------------------------------------
+
+    async def _reconcile_once(self) -> None:
+        """
+        Single iteration of the result-scanning reconcile step.
+
+        1. Calls existing ``reconcile()`` so any orphaned-pending runs are
+           re-dispatched (idempotent).
+        2. For every active batch, reads ``run_result.json`` for each
+           ``running`` run and updates the DB accordingly.
+        3. Finalises batches where running + pending == 0.
+
+        Safe to call multiple times; will not double-finalize.
+        """
+        # Step 1: re-dispatch orphaned pending runs (existing logic)
+        try:
+            await self.reconcile()
+        except Exception as exc:
+            logger.error("reconcile() raised during _reconcile_once: %s", exc)
+
+        # Step 2: scan result files for running runs
+        try:
+            batches = await self.db.list_batches()
+        except Exception as exc:
+            logger.error("Failed to list batches in _reconcile_once: %s", exc)
+            return
+
+        active = [
+            b for b in batches
+            if b["status"] not in ("completed", "cancelled", "failed")
+        ]
+
+        for batch in active:
+            batch_id = batch["id"]
+            try:
+                await self._reconcile_batch_once(batch, batch_id)
+            except Exception as exc:
+                logger.error(
+                    "Unhandled error processing batch %s in _reconcile_once — skipping: %s",
+                    batch_id, exc,
+                )
+
+    async def _reconcile_batch_once(self, batch: dict, batch_id: str) -> None:
+        """Process one batch within _reconcile_once.
+
+        Extracted so that a transient DB error on one batch does not halt
+        processing of other batches — the caller catches any exception raised
+        here and continues to the next batch.
+        """
+        # Re-check status in case another iteration already finalised it
+        fresh_batch = await self.db.get_batch(batch_id)
+        if not fresh_batch or fresh_batch["status"] in (
+            "completed", "cancelled", "failed"
+        ):
+            return
+
+        try:
+            runs = await self.db.list_runs(batch_id)
+        except Exception as exc:
+            logger.error(
+                "Failed to list runs for batch %s: %s", batch_id, exc
+            )
+            return
+
+        for run in runs:
+            if run["status"] != "running":
+                continue
+
+            run_id = run["id"]
+            result_file = (
+                self.storage_root / "outputs" / batch_id / run_id / "run_result.json"
+            )
+
+            if result_file.exists():
+                # Parse result and update DB
+                try:
+                    result = RunResult.model_validate_json(result_file.read_text())
+                except Exception as exc:
+                    logger.error(
+                        "Failed to parse run_result.json for run %s: %s — marking failed",
+                        run_id, exc,
+                    )
+                    await self.db.update_run(
+                        run_id,
+                        status="failed",
+                        error=f"run_result.json parse error: {exc}",
+                        completed_at=datetime.utcnow().isoformat(),
+                    )
+                    continue
+
+                await self.db.update_run(
+                    run_id,
+                    status=result.status.value,
+                    duration_seconds=result.duration_seconds,
+                    error=result.error,
+                    completed_at=(
+                        result.completed_at.isoformat()
+                        if result.completed_at
+                        else datetime.utcnow().isoformat()
+                    ),
+                    estimated_cost_usd=result.estimated_cost_usd,
+                )
+
+                # Record cost against the batch — only if the run had no prior
+                # cost recorded (estimated_cost_usd was NULL or zero in DB).
+                prior_cost = run.get("estimated_cost_usd")
+                if (prior_cost is None or prior_cost == 0.0) and result.estimated_cost_usd:
+                    tracker = self._cost_trackers.get(batch_id)
+                    if tracker is None:
+                        # Coordinator restarted mid-batch; rebuild tracker from DB
+                        max_cost = batch.get("max_cost_usd")
+                        tracker = BatchCostTracker(batch_id, max_cost)
+                        self._cost_trackers[batch_id] = tracker
+                    cap_exceeded = tracker.record_job_cost(result.estimated_cost_usd)
+                    await self.db.add_batch_spend(batch_id, result.estimated_cost_usd)
+                    if cap_exceeded:
+                        logger.warning(
+                            "Batch %s exceeded cost cap — cancelling", batch_id
+                        )
+                        await self.cancel_batch(batch_id)
+                        break  # don't process more runs; batch is now cancelled
+
+            else:
+                # No result file yet — check K8s Job status
+                if K8S_AVAILABLE and self.k8s_client:
+                    try:
+                        jobs = self.k8s_client.list_namespaced_job(
+                            self.namespace,
+                            label_selector=f"batch={batch_id}",
+                        )
+                        run_jobs = [
+                            j for j in jobs.items
+                            if j.metadata.annotations
+                            and j.metadata.annotations.get(
+                                "sec-review.io/run-id"
+                            ) == run_id
+                        ]
+                        if not run_jobs:
+                            # Job TTL-reaped or never created — mark failed
+                            logger.warning(
+                                "No K8s Job found for run %s — marking failed", run_id
+                            )
+                            await self.db.update_run(
+                                run_id,
+                                status="failed",
+                                error="K8s Job not found (TTL-reaped or creation failed)",
+                                completed_at=datetime.utcnow().isoformat(),
+                            )
+                        else:
+                            job = run_jobs[0]
+                            if (job.status.failed or 0) > 0 or (
+                                job.status.succeeded or 0
+                            ) > 0:
+                                # Job terminal but no result file
+                                logger.warning(
+                                    "K8s Job for run %s is terminal but no result file "
+                                    "— marking failed",
+                                    run_id,
+                                )
+                                await self.db.update_run(
+                                    run_id,
+                                    status="failed",
+                                    error=(
+                                        "K8s Job finished but run_result.json not found"
+                                    ),
+                                    completed_at=datetime.utcnow().isoformat(),
+                                )
+                            else:
+                                # Job appears active but may be stalled (no live pods)
+                                await self._check_stalled_job(run_id, job)
+                    except Exception as exc:
+                        logger.error(
+                            "Error checking K8s job for run %s: %s", run_id, exc
+                        )
+                # No K8s available — leave status as running until result appears
+
+        # Step 3: finalise if all runs are done
+        # Re-check batch status (may have been cancelled above)
+        fresh_batch2 = await self.db.get_batch(batch_id)
+        if not fresh_batch2 or fresh_batch2["status"] in (
+            "completed", "cancelled", "failed"
+        ):
+            return
+
+        counts = await self.db.count_runs_by_status(batch_id)
+        running_count = counts.get("running", 0)
+        pending_count = counts.get("pending", 0)
+        total = fresh_batch2.get("total_runs") or 0
+        if total > 0 and running_count == 0 and pending_count == 0:
+            logger.info("Batch %s complete — finalising", batch_id)
+            try:
+                await self.finalize_batch(batch_id)
+            except Exception as exc:
+                logger.error("finalize_batch(%s) raised: %s", batch_id, exc)
+
+    async def _check_stalled_job(self, run_id: str, job) -> None:
+        """
+        Detect a K8s Job that reports active>0 but has no live pods and has
+        been in that state longer than RUN_STALL_TIMEOUT_S.  Mark the run
+        failed and delete the stuck Job so it doesn't keep accumulating.
+        """
+        if not K8S_AVAILABLE or self.k8s_client is None:
+            return
+
+        # Only inspect jobs that are actually active according to the Job status
+        if (job.status.active or 0) == 0:
+            return
+
+        # Check how old the job is
+        start_time = None
+        if job.status.start_time:
+            start_time = job.status.start_time
+        elif job.metadata.creation_timestamp:
+            start_time = job.metadata.creation_timestamp
+
+        if start_time is not None:
+            # start_time may be tz-aware; use utcnow with tzinfo for comparison
+            from datetime import timezone as _tz
+            now_utc = datetime.now(_tz.utc)
+            # Make start_time tz-aware if needed
+            if start_time.tzinfo is None:
+                start_time = start_time.replace(tzinfo=_tz.utc)
+            age_seconds = (now_utc - start_time).total_seconds()
+            if age_seconds < RUN_STALL_TIMEOUT_S:
+                return  # Too young to be declared stalled
+
+        job_name = job.metadata.name
+
+        try:
+            pod_list = self.k8s_client.list_namespaced_pod(
+                self.namespace,
+                label_selector=f"job-name={job_name}",
+            )
+            live_pods = [
+                p for p in pod_list.items
+                if p.status and p.status.phase in ("Pending", "Running", "Unknown")
+            ]
+        except Exception as exc:
+            logger.error(
+                "Error listing pods for job %s (run %s): %s", job_name, run_id, exc
+            )
+            return
+
+        if live_pods:
+            return  # Still has live pods — not stalled
+
+        logger.warning(
+            "Run %s: Job %s has active=%d but no live pods and age >= %ds "
+            "— marking failed (likely OOM or eviction)",
+            run_id,
+            job_name,
+            job.status.active or 0,
+            RUN_STALL_TIMEOUT_S,
+        )
+        await self.db.update_run(
+            run_id,
+            status="failed",
+            error="Job has no active pods; likely OOM or eviction",
+            completed_at=datetime.utcnow().isoformat(),
+        )
+        try:
+            self.k8s_client.delete_namespaced_job(
+                job_name,
+                self.namespace,
+                body=kubernetes.client.V1DeleteOptions(propagation_policy="Background"),
+            )
+            logger.info("Deleted stalled Job %s for run %s", job_name, run_id)
+        except Exception as exc:
+            logger.error(
+                "Failed to delete stalled Job %s (run %s): %s", job_name, run_id, exc
+            )
+
+    async def _reconcile_loop(self) -> None:
+        """
+        Runs ``_reconcile_once()`` every ``RECONCILE_INTERVAL_S`` seconds.
+        Exceptions inside ``_reconcile_once`` are caught and logged; the loop
+        never crashes the coordinator.
+        """
+        while True:
+            try:
+                await self._reconcile_once()
+            except Exception as exc:
+                logger.error("Unhandled exception in _reconcile_once: %s", exc)
+            await asyncio.sleep(RECONCILE_INTERVAL_S)
 
     # ------------------------------------------------------------------
     # Result access
@@ -539,16 +891,38 @@ class BatchCoordinator:
             raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
 
         result_path = run_data.get("result_path")
+        run_dir: Path | None = None
         if result_path and Path(result_path).exists():
-            return RunResult.model_validate_json(Path(result_path).read_text()).model_dump()
+            payload = RunResult.model_validate_json(Path(result_path).read_text()).model_dump()
+            run_dir = Path(result_path).parent
+        else:
+            result_file = self.storage_root / "outputs" / batch_id / run_id / "run_result.json"
+            if not result_file.exists():
+                raise HTTPException(
+                    status_code=404, detail=f"Result for run {run_id} not available yet"
+                )
+            payload = RunResult.model_validate_json(result_file.read_text()).model_dump()
+            run_dir = result_file.parent
 
-        result_file = self.storage_root / "outputs" / batch_id / run_id / "run_result.json"
-        if result_file.exists():
-            return RunResult.model_validate_json(result_file.read_text()).model_dump()
+        # Attach tool_calls and messages from companion JSONL files so the
+        # RunDetail UI can render them without separate fetches.
+        def _load_jsonl(path: Path) -> list[dict]:
+            if not path.exists():
+                return []
+            out: list[dict] = []
+            for line in path.read_text().splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    out.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+            return out
 
-        raise HTTPException(
-            status_code=404, detail=f"Result for run {run_id} not available yet"
-        )
+        payload["tool_calls"] = _load_jsonl(run_dir / "tool_calls.jsonl")
+        payload["messages"] = _load_jsonl(run_dir / "conversation.jsonl")
+        return payload
 
     def get_matrix_report_json(self, batch_id: str) -> dict:
         report_file = self.storage_root / "outputs" / batch_id / "matrix_report.json"
@@ -626,8 +1000,11 @@ class BatchCoordinator:
                 if not tool_name.startswith(AUDIT_URL_CHECK_EXEMPT_PREFIXES):
                     if url_pattern.search(json.dumps(entry.get("inputs", {}))):
                         suspicious.append(entry)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "audit_tool_calls: skipping malformed JSONL line in %s — %s: %.80s",
+                    tool_calls_file, exc, line,
+                )
 
         return {"counts_by_tool": counts, "suspicious_calls": suspicious}
 
@@ -644,8 +1021,11 @@ class BatchCoordinator:
                     finding = Finding.model_validate(f)
                     identity = str(FindingIdentity.from_finding(finding))
                     out[identity] = f
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning(
+                        "compare_runs: skipping malformed finding in run %s/%s — %s: %.80s",
+                        run_a_id, run_b_id, exc, str(f),
+                    )
             return out
 
         findings_a = index_findings(result_a_dict)
@@ -692,14 +1072,180 @@ class BatchCoordinator:
             result.append({"name": dataset_dir.name, "label_count": label_count})
         return result
 
-    def import_cve(self, spec) -> list:
-        raise NotImplementedError("CVE import not yet implemented")
+    def import_cve(self, spec: dict) -> list[GroundTruthLabel]:
+        try:
+            import_spec = CVEImportSpec(**spec)
+        except (ValidationError, TypeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        importer = self._build_cve_importer()
+        try:
+            labels = importer.import_from_spec(import_spec)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except subprocess.CalledProcessError:
+            raise HTTPException(status_code=502, detail="git clone or checkout failed")
+        self._append_labels(import_spec.dataset_name, labels)
+        return labels
 
-    def inject_vuln(self, dataset_name: str, req) -> object:
-        raise NotImplementedError("Vulnerability injection not yet implemented")
+    def inject_vuln(self, dataset_name: str, req: dict) -> object:
+        repo_path, template_id, target_file, substitutions = self._parse_injection_request(
+            dataset_name, req
+        )
+        injector = self._build_vuln_injector()
+        if template_id not in injector.templates:
+            raise HTTPException(status_code=404, detail=f"Template {template_id} not found")
+        try:
+            result = injector.inject(
+                repo_path=repo_path,
+                template_id=template_id,
+                target_file=target_file,
+                substitutions=substitutions,
+            )
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail=f"Target file {target_file} not found")
+        self._append_labels(dataset_name, [result.label])
+        return result.label
 
-    def preview_injection(self, dataset_name: str, req) -> dict:
-        raise NotImplementedError("Injection preview not yet implemented")
+    def preview_injection(self, dataset_name: str, req: dict) -> dict:
+        repo_path, template_id, target_file, substitutions = self._parse_injection_request(
+            dataset_name, req
+        )
+        injector = self._build_vuln_injector()
+        if template_id not in injector.templates:
+            raise HTTPException(status_code=404, detail=f"Template {template_id} not found")
+        try:
+            preview = injector.preview(
+                repo_path=repo_path,
+                template_id=template_id,
+                target_file=target_file,
+                substitutions=substitutions,
+            )
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail=f"Target file {target_file} not found")
+        return preview.model_dump(mode="json")
+
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    def _parse_injection_request(
+        self, dataset_name: str, req: dict
+    ) -> tuple[Path, str, str, dict | None]:
+        repo_path = self.storage_root / "datasets" / dataset_name / "repo"
+        if not repo_path.exists():
+            raise HTTPException(status_code=404, detail=f"Dataset {dataset_name} not found")
+        template_id = req.get("template_id")
+        target_file = req.get("target_file") or req.get("file_path")
+        substitutions = req.get("substitutions")
+        if not template_id or not target_file:
+            raise HTTPException(status_code=400, detail="template_id and target_file are required")
+        # Prevent path traversal: target_file must resolve inside repo_path.
+        repo_resolved = repo_path.resolve()
+        target_resolved = (repo_path / target_file).resolve()
+        if not target_resolved.is_relative_to(repo_resolved):
+            raise HTTPException(
+                status_code=400, detail=f"target_file {target_file} escapes dataset repo"
+            )
+        return repo_path, template_id, target_file, substitutions
+
+    def _append_labels(self, dataset_name: str, new_labels: list[GroundTruthLabel]) -> None:
+        """Atomically append new labels to datasets/{name}/labels.json."""
+        labels_file = self.storage_root / "datasets" / dataset_name / "labels.json"
+        labels_file.parent.mkdir(parents=True, exist_ok=True)
+        existing: list[dict] = []
+        if labels_file.exists():
+            try:
+                existing = json.loads(labels_file.read_text())
+                if not isinstance(existing, list):
+                    existing = []
+            except Exception:
+                existing = []
+        combined = existing + [label.model_dump(mode="json") for label in new_labels]
+        tmp = labels_file.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(combined, indent=2))
+        tmp.replace(labels_file)
+
+    def _build_cve_resolver(self) -> CVEResolver:
+        token = os.environ.get("GITHUB_TOKEN", "")
+        return CVEResolver(github_token=token)
+
+    def _build_cve_importer(self) -> CVEImporter:
+        if not hasattr(self, "_cve_importer"):
+            self._cve_importer = CVEImporter(
+                datasets_root=self.storage_root / "datasets",
+                resolver=self._build_cve_resolver(),
+            )
+        return self._cve_importer
+
+    def discover_cves(self, req: "DiscoverCVEsRequest") -> "list[CVECandidateResponse]":
+        """Discover CVE candidates matching the provided criteria."""
+        from sec_review_framework.data.findings import Severity, VulnClass
+
+        criteria_kwargs: dict = {}
+        if req.languages:
+            criteria_kwargs["languages"] = req.languages
+        if req.vuln_classes:
+            try:
+                criteria_kwargs["vuln_classes"] = [VulnClass(v) for v in req.vuln_classes]
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=f"Invalid vuln_class: {exc}")
+        if req.severities:
+            try:
+                sev_order = [
+                    Severity.INFO, Severity.LOW, Severity.MEDIUM,
+                    Severity.HIGH, Severity.CRITICAL,
+                ]
+                requested = [Severity(s) for s in req.severities]
+                criteria_kwargs["min_severity"] = min(
+                    requested, key=lambda s: sev_order.index(s)
+                )
+                criteria_kwargs["max_severity"] = max(
+                    requested, key=lambda s: sev_order.index(s)
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=f"Invalid severity: {exc}")
+        if req.patch_size_min is not None:
+            criteria_kwargs["min_lines_changed"] = req.patch_size_min
+        if req.patch_size_max is not None:
+            criteria_kwargs["max_lines_changed"] = req.patch_size_max
+        if req.date_from:
+            criteria_kwargs["published_after"] = req.date_from
+        if req.date_to:
+            criteria_kwargs["published_before"] = req.date_to
+
+        criteria = CVESelectionCriteria(**criteria_kwargs)
+        resolver = self._build_cve_resolver()
+        discovery = CVEDiscovery(resolver=resolver)
+        try:
+            candidates = discovery.discover(criteria, max_results=req.max_results)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"CVE discovery failed: {exc}")
+        return [CVECandidateResponse.from_candidate(c) for c in candidates]
+
+    def resolve_cve(self, cve_id: str) -> "CVECandidateResponse":
+        """Resolve a single CVE by ID and return a scored candidate shape."""
+        resolver = self._build_cve_resolver()
+        resolved = resolver.resolve(cve_id)
+        if not resolved:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Could not resolve {cve_id} via GHSA/OSV/NVD",
+            )
+        candidate = _CVECandidate(
+            resolved=resolved,
+            score=1.0,
+            score_breakdown={},
+            importable=bool(resolved.fix_commit_sha),
+        )
+        return CVECandidateResponse.from_candidate(candidate)
+
+    def _build_vuln_injector(self) -> VulnInjector:
+        # Templates are read once at construction; cache lives for the
+        # coordinator's lifetime. Restart the pod to pick up on-disk changes.
+        if not hasattr(self, "_vuln_injector"):
+            templates_root = self.storage_root / "datasets" / "templates"
+            self._vuln_injector = VulnInjector(templates_root=templates_root)
+        return self._vuln_injector
 
     def get_labels(self, dataset_name: str, version: str | None = None) -> list[dict]:
         labels_file = self.storage_root / "datasets" / dataset_name / "labels.json"
@@ -810,7 +1356,9 @@ class BatchCoordinator:
         return zip_path
 
     def list_models(self) -> list[dict]:
-        config_file = self.storage_root.parent / "config" / "models.yaml"
+        if self.config_dir is None:
+            return []
+        config_file = self.config_dir / "models.yaml"
         if not config_file.exists():
             return []
         try:
@@ -846,16 +1394,25 @@ class BatchCoordinator:
         ]
 
     def list_templates(self) -> list[dict]:
-        templates_dir = self.storage_root.parent / "config" / "injection_templates"
+        templates_dir = self.storage_root / "datasets" / "templates"
         if not templates_dir.exists():
             return []
         try:
             import yaml
             templates = []
-            for f in templates_dir.glob("*.yaml"):
+            for f in templates_dir.rglob("*.yaml"):
                 try:
                     data = yaml.safe_load(f.read_text())
-                    templates.append({"id": f.stem, **data})
+                    if not isinstance(data, dict):
+                        continue
+                    templates.append({
+                        "id": data.get("id", f.stem),
+                        "vuln_class": data.get("vuln_class", ""),
+                        "cwe_id": data.get("cwe_id", ""),
+                        "description": data.get("description", ""),
+                        "severity": data.get("severity", ""),
+                        "language": data.get("language", ""),
+                    })
                 except Exception:
                     pass
             return templates
@@ -906,6 +1463,57 @@ class EstimateRequest(BaseModel):
     target_kloc: float
 
 
+class DiscoverCVEsRequest(BaseModel):
+    """Criteria for CVE discovery — all fields are optional filters."""
+
+    languages: list[str] | None = None
+    vuln_classes: list[str] | None = None
+    severities: list[str] | None = None
+    patch_size_min: int | None = None
+    patch_size_max: int | None = None
+    date_from: str | None = None
+    date_to: str | None = None
+    max_results: int = 50
+
+
+class CVECandidateResponse(BaseModel):
+    """Flat CVE candidate shape that mirrors the frontend CVECandidate interface."""
+
+    cve_id: str
+    score: float
+    vuln_class: str
+    severity: str
+    language: str
+    repo: str
+    files_changed: int
+    lines_changed: int
+    importable: bool
+    description: str | None = None
+    advisory_url: str | None = None
+    fix_commit: str | None = None
+
+    @classmethod
+    def from_candidate(cls, c: _CVECandidate) -> "CVECandidateResponse":
+        r = c.resolved
+        advisory_url = None
+        if r.repo_url and r.fix_commit_sha:
+            advisory_url = f"{r.repo_url}/commit/{r.fix_commit_sha}"
+        return cls(
+            cve_id=r.cve_id,
+            score=c.score,
+            vuln_class=r.vuln_class.value,
+            severity=r.severity.value,
+            language=r.language,
+            repo=r.repo_url,
+            files_changed=len(r.affected_files),
+            lines_changed=r.lines_changed,
+            importable=c.importable,
+            description=r.description or None,
+            advisory_url=advisory_url,
+            fix_commit=r.fix_commit_sha or None,
+        )
+
+
 AVG_TOKENS_PER_KLOC = 1400  # prompt + completion, calibrated empirically
 
 
@@ -918,10 +1526,23 @@ coordinator: BatchCoordinator = None  # type: ignore[assignment]  # initialized 
 
 
 @app.middleware("http")
-async def strip_api_prefix(request, call_next):
-    if request.scope["path"].startswith("/api/"):
-        request.scope["path"] = request.scope["path"][4:]
+async def api_and_spa_router(request, call_next):
+    """Route /api/* to FastAPI endpoints and serve index.html for SPA routes.
+
+    Browser navigation (Accept: text/html) to any non-API path — including
+    SPA paths that collide with API routes (e.g. /batches/{id}) — returns the
+    React shell so client-side routing can render the view. httpx / curl
+    requests without an Accept header fall through to the API routes.
+    """
+    path = request.scope["path"]
+    if path.startswith("/api/"):
+        request.scope["path"] = path[4:]
         request.scope["raw_path"] = request.scope["path"].encode()
+        return await call_next(request)
+    if request.method == "GET" and "text/html" in request.headers.get("accept", ""):
+        index_path = FRONTEND_DIST_DIR / "index.html"
+        if index_path.exists():
+            return FileResponse(str(index_path), media_type="text/html")
     return await call_next(request)
 
 
@@ -936,7 +1557,24 @@ def build_coordinator_from_env() -> BatchCoordinator:
                         (default: /app/config)
     """
     from sec_review_framework.config import ConcurrencyConfig
+    from sec_review_framework.reporting.generator import ReportGenerator
+    from sec_review_framework.reporting.json_report import JSONReportGenerator
     from sec_review_framework.reporting.markdown import MarkdownReportGenerator
+
+    class _MarkdownAndJSONReportGenerator(ReportGenerator):
+        """Writes both markdown and JSON reports for every run + matrix."""
+
+        def __init__(self) -> None:
+            self._md = MarkdownReportGenerator()
+            self._json = JSONReportGenerator()
+
+        def render_run(self, result, output_dir: Path) -> None:
+            self._md.render_run(result, output_dir)
+            self._json.render_run(result, output_dir)
+
+        def render_matrix(self, results, output_dir: Path) -> None:
+            self._md.render_matrix(results, output_dir)
+            self._json.render_matrix(results, output_dir)
 
     storage_root = Path(os.environ.get("STORAGE_ROOT", "/data"))
     worker_image = os.environ.get("WORKER_IMAGE", "sec-review-worker:latest")
@@ -968,8 +1606,9 @@ def build_coordinator_from_env() -> BatchCoordinator:
         worker_image=worker_image,
         namespace=namespace,
         db=db,
-        reporter=MarkdownReportGenerator(),
+        reporter=_MarkdownAndJSONReportGenerator(),
         cost_calculator=CostCalculator.from_config(config_dir),
+        config_dir=config_dir,
         default_cap=default_cap,
         pvc_name=os.environ.get("SHARED_PVC_NAME", "sec-review-data"),
         llm_secret_name=os.environ.get("LLM_SECRET_NAME", "llm-api-keys"),
@@ -990,6 +1629,11 @@ async def startup() -> None:
     asyncio.create_task(
         retention_cleanup_loop(coordinator.storage_root, retention_days=30)
     )
+    # Start the periodic reconcile loop in real deployments.
+    # Gated so unit/integration tests using TestClient don't get the loop.
+    _enable_loop = os.environ.get("ENABLE_RECONCILE_LOOP", "").strip().lower()
+    if K8S_AVAILABLE or _enable_loop in ("1", "true", "yes"):
+        asyncio.create_task(coordinator._reconcile_loop())
 
 
 # --- Health ---
@@ -1012,16 +1656,35 @@ async def run_smoke_test() -> dict:
     if coordinator is None:
         raise HTTPException(status_code=503, detail="Coordinator not initialised")
 
-    # Pick the first configured model, fall back to a sensible default
+    # Pick the first configured model; require at least one to be present
     configured_models = coordinator.list_models()
-    model_id = configured_models[0]["id"] if configured_models else "gpt-4o-mini"
+    if not configured_models:
+        raise HTTPException(
+            status_code=412,
+            detail="No models configured. Add a model before running smoke tests.",
+        )
+    model_id = configured_models[0]["id"]
 
-    # Pick the first available dataset, fall back to a placeholder name
+    # Pick the first available dataset; require at least one to be present
     datasets = coordinator.list_datasets()
-    dataset_name = datasets[0]["name"] if datasets else "smoke-test-dataset"
+    if not datasets:
+        raise HTTPException(
+            status_code=412,
+            detail="No datasets registered. Seed a dataset before running smoke tests.",
+        )
+    dataset_name = datasets[0]["name"]
 
     timestamp = int(datetime.utcnow().timestamp())
     batch_id = f"smoke-test-{timestamp}"
+
+    existing_batches = await coordinator.list_batches()
+    terminal = {"completed", "failed", "cancelled"}
+    for b in existing_batches:
+        if b["batch_id"].startswith("smoke-test-") and b["status"] not in terminal:
+            raise HTTPException(
+                status_code=409,
+                detail=f"A smoke test is already running: {b['batch_id']}",
+            )
 
     matrix = ExperimentMatrix(
         batch_id=batch_id,
@@ -1034,6 +1697,7 @@ async def run_smoke_test() -> dict:
         verification_variants=[VerificationVariant.NONE],
         num_repetitions=1,
         max_batch_cost_usd=5.0,
+        strategy_configs={"single_agent": {"max_turns": 10}},
     )
 
     await coordinator.submit_batch(matrix)
@@ -1178,6 +1842,25 @@ def list_datasets() -> list[dict]:
     return coordinator.list_datasets()
 
 
+@app.post("/datasets/discover-cves")
+def discover_cves(req: DiscoverCVEsRequest) -> list[CVECandidateResponse]:
+    """Search for CVE candidates matching the given criteria.
+
+    Makes external calls to GitHub Advisory DB, OSV.dev, and/or NVD.
+    Returns an empty list when no candidates match (never 404).
+    """
+    return coordinator.discover_cves(req)
+
+
+@app.get("/datasets/resolve-cve")
+def resolve_cve(id: str) -> CVECandidateResponse:
+    """Resolve a single CVE ID to a candidate record.
+
+    Returns 404 if the CVE cannot be found in GHSA/OSV/NVD.
+    """
+    return coordinator.resolve_cve(id)
+
+
 @app.post("/datasets/import-cve", status_code=201)
 def import_cve(spec: dict) -> dict:
     """Import a CVE-patched repo as a ground truth dataset."""
@@ -1275,6 +1958,6 @@ def list_tool_extensions() -> list[dict]:
 
 # Static files — mount last so all API routes take priority
 try:
-    app.mount("/", StaticFiles(directory="frontend/dist", html=True), name="frontend")
+    app.mount("/", StaticFiles(directory=str(FRONTEND_DIST_DIR), html=True), name="frontend")
 except Exception:
     pass  # frontend not built in dev

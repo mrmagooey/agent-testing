@@ -1,0 +1,9 @@
+id: test_sqli_format_string
+vuln_class: sqli
+cwe_id: CWE-89
+language: python
+description: SQL query constructed via string formatting (test fixture)
+severity: high
+patch_template: "    query = \"SELECT * FROM users WHERE name = '%s'\" % name\n    cursor.execute(query)\n"
+anchor_pattern: "def \\w+\\(.*\\):"
+anchor_mode: after
