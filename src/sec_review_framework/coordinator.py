@@ -1523,6 +1523,7 @@ AVG_TOKENS_PER_KLOC = 1400  # prompt + completion, calibrated empirically
 
 app = FastAPI(title="Security Review Framework", version="1.0.0")
 coordinator: BatchCoordinator = None  # type: ignore[assignment]  # initialized at startup
+_background_tasks: set[asyncio.Task] = set()
 
 
 @app.middleware("http")
@@ -1626,14 +1627,25 @@ async def startup() -> None:
         coordinator = build_coordinator_from_env()
         await coordinator.db.init()
     await coordinator.reconcile()
-    asyncio.create_task(
+    _background_tasks.add(asyncio.create_task(
         retention_cleanup_loop(coordinator.storage_root, retention_days=30)
-    )
-    # Start the periodic reconcile loop in real deployments.
-    # Gated so unit/integration tests using TestClient don't get the loop.
+    ))
+    # Periodic reconcile loop is only needed when there's an active scheduler
+    # (K8s cluster) or when explicitly enabled for integration tests.
     _enable_loop = os.environ.get("ENABLE_RECONCILE_LOOP", "").strip().lower()
     if K8S_AVAILABLE or _enable_loop in ("1", "true", "yes"):
-        asyncio.create_task(coordinator._reconcile_loop())
+        _background_tasks.add(asyncio.create_task(coordinator._reconcile_loop()))
+
+
+@app.on_event("shutdown")
+async def shutdown() -> None:
+    # Cancel all tracked tasks so TestClient teardown (and real SIGTERM) doesn't
+    # leave behind coroutines holding closures over per-test storage roots.
+    for task in _background_tasks:
+        task.cancel()
+    if _background_tasks:
+        await asyncio.gather(*_background_tasks, return_exceptions=True)
+    _background_tasks.clear()
 
 
 # --- Health ---

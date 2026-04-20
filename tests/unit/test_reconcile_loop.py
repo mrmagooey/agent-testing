@@ -632,29 +632,42 @@ async def test_schedule_jobs_cap_wait_does_not_increment_attempt_count(
 
     coord._create_k8s_job = MagicMock(side_effect=_create_side_effect)
 
-    sleep_calls = 0
+    # Break the scheduler loop after one round. _schedule_jobs' local
+    # running_by_model dict is never decremented, so a legitimate "cap freed"
+    # cannot be simulated without reaching into the function. After round 1,
+    # run_a is scheduled and run_b is still below-cap-blocked — enough state
+    # to verify the invariant. Raising from the sleep also avoids an infinite
+    # tight loop: mock_asyncio.sleep never yields to the event loop, so
+    # asyncio.wait_for(timeout=5.0) cannot cancel, and the loop would spin
+    # forever while MagicMock accumulates call history (was ~5 GB+ of RSS).
+    class _LoopBreak(Exception):
+        pass
 
     async def _fake_sleep(n):
-        nonlocal sleep_calls
-        sleep_calls += 1
-        # After first sleep, simulate run_a completing so cap frees up by
-        # patching running_by_model indirectly — we can't easily do that, so
-        # just let the scheduler proceed: run_b will be scheduled in round 2.
+        raise _LoopBreak
 
     with patch("sec_review_framework.coordinator.asyncio") as mock_asyncio:
         mock_asyncio.sleep = AsyncMock(side_effect=_fake_sleep)
-        await asyncio.wait_for(
-            coord._schedule_jobs(BATCH_ID, [run_a, run_b]),
-            timeout=5.0,
-        )
+        with pytest.raises(_LoopBreak):
+            await coord._schedule_jobs(BATCH_ID, [run_a, run_b])
 
-    # Both runs should have been scheduled (run_a in round 1, run_b in round 2)
-    for run in (run_a, run_b):
-        db_run = await temp_db.get_run(run.id)
-        assert db_run is not None
-        assert db_run["status"] == "running", (
-            f"Run {run.id} should be 'running', got '{db_run['status']}'"
-        )
+    # Round 1: run_a scheduled (cap=1 consumed), run_b waiting.
+    db_run_a = await temp_db.get_run(run_a.id)
+    assert db_run_a is not None
+    assert db_run_a["status"] == "running"
+
+    db_run_b = await temp_db.get_run(run_b.id)
+    assert db_run_b is not None
+    assert db_run_b["status"] == "pending", (
+        f"run_b should still be 'pending' (cap-blocked), got {db_run_b['status']!r}"
+    )
+
+    # The invariant: run_b being cap-blocked must NOT call _create_k8s_job
+    # (and therefore must not increment attempt_counts). Only run_a triggered
+    # a creation attempt.
+    assert call_count == 1, (
+        f"_create_k8s_job should have been called once (for run_a), got {call_count}"
+    )
 
 
 # ---------------------------------------------------------------------------

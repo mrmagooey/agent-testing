@@ -201,3 +201,17 @@ async def test_spa_fallback_absent_when_no_index_html(tmp_path: Path):
                     )
                     # Must not 500; 404 or 422 are both acceptable fallthrough responses
                     assert resp.status_code in (404, 422)
+
+
+def test_root_get_serves_spa_when_index_exists(spa_client):
+    """GET / with a browser Accept header must serve index.html. Regression:
+    the middleware and StaticFiles mount both dereference FRONTEND_DIST_DIR,
+    so when pip-install relocated __file__ into site-packages (making the
+    default path point at a non-existent directory), GET / returned 404."""
+    resp = spa_client.get(
+        "/",
+        headers={"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"},
+        follow_redirects=True,
+    )
+    assert resp.status_code == 200
+    assert "SPA" in resp.text

@@ -632,3 +632,37 @@ def test_audit_unknown_tool_with_url_flagged(coordinator_client, tmp_path):
     data = resp.json()
     assert len(data["suspicious_calls"]) == 1
     assert data["suspicious_calls"][0]["tool_name"] == "fetch_something"
+
+
+# ---------------------------------------------------------------------------
+# Background task lifecycle — must not leak across TestClient lifecycles
+# ---------------------------------------------------------------------------
+
+def test_startup_tracks_retention_task_in_default_env(coordinator_client):
+    """Regression: startup must register retention_cleanup_loop in
+    _background_tasks so the shutdown handler can cancel it. Pre-fix, the
+    task was un-tracked and accumulated across ~110 TestClient lifecycles
+    (each holding a closure over the test's tmp_path), OOM-killing pytest.
+    """
+    coro_names = {t.get_coro().cr_code.co_name for t in coord_module._background_tasks}
+    assert "retention_cleanup_loop" in coro_names
+
+
+async def test_shutdown_cancels_background_tasks_when_gated_on(tmp_path, monkeypatch):
+    """When the reconcile loop is gated on, TestClient teardown must cancel
+    both it and the retention loop."""
+    monkeypatch.setenv("ENABLE_RECONCILE_LOOP", "1")
+
+    db = Database(tmp_path / "test.db")
+    await db.init()
+
+    c = _make_coordinator(tmp_path, db)
+    with patch.object(coord_module, "coordinator", c):
+        with patch.object(c, "reconcile", return_value=None):
+            with TestClient(app, raise_server_exceptions=True) as client:
+                # Startup ran — retention + reconcile loops tracked.
+                assert len(coord_module._background_tasks) == 2
+                # Exercise the client to prove the app is live.
+                assert client.get("/health").status_code == 200
+    # TestClient.__exit__ triggers the shutdown handler, which cancels + awaits.
+    assert coord_module._background_tasks == set()

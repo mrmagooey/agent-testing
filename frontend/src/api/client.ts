@@ -335,8 +335,18 @@ export function estimateBatch(config: Partial<BatchConfig>): Promise<CostEstimat
 
 // ─── Dataset Endpoints ─────────────────────────────────────────────────────
 
-export function listDatasets(): Promise<Dataset[]> {
-  return apiFetch<Dataset[]>('/datasets')
+export async function listDatasets(): Promise<Dataset[]> {
+  // Coordinator may omit `languages`; default it so .join() in the UI is safe.
+  const raw = await apiFetch<Partial<Dataset>[]>('/datasets')
+  return raw.map((d) => ({
+    name: d.name ?? '',
+    source: d.source ?? '',
+    label_count: d.label_count ?? 0,
+    file_count: d.file_count ?? 0,
+    size_bytes: d.size_bytes ?? 0,
+    created_at: d.created_at ?? '',
+    languages: d.languages ?? [],
+  }))
 }
 
 export function discoverCVEs(criteria: Record<string, unknown>): Promise<CVECandidate[]> {
@@ -400,16 +410,36 @@ export function getFileContent(
 
 // ─── Config Endpoints ──────────────────────────────────────────────────────
 
+// The coordinator's /models, /strategies, /profiles endpoints return
+// list[dict] (e.g. {"id": "gpt-4o", ...} or {"name": "default", ...}).
+// The UI only needs the identifier string; rendering the raw object triggers
+// React error #31. Normalize here so every caller sees a plain string[].
+// Legacy list[str] responses pass through unchanged.
+function normalizeConfigItem(item: unknown): string | null {
+  if (typeof item === 'string') return item
+  if (item && typeof item === 'object') {
+    const obj = item as Record<string, unknown>
+    const id = obj.id ?? obj.name
+    if (typeof id === 'string') return id
+  }
+  return null
+}
+
+async function fetchConfigList(path: string): Promise<string[]> {
+  const raw = await apiFetch<unknown[]>(path)
+  return raw.map(normalizeConfigItem).filter((s): s is string => s !== null)
+}
+
 export function listModels(): Promise<string[]> {
-  return apiFetch<string[]>('/models')
+  return fetchConfigList('/models')
 }
 
 export function listStrategies(): Promise<string[]> {
-  return apiFetch<string[]>('/strategies')
+  return fetchConfigList('/strategies')
 }
 
 export function listProfiles(): Promise<string[]> {
-  return apiFetch<string[]>('/profiles')
+  return fetchConfigList('/profiles')
 }
 
 export function listTemplates(): Promise<InjectionTemplate[]> {

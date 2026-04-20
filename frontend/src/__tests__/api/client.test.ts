@@ -8,6 +8,10 @@ import {
   estimateBatch,
   downloadReports,
   cancelBatch,
+  listModels,
+  listStrategies,
+  listProfiles,
+  listDatasets,
   type Batch,
   type BatchConfig,
 } from '../../api/client'
@@ -187,5 +191,95 @@ describe('downloadReports', () => {
 
     expect(url).toBe('/api/batches/batch-xyz/results/download')
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+})
+
+// Regression: the coordinator's /models, /strategies, /profiles endpoints
+// return `list[dict]` (objects with `id`/`name`/etc.), not the plain `list[str]`
+// that the frontend historically assumed. Rendering those objects as React
+// children triggers React error #31 on /batches/new. The client must
+// normalize them to plain string IDs so the UI never sees a raw object.
+describe('config endpoint normalization (regression for React error #31)', () => {
+  it('listModels flattens object responses to their id', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      makeFetchResponse([
+        { id: 'gpt-4o', provider: 'openai', cost_per_1k_input: 0.0025 },
+        { id: 'claude-3-5-sonnet-20241022', provider: 'anthropic' },
+      ]),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const models = await listModels()
+
+    expect(models).toEqual(['gpt-4o', 'claude-3-5-sonnet-20241022'])
+    for (const m of models) expect(typeof m).toBe('string')
+  })
+
+  it('listModels still accepts legacy string[] responses', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      makeFetchResponse(['gpt-4o', 'gemini-1.5-pro']),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    expect(await listModels()).toEqual(['gpt-4o', 'gemini-1.5-pro'])
+  })
+
+  it('listStrategies flattens {name, description} objects to the name', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      makeFetchResponse([
+        { name: 'zero_shot', description: 'zero_shot scan strategy' },
+        { name: 'chain_of_thought', description: '…' },
+      ]),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const strategies = await listStrategies()
+
+    expect(strategies).toEqual(['zero_shot', 'chain_of_thought'])
+    for (const s of strategies) expect(typeof s).toBe('string')
+  })
+
+  it('listProfiles flattens {name, description} objects to the name', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      makeFetchResponse([
+        { name: 'default', description: 'default profile' },
+        { name: 'strict', description: 'strict profile' },
+      ]),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const profiles = await listProfiles()
+
+    expect(profiles).toEqual(['default', 'strict'])
+    for (const p of profiles) expect(typeof p).toBe('string')
+  })
+
+  it('listProfiles drops entries without a usable string identifier', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      makeFetchResponse([
+        { name: 'default', description: 'ok' },
+        { description: 'no name' },
+        null,
+        42,
+      ]),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    expect(await listProfiles()).toEqual(['default'])
+  })
+
+  it('listDatasets defaults missing languages to an empty array so .join is safe', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      makeFetchResponse([{ name: 'cve-2024-python', label_count: 4 }]),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const [ds] = await listDatasets()
+
+    expect(ds.name).toBe('cve-2024-python')
+    expect(ds.label_count).toBe(4)
+    expect(Array.isArray(ds.languages)).toBe(true)
+    // Must not throw: prior bug was `undefined.join('/')` in the <option> label.
+    expect(ds.languages.join('/')).toBe('')
   })
 })
