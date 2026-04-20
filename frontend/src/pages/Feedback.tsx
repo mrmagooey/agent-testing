@@ -7,6 +7,7 @@ import {
   type FPPattern,
 } from '../api/client'
 import { PageLoadingSpinner } from '../components/Skeleton'
+import PageDescription from '../components/PageDescription'
 
 function DeltaCell({ value }: { value: number }) {
   const cls =
@@ -80,6 +81,10 @@ export default function Feedback() {
   return (
     <div className="max-w-5xl mx-auto space-y-8">
       <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Feedback</h1>
+      <PageDescription>
+        Batch-to-batch accuracy deltas, stability across reruns, and recurring false-positive patterns mined from completed runs.
+        Use it to quantify whether a prompt, model, or strategy change actually improved results against a baseline.
+      </PageDescription>
 
       {/* Batch Comparison */}
       <section className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">

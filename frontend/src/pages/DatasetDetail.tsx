@@ -13,6 +13,7 @@ import {
 } from '../api/client'
 import Breadcrumbs from '../components/Breadcrumbs'
 import FileTree from '../components/FileTree'
+import PageDescription from '../components/PageDescription'
 import CodeViewer from '../components/CodeViewer'
 import DiffViewer from '../components/DiffViewer'
 
@@ -150,6 +151,10 @@ export default function DatasetDetail() {
           Inject Vulnerability
         </button>
       </div>
+      <PageDescription>
+        File tree, ground-truth labels, and code viewer for a single dataset.
+        Inject synthetic vulnerabilities from templates to extend coverage beyond what the source already contains.
+      </PageDescription>
 
       {/* Two-panel layout */}
       <div className="grid lg:grid-cols-3 gap-4">

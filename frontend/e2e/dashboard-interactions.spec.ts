@@ -111,7 +111,7 @@ test('clicking "View batch" link navigates to smoke-test batch detail page', asy
 
 test('clicking an active (running) batch row navigates to /batches/{batch_id}', async ({ page }) => {
   await page.goto('/')
-  const activeSection = page.locator('[data-slot="card"]').filter({ hasText: 'Active Batches' })
+  const activeSection = page.locator('section').filter({ hasText: 'Active Batches' })
 
   // The running batch ID prefix is "bbbbbbbb"; find its row by the truncated ID text.
   const row = activeSection.locator('tbody tr').filter({ hasText: 'bbbbbbbb' })
@@ -127,7 +127,7 @@ test('clicking an active (running) batch row navigates to /batches/{batch_id}', 
 
 test('clicking a completed batch row navigates to /batches/{batch_id}', async ({ page }) => {
   await page.goto('/')
-  const recentSection = page.locator('[data-slot="card"]').filter({ hasText: 'Recent Batches' })
+  const recentSection = page.locator('section').filter({ hasText: 'Recent Batches' })
 
   // The fixture sorts completed batches by completed_at descending.
   // aaaaaaaa-0001 (completed 2026-04-17) is most recent, then cccccccc-0003.

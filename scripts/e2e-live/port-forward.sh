@@ -13,10 +13,12 @@
 
 RELEASE="${RELEASE:-sec-review-e2e}"
 NAMESPACE="${NAMESPACE:-sec-review-e2e}"
+CLUSTER="${CLUSTER:-sec-review-e2e}"
+KUBE_CONTEXT="${KUBE_CONTEXT:-kind-${CLUSTER}}"
 LOCAL_PORT="${LOCAL_PORT:-8080}"
 REMOTE_PORT="${REMOTE_PORT:-8080}"
 
-exec kubectl port-forward \
+exec kubectl --context "${KUBE_CONTEXT}" port-forward \
   -n "${NAMESPACE}" \
   "svc/${RELEASE}-coordinator" \
   "${LOCAL_PORT}:${REMOTE_PORT}"

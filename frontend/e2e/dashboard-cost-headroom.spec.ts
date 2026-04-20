@@ -73,8 +73,8 @@ test.describe('Cost Headroom card', () => {
     await expect(page.getByText('Cost Headroom')).toBeVisible()
     await expect(page.getByText(/\/ \$50 cap/)).toBeVisible()
     // No warning text at 30%
-    await expect(page.getByText(/Warning/)).not.toBeVisible()
-    await expect(page.getByText(/Critical/)).not.toBeVisible()
+    await expect(page.getByText(/warning/i)).not.toBeVisible()
+    await expect(page.getByText(/critical/i)).not.toBeVisible()
   })
 
   test('Cost Headroom shows warning at >=80% spend', async ({ page }) => {
@@ -116,7 +116,7 @@ test.describe('Cost Headroom card', () => {
       })
     })
     await page.goto('/')
-    await expect(page.getByText(/Warning.*80%/)).toBeVisible()
+    await expect(page.getByText(/warning.*80%/i)).toBeVisible()
   })
 
   test('Cost Headroom shows critical warning at >=95% spend', async ({ page }) => {
@@ -158,7 +158,7 @@ test.describe('Cost Headroom card', () => {
       })
     })
     await page.goto('/')
-    await expect(page.getByText(/Critical.*spending near cap/)).toBeVisible()
+    await expect(page.getByText(/critical.*spending near cap/i)).toBeVisible()
   })
 })
 

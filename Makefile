@@ -4,7 +4,8 @@
         redeploy redeploy-clean \
         dev-coordinator dev-frontend \
         test lint format sync \
-        kind-e2e-up kind-e2e-down kind-e2e-pytest kind-e2e-playwright
+        kind-e2e-up kind-e2e-down kind-e2e-pytest kind-e2e-playwright \
+        kind-e2e-playwright-all
 
 # Chart release name + release namespace — override on the command line:
 #   make helm-install-minikube RELEASE=my-release NAMESPACE=my-ns
@@ -153,7 +154,16 @@ sync:
 #   make kind-e2e-pytest                # run backend live tests
 #   make kind-e2e-playwright            # run frontend live tests
 #   make kind-e2e-down                  # tear down cluster
+#
+# Or for a one-shot playwright run that manages the port-forward itself:
+#   make kind-e2e-playwright-all        # bootstrap + port-forward + playwright
+# (leaves the cluster running so you can re-run; tear down with kind-e2e-down)
 # ---------------------------------------------------------------------------
+
+KIND_CLUSTER   ?= sec-review-e2e
+KIND_RELEASE   ?= sec-review-e2e
+KIND_NAMESPACE ?= sec-review-e2e
+KIND_CONTEXT   ?= kind-$(KIND_CLUSTER)
 
 kind-e2e-up:
 	bash scripts/e2e-live/bootstrap.sh
@@ -165,4 +175,26 @@ kind-e2e-pytest:
 	uv run pytest tests/e2e/live/ -m k8s_live -v
 
 kind-e2e-playwright:
+	cd frontend && E2E_LIVE=1 E2E_LIVE_BASE_URL=http://localhost:8080 npx playwright test --grep @live
+
+kind-e2e-playwright-all:
+	@set -e; \
+	if ! kind get clusters 2>/dev/null | grep -qx "$(KIND_CLUSTER)"; then \
+	  echo ">>> kind cluster '$(KIND_CLUSTER)' not found — bootstrapping"; \
+	  bash scripts/e2e-live/bootstrap.sh; \
+	else \
+	  echo ">>> kind cluster '$(KIND_CLUSTER)' already up — reusing"; \
+	fi; \
+	echo ">>> starting port-forward (context: $(KIND_CONTEXT))"; \
+	kubectl --context $(KIND_CONTEXT) -n $(KIND_NAMESPACE) port-forward svc/$(KIND_RELEASE)-coordinator 8080:8080 >/tmp/kind-e2e-pf.log 2>&1 & \
+	PF_PID=$$!; \
+	trap "kill $$PF_PID 2>/dev/null || true" EXIT; \
+	echo ">>> waiting for port-forward to become ready"; \
+	for i in $$(seq 1 30); do \
+	  if curl -sf http://localhost:8080/health >/dev/null 2>&1; then \
+	    echo ">>> port-forward ready"; break; \
+	  fi; \
+	  sleep 1; \
+	  if [ $$i -eq 30 ]; then echo "ERROR: port-forward did not become ready" >&2; cat /tmp/kind-e2e-pf.log >&2; exit 1; fi; \
+	done; \
 	cd frontend && E2E_LIVE=1 E2E_LIVE_BASE_URL=http://localhost:8080 npx playwright test --grep @live

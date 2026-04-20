@@ -15,14 +15,27 @@ RECONCILE_INTERVAL_S = int(os.environ.get("RECONCILE_INTERVAL_S", "5"))
 RUN_STALL_TIMEOUT_S = int(os.environ.get("RUN_STALL_TIMEOUT_S", "300"))
 
 # Resolve the frontend dist directory once at import time.
-# In the container the layout is /app/src/...coordinator.py and /app/frontend/dist,
-# so __file__ is 3 levels deep inside /app/src/sec_review_framework/.
 # Allow override via FRONTEND_DIST_DIR for non-standard layouts / tests.
-_MODULE_DIR = Path(__file__).resolve().parent          # .../sec_review_framework/
-_REPO_ROOT = _MODULE_DIR.parent.parent                 # /app  (or repo root in dev)
-FRONTEND_DIST_DIR = Path(
-    os.environ.get("FRONTEND_DIST_DIR", str(_REPO_ROOT / "frontend" / "dist"))
-)
+# When the package is installed via pip the module lands in site-packages, so
+# walking parent dirs from __file__ no longer reaches the repo/app root.
+# We probe candidate paths in priority order and pick the first that exists.
+def _resolve_frontend_dist() -> Path:
+    env_override = os.environ.get("FRONTEND_DIST_DIR")
+    if env_override:
+        return Path(env_override)
+    _module_dir = Path(__file__).resolve().parent  # .../sec_review_framework/
+    candidates = [
+        Path("/app/frontend/dist"),                          # installed-package layout in Docker
+        _module_dir.parent.parent / "frontend" / "dist",    # dev-checkout layout (src/…/coordinator.py)
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    # Fall back to the first candidate even if it doesn't exist yet; the mount
+    # logic below will log a warning rather than crash.
+    return candidates[0]
+
+FRONTEND_DIST_DIR = _resolve_frontend_dist()
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
@@ -279,6 +292,69 @@ class BatchCoordinator:
         if run_hash not in job_name:
             job_name = f"{job_name[: 63 - len(run_hash) - 1]}-{run_hash}"
 
+        # Build volume/mount lists, then extend them if extensions need it.
+        volume_mounts = [
+            kubernetes.client.V1VolumeMount(
+                name="shared-data",
+                mount_path="/data",
+            ),
+            kubernetes.client.V1VolumeMount(
+                name="config",
+                mount_path="/app/config",
+            ),
+        ]
+        volumes = [
+            kubernetes.client.V1Volume(
+                name="shared-data",
+                persistent_volume_claim=kubernetes.client.V1PersistentVolumeClaimVolumeSource(
+                    claim_name=self.pvc_name
+                ),
+            ),
+            kubernetes.client.V1Volume(
+                name="config",
+                config_map=kubernetes.client.V1ConfigMapVolumeSource(
+                    name=self.config_map_name
+                ),
+            ),
+        ]
+
+        # DevDocs emptyDir fallback ------------------------------------------------
+        # In environments where the devdocs-sync Job has not run (e.g. kind/e2e
+        # clusters where workerTools.devdocs.enabled=false), the devdocs docset
+        # directory is absent from the shared PVC and the worker's devdocs extension
+        # builder raises RuntimeError on start-up.
+        #
+        # Fix: when the DEVDOCS extension is requested and the docset root does NOT
+        # exist on the coordinator's own filesystem (the coordinator also mounts the
+        # shared PVC at STORAGE_ROOT), inject an emptyDir volume at the expected
+        # mount path so the path exists in the worker pod.  The devdocs MCP server
+        # starts cleanly with no docsets, which is correct for an e2e plumbing test.
+        #
+        # When the devdocs-sync Job HAS run (production), the docset root exists, so
+        # we skip the emptyDir and the worker finds the real data through the shared
+        # PVC mount at /data.
+        if ToolExtension.DEVDOCS in run.tool_extensions:
+            devdocs_root = Path(os.environ.get("DEVDOCS_ROOT", "/data/devdocs"))
+            if not devdocs_root.exists():
+                volume_mounts.append(
+                    kubernetes.client.V1VolumeMount(
+                        name="devdocs-empty",
+                        mount_path=str(devdocs_root),
+                    )
+                )
+                volumes.append(
+                    kubernetes.client.V1Volume(
+                        name="devdocs-empty",
+                        empty_dir=kubernetes.client.V1EmptyDirVolumeSource(),
+                    )
+                )
+                logger.info(
+                    "DevDocs docset root %s absent from shared PVC; "
+                    "mounting emptyDir for run %s so the extension starts cleanly.",
+                    devdocs_root,
+                    run.id,
+                )
+
         job = kubernetes.client.V1Job(
             metadata=kubernetes.client.V1ObjectMeta(
                 name=job_name,
@@ -328,32 +404,10 @@ class BatchCoordinator:
                                         )
                                     )
                                 ],
-                                volume_mounts=[
-                                    kubernetes.client.V1VolumeMount(
-                                        name="shared-data",
-                                        mount_path="/data",
-                                    ),
-                                    kubernetes.client.V1VolumeMount(
-                                        name="config",
-                                        mount_path="/app/config",
-                                    ),
-                                ],
+                                volume_mounts=volume_mounts,
                             )
                         ],
-                        volumes=[
-                            kubernetes.client.V1Volume(
-                                name="shared-data",
-                                persistent_volume_claim=kubernetes.client.V1PersistentVolumeClaimVolumeSource(
-                                    claim_name=self.pvc_name
-                                ),
-                            ),
-                            kubernetes.client.V1Volume(
-                                name="config",
-                                config_map=kubernetes.client.V1ConfigMapVolumeSource(
-                                    name=self.config_map_name
-                                ),
-                            ),
-                        ],
+                        volumes=volumes,
                     )
                 ),
             ),
@@ -786,7 +840,11 @@ class BatchCoordinator:
         job_name = job.metadata.name
 
         try:
-            pod_list = self.k8s_client.list_namespaced_pod(
+            # CoreV1Api owns list_namespaced_pod; self.k8s_client is BatchV1Api.
+            # Lazily construct a CoreV1Api here — incluster config was already
+            # loaded during __init__ so this is safe.
+            core_v1 = kubernetes.client.CoreV1Api()
+            pod_list = core_v1.list_namespaced_pod(
                 self.namespace,
                 label_selector=f"job-name={job_name}",
             )
@@ -1969,7 +2027,11 @@ def list_tool_extensions() -> list[dict]:
 
 
 # Static files — mount last so all API routes take priority
-try:
+if FRONTEND_DIST_DIR.exists():
     app.mount("/", StaticFiles(directory=str(FRONTEND_DIST_DIR), html=True), name="frontend")
-except Exception:
-    pass  # frontend not built in dev
+else:
+    logger.warning(
+        "Frontend dist directory not found at %s — static file serving disabled "
+        "(set FRONTEND_DIST_DIR or run `npm run build` in frontend/)",
+        FRONTEND_DIST_DIR,
+    )

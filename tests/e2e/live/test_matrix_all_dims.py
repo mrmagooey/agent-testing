@@ -31,8 +31,8 @@ from tests.e2e.live.conftest import K8S_LIVE_MARK, poll_until_done, unique_batch
 pytestmark = [
     K8S_LIVE_MARK,
     pytest.mark.skipif(
-        not os.getenv("OPENROUTER_TEST_KEY"),
-        reason="OPENROUTER_TEST_KEY not set",
+        not (os.getenv("OPENROUTER_TEST_KEY") or os.getenv("LIVE_TEST_MODEL_ID")),
+        reason="neither OPENROUTER_TEST_KEY nor LIVE_TEST_MODEL_ID is set",
     ),
 ]
 
@@ -41,12 +41,18 @@ pytestmark = [
 # ---------------------------------------------------------------------------
 
 # Cell A uses the well-tested 8b model.
-MODEL_A = "openrouter/meta-llama/llama-3.1-8b-instruct"
+MODEL_A = os.environ.get(
+    "LIVE_TEST_MODEL_ID", "openrouter/meta-llama/llama-3.1-8b-instruct"
+)
 
 # Cell B uses a different model to exercise the model_ids dimension.
 # If this model is missing from the test cluster config, swap it locally
 # for MODEL_A — the other 7 dimensions still get coverage.
-MODEL_B = "openrouter/meta-llama/llama-3.2-3b-instruct"
+# When LIVE_TEST_MODEL_ID is set both cells collapse to one model; that is
+# acceptable — the test's purpose is exercising all dimensions, not distinct models.
+MODEL_B = os.environ.get(
+    "LIVE_TEST_MODEL_ID", "openrouter/meta-llama/llama-3.2-3b-instruct"
+)
 
 # ---------------------------------------------------------------------------
 # Batch payloads — each is a single cell (1 run × 2 reps = 2 runs per batch)

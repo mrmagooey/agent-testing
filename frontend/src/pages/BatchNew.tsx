@@ -13,6 +13,8 @@ import {
 } from '../api/client'
 import { useEstimate } from '../hooks/useEstimate'
 import CostEstimate from '../components/CostEstimate'
+import PageDescription from '../components/PageDescription'
+import ToggleChip from '../components/ToggleChip'
 
 /**
  * Generate the power-set of a list of strings.
@@ -32,7 +34,7 @@ export function generatePowerSet(items: string[]): string[][] {
   return result
 }
 
-function CheckboxGroup({
+function ChipGroup({
   label,
   options,
   selected,
@@ -40,7 +42,7 @@ function CheckboxGroup({
   error,
   disabledOptions,
 }: {
-  label: string
+  label?: string
   options: (string | { value: string; label: string })[]
   selected: string[]
   onChange: (vals: string[]) => void
@@ -68,22 +70,17 @@ function CheckboxGroup({
         {options.map((opt) => {
           const isObj = typeof opt === 'object'
           const value = isObj ? opt.value : opt
-          const label = isObj ? opt.label : opt
+          const chipLabel = isObj ? opt.label : opt
           const isDisabled = disabledOptions?.includes(value)
           return (
-            <label
+            <ToggleChip
               key={value}
-              className={`flex items-center gap-1.5 text-sm ${isDisabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
-            >
-              <input
-                type="checkbox"
-                checked={selected.includes(value)}
-                onChange={() => toggle(value)}
-                disabled={isDisabled}
-                className="rounded disabled:cursor-not-allowed"
-              />
-              <span className="font-mono text-xs text-gray-700 dark:text-gray-300">{label}</span>
-            </label>
+              label={chipLabel}
+              value={value}
+              checked={selected.includes(value)}
+              onChange={() => toggle(value)}
+              disabled={isDisabled}
+            />
           )
         })}
       </div>
@@ -200,7 +197,12 @@ export default function BatchNew() {
 
   return (
     <div className="max-w-4xl mx-auto">
-      <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100 mb-6">New Batch</h1>
+      <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">New Batch</h1>
+      <PageDescription>
+        A batch runs the full experiment matrix — every combination of models × strategies × tool variants × extensions × verification modes × repetitions — against a labelled dataset.
+        Submit one here to measure how well each configuration catches known vulnerabilities, with an up-front cost estimate and optional spend cap.
+      </PageDescription>
+      <div className="h-6" />
 
       {error && (
         <div className="mb-4 p-3 rounded-lg bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 text-sm">
@@ -238,7 +240,7 @@ export default function BatchNew() {
               modelsError ? 'border-red-400 dark:border-red-600' : 'border-gray-200 dark:border-gray-700'
             }`}>
               <h2 className="font-semibold mb-3">Models</h2>
-              <CheckboxGroup
+              <ChipGroup
                 label=""
                 options={models}
                 selected={selectedModels}
@@ -251,7 +253,7 @@ export default function BatchNew() {
               strategiesError ? 'border-red-400 dark:border-red-600' : 'border-gray-200 dark:border-gray-700'
             }`}>
               <h2 className="font-semibold mb-3">Strategies</h2>
-              <CheckboxGroup
+              <ChipGroup
                 label=""
                 options={strategies}
                 selected={selectedStrategies}
@@ -281,14 +283,14 @@ export default function BatchNew() {
             <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
               <h2 className="font-semibold mb-4">Dimensions</h2>
               <div className="space-y-4">
-                <CheckboxGroup
+                <ChipGroup
                   label="Tool variants"
                   options={['with_tools', 'without_tools']}
                   selected={toolVariants}
                   onChange={setToolVariants}
                   error={toolVariantsError}
                 />
-                <CheckboxGroup
+                <ChipGroup
                   label="Tool extensions"
                   options={toolExtensions.map((te) => ({ value: te.key, label: te.label }))}
                   selected={selectedToolExtensions}
@@ -308,7 +310,7 @@ export default function BatchNew() {
                     </span>
                   </label>
                 </div>
-                <CheckboxGroup
+                <ChipGroup
                   label="Verification"
                   options={['none', 'with_verification']}
                   selected={verification}

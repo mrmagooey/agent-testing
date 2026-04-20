@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { listBatches, runSmokeTest, type Batch } from '../api/client'
 import AccuracyHeatmap from '../components/AccuracyHeatmap'
@@ -11,14 +11,12 @@ import {
   ResponsiveContainer,
 } from 'recharts'
 import EmptyState from '../components/EmptyState'
+import PageDescription from '../components/PageDescription'
 import { PageLoadingSpinner } from '../components/Skeleton'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import {
   Card,
   CardContent,
-  CardHeader,
-  CardTitle,
 } from '@/components/ui/card'
 
 const POLL_INTERVAL_MS = 15_000
@@ -51,32 +49,23 @@ function SimpleProgressBar({ completed, total }: { completed: number; total: num
   const pct = total > 0 ? Math.round((completed / total) * 100) : 0
   return (
     <div className="flex items-center gap-2">
-      <div className="flex-1 h-2 rounded-full bg-gray-200 dark:bg-gray-700">
+      <div className="flex-1 h-1.5 bg-muted rounded-none">
         <div
-          className="h-full rounded-full bg-indigo-500 transition-all"
+          className="h-full bg-primary transition-all"
           style={{ width: `${pct}%` }}
         />
       </div>
-      <span className="text-xs text-gray-500 w-12 text-right">{completed}/{total}</span>
+      <span className="text-xs text-muted-foreground font-mono tabular-nums w-14 text-right">{completed}/{total}</span>
     </div>
   )
 }
 
-const STATUS_BADGE_VARIANT: Record<Batch['status'], 'default' | 'secondary' | 'destructive' | 'outline'> = {
-  pending: 'secondary',
-  running: 'outline',
-  completed: 'default',
-  failed: 'destructive',
-  cancelled: 'outline',
-}
-
-// Keep legacy classes for running/cancelled which need custom colors
-const STATUS_BADGE_CLS: Record<Batch['status'], string> = {
-  pending: '',
-  running: 'border-blue-400 text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-900/30',
-  completed: 'bg-green-600 dark:bg-green-700 text-white border-transparent',
-  failed: '',
-  cancelled: 'border-yellow-400 text-yellow-700 dark:text-yellow-300 bg-yellow-50 dark:bg-yellow-900/30',
+const STATUS_SIGNAL: Record<Batch['status'], string> = {
+  pending: 'text-muted-foreground',
+  running: 'text-signal-info',
+  completed: 'text-signal-success',
+  failed: 'text-signal-danger',
+  cancelled: 'text-signal-warning',
 }
 
 type SmokeTestState =
@@ -85,34 +74,34 @@ type SmokeTestState =
   | { status: 'success'; batch_id: string; message: string }
   | { status: 'error'; message: string }
 
-function SparklineChart({ data, dataKey, color, label }: {
+function SparklineChart({ data, dataKey, label }: {
   data: Array<Record<string, unknown>>
   dataKey: string
-  color: string
   label: string
 }) {
   if (data.length < 2) return null
   return (
     <div>
-      <p className="text-xs font-medium text-gray-500 dark:text-gray-300 mb-2">{label}</p>
+      <p className="font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground mb-2">{label}</p>
       <ResponsiveContainer width="100%" height={64}>
         <LineChart data={data} margin={{ top: 2, right: 4, left: 0, bottom: 2 }}>
           <XAxis dataKey="label" hide />
           <YAxis hide />
           <Tooltip
             contentStyle={{
-              backgroundColor: '#1f2937',
-              border: '1px solid #374151',
-              borderRadius: 4,
+              backgroundColor: 'var(--card)',
+              border: '1px solid var(--border)',
+              borderRadius: '0.25rem',
               fontSize: 11,
+              fontFamily: 'JetBrains Mono, monospace',
             }}
-            labelStyle={{ color: '#f9fafb' }}
-            itemStyle={{ color: '#d1d5db' }}
+            labelStyle={{ color: 'var(--card-foreground)' }}
+            itemStyle={{ color: 'var(--muted-foreground)' }}
           />
           <Line
             type="monotone"
             dataKey={dataKey}
-            stroke={color}
+            stroke="#F5A524"
             strokeWidth={1.5}
             dot={false}
             activeDot={{ r: 3 }}
@@ -131,20 +120,19 @@ function PollingIndicator({ polling, lastUpdated }: { polling: boolean; lastUpda
   }, [])
 
   return (
-    <div className="flex items-center gap-2 text-xs text-gray-400 dark:text-gray-300">
+    <div className="flex items-center gap-2 text-xs text-muted-foreground font-mono">
       {polling ? (
-        <span className="inline-block h-2 w-2 rounded-full bg-blue-500 animate-pulse" />
+        <span className="inline-block h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
       ) : (
-        <span className="inline-block h-2 w-2 rounded-full bg-gray-300 dark:bg-gray-600" />
+        <span className="inline-block h-1.5 w-1.5 rounded-full bg-muted-foreground/40" />
       )}
       {lastUpdated !== null && (
-        <span>{formatLastUpdated(lastUpdated)}</span>
+        <span className="tabular-nums">{formatLastUpdated(lastUpdated)}</span>
       )}
     </div>
   )
 }
 
-// Cost Headroom card — logic preserved, wrapped in shadcn Card
 function CostHeadroomCard({ batches }: { batches: Batch[] }) {
   const completedBatches = batches.filter((b) => b.status === 'completed')
   if (completedBatches.length === 0) return null
@@ -156,32 +144,50 @@ function CostHeadroomCard({ batches }: { batches: Batch[] }) {
   const isWarn = pct >= 80 && pct < 95
   const isCrit = pct >= 95
 
-  const barColor = isCrit ? 'bg-red-500' : isWarn ? 'bg-yellow-500' : 'bg-emerald-500'
+  const barColor = isCrit ? 'bg-signal-danger' : isWarn ? 'bg-signal-warning' : 'bg-signal-success'
   const alertCls = isCrit
-    ? 'text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800'
+    ? 'text-signal-danger border border-signal-danger/30'
     : isWarn
-    ? 'text-yellow-700 dark:text-yellow-300 bg-yellow-50 dark:bg-yellow-950 border border-yellow-200 dark:border-yellow-800'
+    ? 'text-signal-warning border border-signal-warning/30'
     : ''
 
   return (
     <div>
-      <p className="text-xs font-medium text-gray-500 dark:text-gray-300 mb-2">Cost Headroom</p>
+      <p className="font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground mb-2">Cost Headroom</p>
       <div className="flex items-baseline gap-2 mb-2">
-        <span className="text-2xl font-bold text-gray-900 dark:text-gray-100">${totalSpend.toFixed(2)}</span>
-        <span className="text-sm text-gray-400 dark:text-gray-300">/ ${cap.toFixed(0)} cap</span>
-        <span className="ml-auto text-sm font-semibold text-gray-700 dark:text-gray-200">{pct.toFixed(0)}%</span>
+        <span className="font-display text-2xl font-bold tabular-nums">${totalSpend.toFixed(2)}</span>
+        <span className="text-xs text-muted-foreground font-mono tabular-nums">/ ${cap.toFixed(0)} cap</span>
+        <span className="ml-auto text-sm font-mono tabular-nums">{pct.toFixed(0)}%</span>
       </div>
-      <div className="h-2 rounded-full bg-gray-200 dark:bg-gray-700 mb-3">
-        <div className={`h-full rounded-full transition-all ${barColor}`} style={{ width: `${pct}%` }} />
+      <div className="h-1.5 bg-muted mb-3">
+        <div className={`h-full transition-all ${barColor}`} style={{ width: `${pct}%` }} />
       </div>
       {(isWarn || isCrit) && (
-        <p className={`text-xs px-2 py-1 rounded ${alertCls}`}>
-          {isCrit ? '⛔ Critical: spending near cap — consider pausing new batches.' : '⚠ Warning: 80% of spend cap reached.'}
+        <p className={`text-xs font-mono px-2 py-1 ${alertCls}`}>
+          {isCrit ? 'CRITICAL — spending near cap. Consider pausing new batches.' : 'WARNING — 80% of spend cap reached.'}
         </p>
       )}
     </div>
   )
 }
+
+function SectionHeader({ label, count }: { label: string; count?: number }) {
+  return (
+    <h2 className="font-mono text-[11px] tracking-[0.2em] uppercase text-muted-foreground mb-3">
+      // {label}{count !== undefined && count > 0 && (
+        <span className="text-primary"> — {count}</span>
+      )}
+    </h2>
+  )
+}
+
+const ROW_REVEAL_STYLE = (i: number): React.CSSProperties => ({
+  animationName: 'row-reveal',
+  animationDuration: '240ms',
+  animationTimingFunction: 'ease-out',
+  animationFillMode: 'both',
+  animationDelay: `${Math.min(i, 7) * 40}ms`,
+})
 
 export default function Dashboard() {
   const navigate = useNavigate()
@@ -241,80 +247,93 @@ export default function Dashboard() {
 
   if (error) {
     return (
-      <div className="rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950 p-4 text-red-700 dark:text-red-300">
+      <div className="rounded-sm border border-signal-danger/40 bg-signal-danger/5 p-4 text-signal-danger font-mono text-sm">
         {error}
       </div>
     )
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Dashboard</h1>
-        <Button
-          onClick={() => navigate('/batches/new')}
-          className="bg-indigo-600 hover:bg-indigo-700 text-white"
-        >
-          New Batch
-        </Button>
-      </div>
-
-      {/* Smoke Test */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-start justify-between gap-4 flex-wrap">
-            <div>
-              <CardTitle>Smoke Test</CardTitle>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Runs a single-model, single-strategy batch against the first available dataset.
-                Capped at $5.00.
-              </p>
-            </div>
-            <Button
-              onClick={handleSmokeTest}
-              disabled={smokeTest.status === 'running'}
-              className="shrink-0 bg-indigo-600 hover:bg-indigo-700 text-white"
-            >
-              {smokeTest.status === 'running' && (
-                <span className="inline-block h-4 w-4 rounded-full border-2 border-white border-t-transparent animate-spin" />
-              )}
-              {smokeTest.status === 'running' ? 'Running…' : 'Run Smoke Test'}
-            </Button>
+    <>
+      <style>{`
+        @keyframes row-reveal {
+          from { opacity: 0; transform: translateY(4px); }
+          to { opacity: 1; transform: none; }
+        }
+      `}</style>
+      <div className="space-y-10">
+        {/* Page header */}
+        <div className="flex items-start justify-between">
+          <div>
+            <h1 className="font-display font-bold text-3xl tracking-tight">Dashboard</h1>
+            <p className="mt-1 text-xs text-muted-foreground font-mono uppercase tracking-wider">// SYSTEM OVERVIEW</p>
           </div>
-        </CardHeader>
-        <CardContent>
-          {smokeTest.status === 'success' && (
-            <div className="rounded-lg bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-800 px-4 py-3 text-sm text-green-800 dark:text-green-300 flex items-start gap-2">
-              <span className="mt-0.5 text-green-500">&#10003;</span>
-              <span>
-                {smokeTest.message}{' '}
-                <Link
-                  to={`/batches/${smokeTest.batch_id}`}
-                  className="underline font-medium hover:text-green-900 dark:hover:text-green-100 focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:outline-none rounded"
-                >
-                  View batch
-                </Link>
-              </span>
-            </div>
-          )}
-          {smokeTest.status === 'error' && (
-            <div className="rounded-lg bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 px-4 py-3 text-sm text-red-700 dark:text-red-300">
-              {smokeTest.message}
-            </div>
-          )}
-          {smokeTest.status === 'idle' && <span className="sr-only">Ready</span>}
-        </CardContent>
-      </Card>
+          <Button
+            onClick={() => navigate('/batches/new')}
+            className="bg-primary text-primary-foreground hover:bg-primary/90 font-mono text-xs uppercase tracking-wider"
+          >
+            New Batch
+          </Button>
+        </div>
+        <PageDescription>
+          Live view of active and recent batches, total spend against cap, and model-vs-strategy accuracy across completed runs.
+          Start a new batch, trigger a smoke test, or click any batch row to drill into its per-run results.
+        </PageDescription>
 
-      {/* Active Batches */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <CardTitle>Active Batches</CardTitle>
+        {/* Smoke Test */}
+        <section>
+          <SectionHeader label="Smoke Test" />
+          <Card className="shadow-none rounded-sm border-border bg-card">
+            <CardContent className="pt-6">
+              <div className="flex items-start justify-between gap-4 flex-wrap">
+                <p className="text-sm text-muted-foreground max-w-sm">
+                  Runs a single-model, single-strategy batch against the first available dataset.
+                  Capped at{' '}
+                  <span className="font-mono tabular-nums">$5.00</span>.
+                </p>
+                <Button
+                  onClick={handleSmokeTest}
+                  disabled={smokeTest.status === 'running'}
+                  variant="outline"
+                  className="shrink-0 font-mono text-xs uppercase tracking-wider rounded-sm"
+                >
+                  {smokeTest.status === 'running' && (
+                    <span className="inline-block h-3 w-3 rounded-full border-2 border-current border-t-transparent animate-spin mr-2" />
+                  )}
+                  {smokeTest.status === 'running' ? 'Running…' : 'Run Smoke Test'}
+                </Button>
+              </div>
+              {smokeTest.status === 'success' && (
+                <div className="mt-4 border border-signal-success/40 px-4 py-3 text-sm text-signal-success font-mono flex items-start gap-2">
+                  <span className="mt-0.5">✓</span>
+                  <span>
+                    {smokeTest.message}{' '}
+                    <Link
+                      to={`/batches/${smokeTest.batch_id}`}
+                      className="underline hover:text-signal-success/80 focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
+                    >
+                      View batch →
+                    </Link>
+                  </span>
+                </div>
+              )}
+              {smokeTest.status === 'error' && (
+                <div className="mt-4 border border-signal-danger/40 px-4 py-3 text-sm text-signal-danger font-mono">
+                  {smokeTest.message}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </section>
+
+        <hr className="border-border" />
+
+        {/* Active Batches */}
+        <section>
+          <div className="flex items-center justify-between mb-3">
+            <SectionHeader label="Active Batches" count={active.length} />
             <PollingIndicator polling={polling} lastUpdated={lastUpdated} />
           </div>
-        </CardHeader>
-        <CardContent>
           {active.length === 0 ? (
             <EmptyState
               icon={
@@ -328,42 +347,40 @@ export default function Dashboard() {
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
-                <thead className="text-gray-500 dark:text-gray-300">
-                  <tr>
-                    <th className="text-left pb-2">Batch ID</th>
-                    <th className="text-left pb-2">Dataset</th>
-                    <th className="text-left pb-2 w-48">Progress</th>
-                    <th className="text-left pb-2">Cost</th>
-                    <th className="text-left pb-2">Status</th>
-                    <th className="text-left pb-2">Elapsed</th>
+                <thead>
+                  <tr className="border-b border-border">
+                    <th className="text-left pb-2 font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">Batch ID</th>
+                    <th className="text-left pb-2 font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">Dataset</th>
+                    <th className="text-left pb-2 font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground w-48">Progress</th>
+                    <th className="text-right pb-2 font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">Cost</th>
+                    <th className="text-left pb-2 font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">Status</th>
+                    <th className="text-right pb-2 font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">Elapsed</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
-                  {active.map((b) => (
+                <tbody>
+                  {active.map((b, i) => (
                     <tr
                       key={b.batch_id}
                       onClick={() => navigate(`/batches/${b.batch_id}`)}
-                      className="cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
+                      className="border-b border-border cursor-pointer hover:bg-muted/40 transition-colors"
+                      style={ROW_REVEAL_STYLE(i)}
                     >
-                      <td className="py-2 font-mono text-xs text-indigo-600 dark:text-indigo-400">
+                      <td className="py-2.5 font-mono text-xs text-primary">
                         {b.batch_id.slice(0, 8)}…
                       </td>
-                      <td className="py-2 text-gray-600 dark:text-gray-300">{b.dataset}</td>
-                      <td className="py-2 w-48">
+                      <td className="py-2.5 text-sm">{b.dataset}</td>
+                      <td className="py-2.5 w-48">
                         <SimpleProgressBar completed={b.completed_runs} total={b.total_runs} />
                       </td>
-                      <td className="py-2 text-gray-700 dark:text-gray-200">
+                      <td className="py-2.5 text-right font-mono tabular-nums text-xs">
                         ${b.total_cost_usd.toFixed(2)}
                       </td>
-                      <td className="py-2">
-                        <Badge
-                          variant={STATUS_BADGE_VARIANT[b.status]}
-                          className={STATUS_BADGE_CLS[b.status]}
-                        >
+                      <td className="py-2.5">
+                        <span className={`font-mono text-[10px] uppercase tracking-wider border border-current px-1.5 py-0.5 ${STATUS_SIGNAL[b.status]}`}>
                           {b.status}
-                        </Badge>
+                        </span>
                       </td>
-                      <td className="py-2 text-gray-500 dark:text-gray-300 font-mono text-xs">
+                      <td className="py-2.5 text-right font-mono tabular-nums text-xs text-muted-foreground">
                         {formatElapsed(b.created_at)}
                       </td>
                     </tr>
@@ -372,15 +389,13 @@ export default function Dashboard() {
               </table>
             </div>
           )}
-        </CardContent>
-      </Card>
+        </section>
 
-      {/* Recent Completed */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Recent Batches</CardTitle>
-        </CardHeader>
-        <CardContent>
+        <hr className="border-border" />
+
+        {/* Recent Completed */}
+        <section>
+          <SectionHeader label="Recent Batches" count={completed.length} />
           {completed.length === 0 ? (
             <EmptyState
               title="No completed batches yet."
@@ -389,31 +404,32 @@ export default function Dashboard() {
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
-                <thead className="text-gray-500 dark:text-gray-300">
-                  <tr>
-                    <th className="text-left pb-2">Batch ID</th>
-                    <th className="text-left pb-2">Dataset</th>
-                    <th className="text-left pb-2">Completed</th>
-                    <th className="text-left pb-2">Runs</th>
-                    <th className="text-left pb-2">Total Cost</th>
+                <thead>
+                  <tr className="border-b border-border">
+                    <th className="text-left pb-2 font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">Batch ID</th>
+                    <th className="text-left pb-2 font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">Dataset</th>
+                    <th className="text-left pb-2 font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">Completed</th>
+                    <th className="text-right pb-2 font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">Runs</th>
+                    <th className="text-right pb-2 font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">Total Cost</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
-                  {completed.map((b) => (
+                <tbody>
+                  {completed.map((b, i) => (
                     <tr
                       key={b.batch_id}
                       onClick={() => navigate(`/batches/${b.batch_id}`)}
-                      className="cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
+                      className="border-b border-border cursor-pointer hover:bg-muted/40 transition-colors"
+                      style={ROW_REVEAL_STYLE(i)}
                     >
-                      <td className="py-2 font-mono text-xs text-indigo-600 dark:text-indigo-400">
+                      <td className="py-2.5 font-mono text-xs text-primary">
                         {b.batch_id.slice(0, 8)}…
                       </td>
-                      <td className="py-2 text-gray-600 dark:text-gray-300">{b.dataset}</td>
-                      <td className="py-2 text-gray-500 dark:text-gray-300 text-xs">
+                      <td className="py-2.5 text-sm">{b.dataset}</td>
+                      <td className="py-2.5 text-xs text-muted-foreground font-mono tabular-nums">
                         {b.completed_at ? formatDate(b.completed_at) : '—'}
                       </td>
-                      <td className="py-2 text-gray-700 dark:text-gray-200">{b.total_runs}</td>
-                      <td className="py-2 text-gray-700 dark:text-gray-200">
+                      <td className="py-2.5 text-right font-mono tabular-nums text-xs">{b.total_runs}</td>
+                      <td className="py-2.5 text-right font-mono tabular-nums text-xs">
                         ${b.total_cost_usd.toFixed(2)}
                       </td>
                     </tr>
@@ -422,50 +438,42 @@ export default function Dashboard() {
               </table>
             </div>
           )}
-        </CardContent>
-      </Card>
+        </section>
 
-      {/* Trends section — cost headroom + sparklines */}
-      {costSparkData.length >= 2 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Trends</CardTitle>
-          </CardHeader>
-          <CardContent>
+        <hr className="border-border" />
+
+        {/* Trends */}
+        {costSparkData.length >= 2 && (
+          <section>
+            <SectionHeader label="Trends" />
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
               <SparklineChart
                 data={costSparkData}
                 dataKey="cost"
-                color="#6366f1"
                 label="Cost per batch (USD)"
               />
               <CostHeadroomCard batches={batches} />
             </div>
-          </CardContent>
-        </Card>
-      )}
+            <hr className="border-border mt-10" />
+          </section>
+        )}
 
-      {/* Accuracy Heatmap */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Model × Strategy Accuracy</CardTitle>
-        </CardHeader>
-        <CardContent>
+        {/* Accuracy Heatmap */}
+        <section>
+          <SectionHeader label="Model × Strategy Accuracy" />
           <AccuracyHeatmap />
-        </CardContent>
-      </Card>
+        </section>
 
-      {/* System Health */}
-      <Card>
-        <CardHeader>
-          <CardTitle>System Health</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <p className="text-sm text-muted-foreground">
+        <hr className="border-border" />
+
+        {/* System Health */}
+        <section>
+          <SectionHeader label="System Health" />
+          <p className="text-sm text-muted-foreground font-mono">
             Coordinator status, active jobs, and storage metrics — coming soon.
           </p>
-        </CardContent>
-      </Card>
-    </div>
+        </section>
+      </div>
+    </>
   )
 }

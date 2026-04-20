@@ -409,11 +409,16 @@ async def test_reconcile_marks_stalled_job_as_failed(tmp_path: Path, temp_db: Da
     original_k8s_available = coord_module.K8S_AVAILABLE
     coord_module.K8S_AVAILABLE = True
 
-    # Also need kubernetes module available for V1DeleteOptions
+    # Also need kubernetes module available for V1DeleteOptions and CoreV1Api.
+    # After the fix, _check_stalled_job lazily creates CoreV1Api() to call
+    # list_namespaced_pod (that method is not on BatchV1Api).
     import types
+    fake_core_v1_instance = MagicMock()
+    fake_core_v1_instance.list_namespaced_pod.return_value = fake_pod_list
     fake_kubernetes = types.SimpleNamespace(
         client=types.SimpleNamespace(
-            V1DeleteOptions=MagicMock(return_value=MagicMock())
+            CoreV1Api=MagicMock(return_value=fake_core_v1_instance),
+            V1DeleteOptions=MagicMock(return_value=MagicMock()),
         )
     )
     original_kubernetes = coord_module.kubernetes

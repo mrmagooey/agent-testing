@@ -12,19 +12,19 @@ test('shows page heading', async ({ page }) => {
 
 test('shows active batches section', async ({ page }) => {
   await page.goto('/')
-  await expect(page.getByRole('heading', { name: 'Active Batches' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: /Active Batches/ })).toBeVisible()
 })
 
 test('shows running batch in active batches table', async ({ page }) => {
   await page.goto('/')
-  const activeSection = page.locator('[data-slot="card"]').filter({ hasText: 'Active Batches' })
+  const activeSection = page.locator('section').filter({ hasText: 'Active Batches' })
   await expect(activeSection.getByText('bbbbbbbb')).toBeVisible()
   await expect(activeSection.getByText('cve-2024-js')).toBeVisible()
 })
 
 test('shows completed batches in recent batches section', async ({ page }) => {
   await page.goto('/')
-  const recentSection = page.locator('[data-slot="card"]').filter({ hasText: 'Recent Batches' })
+  const recentSection = page.locator('section').filter({ hasText: 'Recent Batches' })
   await expect(recentSection.getByText('aaaaaaaa')).toBeVisible()
   await expect(recentSection.getByText('cve-2024-python')).toBeVisible()
 })
@@ -50,14 +50,14 @@ test('new batch button navigates to /batches/new', async ({ page }) => {
 
 test('clicking active batch row navigates to batch detail', async ({ page }) => {
   await page.goto('/')
-  const activeSection = page.locator('[data-slot="card"]').filter({ hasText: 'Active Batches' })
+  const activeSection = page.locator('section').filter({ hasText: 'Active Batches' })
   await activeSection.locator('tbody tr').first().click()
   await expect(page).toHaveURL(/\/batches\/bbbbbbbb/)
 })
 
 test('clicking completed batch row navigates to batch detail', async ({ page }) => {
   await page.goto('/')
-  const recentSection = page.locator('[data-slot="card"]').filter({ hasText: 'Recent Batches' })
+  const recentSection = page.locator('section').filter({ hasText: 'Recent Batches' })
   await recentSection.locator('tbody tr').first().click()
   await expect(page).toHaveURL(/\/batches\//)
 })

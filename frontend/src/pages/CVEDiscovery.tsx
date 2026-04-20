@@ -1,6 +1,9 @@
 import { useState } from 'react'
 import { discoverCVEs, resolveCVE, importCVE, type CVECandidate } from '../api/client'
 import CVECandidateTable from '../components/CVECandidateTable'
+import PageDescription from '../components/PageDescription'
+import { chipClasses } from '../components/ToggleChip'
+import ToggleChip from '../components/ToggleChip'
 
 const LANGUAGES = ['python', 'javascript', 'java', 'go', 'rust', 'c', 'cpp']
 const VULN_CLASSES = ['sqli', 'xss', 'rce', 'ssrf', 'path_traversal', 'auth_bypass', 'xxe', 'insecure_deser', 'buffer_overflow']
@@ -99,6 +102,10 @@ export default function CVEDiscovery() {
   return (
     <div className="max-w-5xl mx-auto space-y-6">
       <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">CVE Discovery</h1>
+      <PageDescription>
+        Search public CVE feeds for real-world vulnerabilities by language, class, and severity, or resolve a specific CVE ID directly.
+        Import any candidate as a new dataset to evaluate models against actual production bugs rather than synthetic ones.
+      </PageDescription>
 
       {/* Tab bar */}
       <div className="flex gap-1 border-b border-gray-200 dark:border-gray-700">
@@ -126,15 +133,13 @@ export default function CVEDiscovery() {
               <div className="flex flex-wrap items-center gap-2">
                 <AnyButton active={languages.length === 0} onClick={() => setLanguages([])} />
                 {LANGUAGES.map((l) => (
-                  <label key={l} className="flex items-center gap-1.5 cursor-pointer text-sm">
-                    <input
-                      type="checkbox"
-                      checked={languages.includes(l)}
-                      onChange={() => toggleItem(languages, setLanguages, l)}
-                      className="rounded"
-                    />
-                    <span className="font-mono text-xs">{l}</span>
-                  </label>
+                  <ToggleChip
+                    key={l}
+                    label={l}
+                    value={l}
+                    checked={languages.includes(l)}
+                    onChange={() => toggleItem(languages, setLanguages, l)}
+                  />
                 ))}
               </div>
             </div>
@@ -144,33 +149,29 @@ export default function CVEDiscovery() {
               <div className="flex flex-wrap items-center gap-2">
                 <AnyButton active={vulnClasses.length === 0} onClick={() => setVulnClasses([])} />
                 {VULN_CLASSES.map((v) => (
-                  <label key={v} className="flex items-center gap-1.5 cursor-pointer text-sm">
-                    <input
-                      type="checkbox"
-                      checked={vulnClasses.includes(v)}
-                      onChange={() => toggleItem(vulnClasses, setVulnClasses, v)}
-                      className="rounded"
-                    />
-                    <span className="font-mono text-xs">{v}</span>
-                  </label>
+                  <ToggleChip
+                    key={v}
+                    label={v}
+                    value={v}
+                    checked={vulnClasses.includes(v)}
+                    onChange={() => toggleItem(vulnClasses, setVulnClasses, v)}
+                  />
                 ))}
               </div>
             </div>
 
             <div>
               <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Severity</p>
-              <div className="flex flex-wrap items-center gap-4">
+              <div className="flex flex-wrap items-center gap-2">
                 <AnyButton active={severities.length === 0} onClick={() => setSeverities([])} />
                 {SEVERITIES.map((s) => (
-                  <label key={s} className="flex items-center gap-1.5 cursor-pointer text-sm">
-                    <input
-                      type="checkbox"
-                      checked={severities.includes(s)}
-                      onChange={() => toggleItem(severities, setSeverities, s)}
-                      className="rounded"
-                    />
-                    <span className="capitalize">{s}</span>
-                  </label>
+                  <ToggleChip
+                    key={s}
+                    label={s}
+                    value={s}
+                    checked={severities.includes(s)}
+                    onChange={() => toggleItem(severities, setSeverities, s)}
+                  />
                 ))}
               </div>
             </div>
@@ -303,17 +304,8 @@ export default function CVEDiscovery() {
 
 function AnyButton({ active, onClick }: { active: boolean; onClick: () => void }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${
-        active
-          ? 'bg-indigo-600 border-indigo-600 text-white'
-          : 'border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:border-indigo-500 hover:text-indigo-600 dark:hover:text-indigo-400'
-      }`}
-    >
-      Any
+    <button type="button" onClick={onClick} aria-pressed={active} className={chipClasses(active)}>
+      <span className="font-mono">Any</span>
     </button>
   )
 }

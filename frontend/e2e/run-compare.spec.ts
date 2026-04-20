@@ -32,7 +32,7 @@ test('shows metrics in both run cards', async ({ page }) => {
 test('shows summary text with counts', async ({ page }) => {
   await expect(page.getByText(/Run A found/)).toBeVisible()
   await expect(page.getByText(/Run B found/)).toBeVisible()
-  await expect(page.getByText(/found by both/)).toBeVisible()
+  await expect(page.getByText(/found by both/).last()).toBeVisible()
 })
 
 test('shows Found by Both tab with count', async ({ page }) => {

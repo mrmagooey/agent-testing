@@ -13,6 +13,7 @@ import MatrixTable from '../components/MatrixTable'
 import FindingsExplorer from '../components/FindingsExplorer'
 import DimensionChart from '../components/DimensionChart'
 import DownloadButton from '../components/DownloadButton'
+import PageDescription from '../components/PageDescription'
 
 const STATUS_BADGE: Record<string, string> = {
   pending: 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400',
@@ -167,6 +168,11 @@ export default function BatchDetail() {
       )}
 
       <Breadcrumbs items={[{ label: 'Dashboard', to: '/' }, { label: batch.batch_id }]} />
+
+      <PageDescription>
+        Live progress, cost, and per-cell results for a single batch, plus cancel and download controls.
+        Click any matrix row to inspect a run in detail, or select two runs to diff their findings side-by-side.
+      </PageDescription>
 
       {/* Header */}
       <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">

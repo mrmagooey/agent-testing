@@ -18,8 +18,8 @@ test.describe('Dashboard error state', () => {
       route.fulfill({ status: 500, contentType: 'application/json', body: '{"detail":"Internal Server Error"}' })
     })
     await page.goto('/')
-    // Dashboard shows an error div when initial fetch fails
-    await expect(page.locator('[class*="red"]').filter({ hasText: /error|Error|failed|Failed/i }).first()).toBeVisible()
+    // Dashboard shows an error div when initial fetch fails (uses text-signal-danger class)
+    await expect(page.locator('[class*="signal-danger"]').filter({ hasText: /error|Error|failed|Failed|Server/i }).first()).toBeVisible()
   })
 })
 
@@ -39,8 +39,8 @@ test.describe('Dashboard smoke test failure', () => {
     })
     await page.goto('/')
     await page.getByRole('button', { name: 'Run Smoke Test' }).click()
-    // Error message should appear in the smoke test card
-    await expect(page.locator('[class*="red"]').filter({ hasText: /Coordinator|error|Error/i }).first()).toBeVisible()
+    // Error message should appear in the smoke test card (uses text-signal-danger class)
+    await expect(page.locator('[class*="signal-danger"]').filter({ hasText: /Coordinator|error|Error/i }).first()).toBeVisible()
   })
 })
 

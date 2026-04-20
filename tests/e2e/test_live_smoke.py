@@ -1,9 +1,20 @@
-"""Live Smoke Test: real LLM call via OpenRouter.
+"""Live Smoke Test: real LLM call.
 
-Exercises the full ExperimentWorker pipeline with a real model provider
-hitting the OpenRouter API. Uses a cheap model to keep cost minimal.
+Exercises the full ExperimentWorker pipeline against a real model provider.
 
-Requires env var OPENROUTER_TEST_KEY to be set.
+Two ways to point it at a backend:
+
+1. OpenRouter (the original configuration): set ``OPENROUTER_TEST_KEY``.
+   Uses the cheap llama-3.1-8b-instruct model via OpenRouter.
+
+2. Any OpenAI-compatible server (e.g. llama.cpp, vLLM, local gateway):
+   set ``LIVE_TEST_API_BASE`` to the server's ``/v1`` endpoint, and
+   ``LIVE_TEST_MODEL_ID`` to a LiteLLM-compatible model string — typically
+   prefixed ``openai/`` so LiteLLM routes it to the OpenAI SDK path.
+   Optional: ``LIVE_TEST_API_KEY`` (defaults to ``"sk-noop"`` for servers
+   that don't enforce auth).
+
+If both are set, (2) wins. If neither is set, the test is skipped.
 
 Run:
     pytest tests/e2e/test_live_smoke.py -v -s
@@ -32,21 +43,36 @@ from sec_review_framework.worker import ExperimentWorker
 
 
 # ---------------------------------------------------------------------------
-# Skip if no API key
+# Backend selection
 # ---------------------------------------------------------------------------
 
 OPENROUTER_KEY = os.environ.get("OPENROUTER_TEST_KEY")
+LIVE_API_BASE = os.environ.get("LIVE_TEST_API_BASE")
+LIVE_MODEL_ID = os.environ.get("LIVE_TEST_MODEL_ID")
+LIVE_API_KEY = os.environ.get("LIVE_TEST_API_KEY", "sk-noop")
+
 pytestmark = pytest.mark.skipif(
-    not OPENROUTER_KEY,
-    reason="OPENROUTER_TEST_KEY not set",
+    not (OPENROUTER_KEY or (LIVE_API_BASE and LIVE_MODEL_ID)),
+    reason=(
+        "neither OPENROUTER_TEST_KEY nor "
+        "(LIVE_TEST_API_BASE + LIVE_TEST_MODEL_ID) is set"
+    ),
 )
 
-# LiteLLM routes to OpenRouter when OPENROUTER_API_KEY is set
-if OPENROUTER_KEY:
-    os.environ["OPENROUTER_API_KEY"] = OPENROUTER_KEY
-
-# Use a cheap, fast model via OpenRouter
-MODEL_ID = "openrouter/meta-llama/llama-3.1-8b-instruct"
+if LIVE_API_BASE and LIVE_MODEL_ID:
+    MODEL_ID = LIVE_MODEL_ID
+    MODEL_CONFIG: dict = {"api_base": LIVE_API_BASE, "api_key": LIVE_API_KEY}
+    # LiteLLM's openai/ provider routes through the OpenAI SDK, which reads
+    # the key from OPENAI_API_KEY and the endpoint from OPENAI_BASE_URL
+    # (module-level litellm.api_key / litellm.api_base are not consulted).
+    os.environ.setdefault("OPENAI_API_KEY", LIVE_API_KEY)
+    os.environ["OPENAI_BASE_URL"] = LIVE_API_BASE
+else:
+    # LiteLLM routes to OpenRouter when OPENROUTER_API_KEY is set
+    if OPENROUTER_KEY:
+        os.environ["OPENROUTER_API_KEY"] = OPENROUTER_KEY
+    MODEL_ID = "openrouter/meta-llama/llama-3.1-8b-instruct"
+    MODEL_CONFIG = {}
 
 
 # ---------------------------------------------------------------------------
@@ -112,7 +138,7 @@ def live_run(live_dirs) -> ExperimentRun:
         verification_variant=VerificationVariant.NONE,
         dataset_name=live_dirs["dataset_name"],
         dataset_version=live_dirs["dataset_version"],
-        model_config={},
+        model_config=MODEL_CONFIG,
         strategy_config={"max_turns": 5},
         created_at=datetime(2026, 4, 17, tzinfo=timezone.utc),
     )

@@ -17,13 +17,15 @@ set -euo pipefail
 RELEASE="${RELEASE:-${1:-sec-review-e2e}}"
 NAMESPACE="${NAMESPACE:-${2:-sec-review-e2e}}"
 STORAGE_ROOT="${STORAGE_ROOT:-${3:-/data}}"
+CLUSTER="${CLUSTER:-sec-review-e2e}"
+KUBE_CONTEXT="${KUBE_CONTEXT:-kind-${CLUSTER}}"
 
 # Paths
 FIXTURE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/tests/fixtures/live-e2e"
 REMOTE_DATASET_DIR="${STORAGE_ROOT}/datasets/targets/live-e2e"
 
 # The coordinator is a Deployment — resolve its pod name dynamically.
-COORDINATOR_POD="$(kubectl get pod \
+COORDINATOR_POD="$(kubectl --context "$KUBE_CONTEXT" get pod \
   -n "$NAMESPACE" \
   -l app.kubernetes.io/component=coordinator \
   -o jsonpath='{.items[0].metadata.name}')"
@@ -58,19 +60,19 @@ fi
 
 # Create remote directory structure in the pod
 echo "Creating remote directory structure..."
-kubectl exec -n "$NAMESPACE" "$COORDINATOR_POD" -- mkdir -p "$REMOTE_DATASET_DIR/repo"
+kubectl --context "$KUBE_CONTEXT" exec -n "$NAMESPACE" "$COORDINATOR_POD" -- mkdir -p "$REMOTE_DATASET_DIR/repo"
 
 # Copy repo files
 echo "Copying repo files..."
-kubectl cp "$FIXTURE_DIR/app.py" "$NAMESPACE/$COORDINATOR_POD:$REMOTE_DATASET_DIR/repo/"
+kubectl --context "$KUBE_CONTEXT" cp "$FIXTURE_DIR/app.py" "$NAMESPACE/$COORDINATOR_POD:$REMOTE_DATASET_DIR/repo/"
 
 # Copy labels
 echo "Copying labels.jsonl..."
-kubectl cp "$FIXTURE_DIR/labels.jsonl" "$NAMESPACE/$COORDINATOR_POD:$REMOTE_DATASET_DIR/"
+kubectl --context "$KUBE_CONTEXT" cp "$FIXTURE_DIR/labels.jsonl" "$NAMESPACE/$COORDINATOR_POD:$REMOTE_DATASET_DIR/"
 
 # Verify files were copied
 echo "Verifying seeded files..."
-kubectl exec -n "$NAMESPACE" "$COORDINATOR_POD" -- ls -la "$REMOTE_DATASET_DIR/"
-kubectl exec -n "$NAMESPACE" "$COORDINATOR_POD" -- ls -la "$REMOTE_DATASET_DIR/repo/"
+kubectl --context "$KUBE_CONTEXT" exec -n "$NAMESPACE" "$COORDINATOR_POD" -- ls -la "$REMOTE_DATASET_DIR/"
+kubectl --context "$KUBE_CONTEXT" exec -n "$NAMESPACE" "$COORDINATOR_POD" -- ls -la "$REMOTE_DATASET_DIR/repo/"
 
 echo "✓ Live-e2e dataset seeded successfully"

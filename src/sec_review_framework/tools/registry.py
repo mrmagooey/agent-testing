@@ -10,49 +10,14 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from pydantic import BaseModel
+
 from sec_review_framework.data.experiment import ToolExtension, ToolVariant
 from sec_review_framework.models.base import ToolDefinition
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Extension auto-registration
-#
-# Each extension module calls register_extension_builder() at import time.
-# We guard with try/except so that a missing optional dependency (e.g.
-# tree-sitter-language-pack not installed) produces a clear warning rather
-# than an import error that breaks the whole registry.
-# ---------------------------------------------------------------------------
-try:
-    from sec_review_framework.tools.extensions import lsp_ext  # noqa: F401
-except ImportError as _ext_import_err:
-    logger.warning(
-        "lsp_ext could not be imported; ToolExtension.LSP will not be "
-        "available. Install worker extras to enable it. (%s)",
-        _ext_import_err,
-    )
-
-try:
-    from sec_review_framework.tools.extensions import tree_sitter_ext  # noqa: F401
-except ImportError as _ext_import_err:
-    logger.warning(
-        "tree_sitter_ext could not be imported; ToolExtension.TREE_SITTER will not be "
-        "available. Install worker extras to enable it. (%s)",
-        _ext_import_err,
-    )
-
-try:
-    from sec_review_framework.tools.extensions import devdocs_ext  # noqa: F401
-except ImportError as _ext_import_err:
-    logger.warning(
-        "devdocs_ext could not be imported; ToolExtension.DEVDOCS will not be "
-        "available. Install worker extras to enable it. (%s)",
-        _ext_import_err,
-    )
-
-
-@dataclass
-class ToolCallRecord:
+class ToolCallRecord(BaseModel):
     call_id: str
     tool_name: str
     input: dict[str, Any]       # full input, not truncated
@@ -174,6 +139,49 @@ def register_extension_builder(
     body free of per-extension conditionals.
     """
     _EXTENSION_BUILDERS[ext] = builder
+
+
+# ---------------------------------------------------------------------------
+# Extension auto-registration
+#
+# These imports MUST appear after the Tool class and register_extension_builder
+# are both fully defined. Each extension module imports Tool transitively via
+# mcp_bridge; if these imports ran before Tool was defined (as they did at the
+# top of this file) Python's partial-initialisation state caused a false
+# ImportError that silently swallowed all three extensions.
+#
+# Error handling: genuine missing-optional-dependency errors (e.g.
+# tree-sitter-language-pack wheel not installed) should log a warning and
+# continue. Circular-import errors — "partially initialized module" — indicate
+# a structural problem that must not be silenced; we re-raise them so they are
+# immediately visible.
+# ---------------------------------------------------------------------------
+
+def _import_extension(module_name: str, ext_label: str) -> None:
+    """Import one extension module, differentiating real dep-missing from cycle bugs."""
+    try:
+        from importlib import import_module
+        import_module(f"sec_review_framework.tools.extensions.{module_name}")
+    except ImportError as _ext_import_err:
+        msg = str(_ext_import_err)
+        if "partially initialized module" in msg or "circular import" in msg:
+            raise ImportError(
+                f"Circular import detected while loading {module_name}: {msg}. "
+                "This is a structural bug — the extension import must not run "
+                "before the Tool class is fully defined in registry.py."
+            ) from _ext_import_err
+        logger.warning(
+            "%s could not be imported; ToolExtension.%s will not be "
+            "available. Install worker extras to enable it. (%s)",
+            module_name,
+            ext_label,
+            _ext_import_err,
+        )
+
+
+_import_extension("lsp_ext", "LSP")
+_import_extension("tree_sitter_ext", "TREE_SITTER")
+_import_extension("devdocs_ext", "DEVDOCS")
 
 
 class ToolRegistryFactory:

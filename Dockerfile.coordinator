@@ -31,6 +31,10 @@ RUN pip install --no-cache-dir --no-deps --force-reinstall .
 # Copy the built frontend static assets
 COPY --from=frontend-build /frontend/dist /app/frontend/dist
 
+# Belt-and-braces: ensure the auto-detection logic finds the correct path even
+# if future refactors change the package layout inside the image.
+ENV FRONTEND_DIST_DIR=/app/frontend/dist
+
 EXPOSE 8080
 
 ENTRYPOINT ["uvicorn", "sec_review_framework.coordinator:app", "--host", "0.0.0.0", "--port", "8080"]

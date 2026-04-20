@@ -121,6 +121,8 @@ secrets:
     mistral: ""
     cohere: ""
     openrouter: ""
+  baseUrls:
+    openai: ""
 
 # -----------------------------------------------------------------------------
 # Network policies

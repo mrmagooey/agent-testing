@@ -15,8 +15,8 @@ from tests.e2e.live.conftest import K8S_LIVE_MARK
 pytestmark = [
     K8S_LIVE_MARK,
     pytest.mark.skipif(
-        not os.getenv("OPENROUTER_TEST_KEY"),
-        reason="OPENROUTER_TEST_KEY not set",
+        not (os.getenv("OPENROUTER_TEST_KEY") or os.getenv("LIVE_TEST_MODEL_ID")),
+        reason="neither OPENROUTER_TEST_KEY nor LIVE_TEST_MODEL_ID is set",
     ),
 ]
 

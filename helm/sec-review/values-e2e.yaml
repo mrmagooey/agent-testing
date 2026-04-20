@@ -6,13 +6,21 @@
 # with `kind load docker-image` rather than pulled from a registry, so
 # pullPolicy is IfNotPresent.
 #
-# Usage:
+# Usage (OpenRouter):
 #   helm upgrade --install sec-review-e2e ./helm/sec-review \
 #     --namespace sec-review-e2e --create-namespace \
 #     --values ./helm/sec-review/values-e2e.yaml \
 #     --set image.coordinator.tag=e2e \
 #     --set image.worker.tag=e2e \
 #     --set-string secrets.apiKeys.openrouter=$OPENROUTER_TEST_KEY
+#
+# Usage (OpenAI-compatible, e.g. llama.cpp):
+#   helm upgrade --install sec-review-e2e ./helm/sec-review \
+#     --namespace sec-review-e2e --create-namespace \
+#     --values ./helm/sec-review/values-e2e.yaml \
+#     --set image.coordinator.tag=e2e \
+#     --set image.worker.tag=e2e \
+#     --set-string secrets.apiKeys.openai=$LIVE_TEST_API_KEY --set-string secrets.baseUrls.openai=$LIVE_TEST_API_BASE
 #
 # Bring up the full stack:   make kind-e2e-up
 # Tear down:                 make kind-e2e-down

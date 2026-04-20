@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { listDatasets, type Dataset } from '../api/client'
 import { PageLoadingSpinner } from '../components/Skeleton'
+import PageDescription from '../components/PageDescription'
 
 function humanBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -108,6 +109,10 @@ export default function Datasets() {
           Discover CVEs
         </button>
       </div>
+      <PageDescription>
+        Source-code repositories with labelled vulnerabilities (ground truth) that batches evaluate against.
+        Browse existing datasets or discover and import new ones from public CVE feeds.
+      </PageDescription>
 
       <div className="flex items-center gap-3">
         <div className="relative flex-1 max-w-xs">

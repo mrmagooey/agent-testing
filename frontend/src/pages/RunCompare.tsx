@@ -3,6 +3,7 @@ import { useParams, useSearchParams } from 'react-router-dom'
 import { compareRuns, type RunComparison, type Finding } from '../api/client'
 import Breadcrumbs from '../components/Breadcrumbs'
 import CodeViewer from '../components/CodeViewer'
+import PageDescription from '../components/PageDescription'
 import {
   Card,
   CardContent,
@@ -139,6 +140,11 @@ export default function RunCompare() {
           { label: 'Compare' },
         ]}
       />
+
+      <PageDescription>
+        Side-by-side diff of two runs' findings — split into <em>found by both</em>, <em>only in A</em>, and <em>only in B</em>.
+        Use it to see exactly what a model or strategy change caught or missed relative to a baseline.
+      </PageDescription>
 
       {/* Header comparison — shadcn Card for each run panel */}
       <div className="grid grid-cols-2 gap-4">

@@ -17,12 +17,14 @@ from tests.e2e.live.conftest import K8S_LIVE_MARK, poll_until_done, unique_batch
 pytestmark = [
     K8S_LIVE_MARK,
     pytest.mark.skipif(
-        not os.getenv("OPENROUTER_TEST_KEY"),
-        reason="OPENROUTER_TEST_KEY not set",
+        not (os.getenv("OPENROUTER_TEST_KEY") or os.getenv("LIVE_TEST_MODEL_ID")),
+        reason="neither OPENROUTER_TEST_KEY nor LIVE_TEST_MODEL_ID is set",
     ),
 ]
 
-MODEL_ID = "openrouter/meta-llama/llama-3.1-8b-instruct"
+MODEL_ID = os.environ.get(
+    "LIVE_TEST_MODEL_ID", "openrouter/meta-llama/llama-3.1-8b-instruct"
+)
 
 # 2 strategies × 2 tool_variants × 2 repetitions = 8 runs
 MATRIX_PAYLOAD = {

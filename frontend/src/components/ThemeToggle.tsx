@@ -8,9 +8,11 @@ export default function ThemeToggle() {
       onClick={toggle}
       title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
       aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
-      className="rounded-full p-2 text-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+      className="font-mono text-xs tracking-wider uppercase px-2 py-1 rounded hover:bg-muted transition-colors"
     >
-      {isDark ? '☀️' : '🌙'}
+      <span className={isDark ? 'text-muted-foreground' : 'text-primary'}>[ LIGHT ]</span>
+      {' '}
+      <span className={isDark ? 'text-primary' : 'text-muted-foreground'}>[ DARK ]</span>
     </button>
   )
 }

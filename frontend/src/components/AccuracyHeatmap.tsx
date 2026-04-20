@@ -1,23 +1,52 @@
-import { useEffect, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { getAccuracyMatrix, type AccuracyMatrix, type AccuracyMatrixCell } from '../api/client'
-import { metricTone } from '../constants/colors'
+
+// Single-hue amber ramp: oklch(0.96 0.03 80) → oklch(0.70 0.17 65)
+// We interpolate lightness and chroma across the 0–1 accuracy range.
+function amberCellStyle(accuracy: number): React.CSSProperties {
+  const t = Math.max(0, Math.min(1, accuracy))
+  // lightness: 0.96 (low) → 0.70 (high)
+  const l = 0.96 - t * 0.26
+  // chroma: 0.03 (low) → 0.17 (high)
+  const c = 0.03 + t * 0.14
+  // hue: 80 → 65
+  const h = 80 - t * 15
+  return {
+    backgroundColor: `oklch(${l.toFixed(3)} ${c.toFixed(3)} ${h.toFixed(1)})`,
+    color: t > 0.5 ? '#1a1209' : '#78716c',
+  }
+}
+
+function signalLabel(accuracy: number): string {
+  if (accuracy >= 0.8) return 'PASS'
+  if (accuracy >= 0.6) return 'WARN'
+  return 'FAIL'
+}
+
+function signalCls(accuracy: number): string {
+  if (accuracy >= 0.8) return 'text-signal-success'
+  if (accuracy >= 0.6) return 'text-signal-warning'
+  return 'text-signal-danger'
+}
 
 function HeatmapCell({ cell }: { cell: AccuracyMatrixCell }) {
-  const { cls, label } = metricTone(cell.accuracy, 'higher-is-better')
+  const label = signalLabel(cell.accuracy)
+  const labelCls = signalCls(cell.accuracy)
   return (
     <td
-      className={`px-3 py-3 text-center font-mono text-xs ${cls}`}
+      className="px-3 py-3 text-center font-mono text-xs"
+      style={amberCellStyle(cell.accuracy)}
       title={`${cell.model} × ${cell.strategy}: ${cell.accuracy.toFixed(3)} recall (${cell.run_count} run${cell.run_count !== 1 ? 's' : ''})`}
     >
-      <div className="font-semibold">{cell.accuracy.toFixed(3)}</div>
-      <div className="text-[10px] opacity-70">{label}</div>
+      <div className="font-semibold tabular-nums">{cell.accuracy.toFixed(3)}</div>
+      <div className={`text-[10px] opacity-80 ${labelCls}`}>{label}</div>
     </td>
   )
 }
 
 function EmptyCell() {
   return (
-    <td className="px-3 py-3 text-center text-gray-300 dark:text-gray-600 font-mono text-xs bg-gray-50 dark:bg-gray-800/40">
+    <td className="px-3 py-3 text-center text-muted-foreground/40 font-mono text-xs bg-muted/20">
       —
     </td>
   )
@@ -37,19 +66,19 @@ export default function AccuracyHeatmap() {
 
   if (loading) {
     return (
-      <div className="animate-pulse h-24 bg-gray-100 dark:bg-gray-700 rounded-lg" />
+      <div className="animate-pulse h-24 bg-muted rounded-sm" />
     )
   }
 
   if (error) {
     return (
-      <p className="text-sm text-red-500 dark:text-red-400">{error}</p>
+      <p className="text-sm text-signal-danger font-mono">{error}</p>
     )
   }
 
   if (!matrix || matrix.cells.length === 0) {
     return (
-      <p className="text-sm text-gray-400 dark:text-gray-500">
+      <p className="text-sm text-muted-foreground font-mono">
         No completed runs with evaluation data yet.
       </p>
     )
@@ -62,22 +91,22 @@ export default function AccuracyHeatmap() {
 
   return (
     <div data-testid="accuracy-heatmap">
-      <div className="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700">
+      <div className="overflow-x-auto border border-border rounded-sm">
         <table className="w-full text-sm">
-          <thead className="bg-gray-50 dark:bg-gray-800 text-gray-600 dark:text-gray-400">
+          <thead className="bg-muted/40 border-b border-border">
             <tr>
-              <th className="px-3 py-2 text-left font-medium whitespace-nowrap">Model</th>
+              <th className="px-3 py-2 text-left font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground whitespace-nowrap">Model</th>
               {matrix.strategies.map((strategy) => (
-                <th key={strategy} className="px-3 py-2 text-center font-medium whitespace-nowrap font-mono">
+                <th key={strategy} className="px-3 py-2 text-center font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground whitespace-nowrap">
                   {strategy}
                 </th>
               ))}
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+          <tbody className="divide-y divide-border">
             {matrix.models.map((model) => (
-              <tr key={model} className="bg-white dark:bg-gray-900">
-                <td className="px-3 py-3 font-mono text-xs text-gray-700 dark:text-gray-300 whitespace-nowrap font-medium">
+              <tr key={model} className="bg-card">
+                <td className="px-3 py-3 font-mono text-xs text-foreground whitespace-nowrap">
                   {model}
                 </td>
                 {matrix.strategies.map((strategy) => {
@@ -93,9 +122,9 @@ export default function AccuracyHeatmap() {
           </tbody>
         </table>
       </div>
-      <p className="mt-2 text-xs text-gray-400 dark:text-gray-500">
+      <p className="mt-2 text-[10px] text-muted-foreground font-mono uppercase tracking-[0.1em]">
         Accuracy = recall (TP / (TP + FN)), averaged across all completed runs per cell.
-        Color scale: emerald ≥ 0.8, amber ≥ 0.6, rose &lt; 0.6.
+        Amber ramp: dim = low, saturated = high.
       </p>
     </div>
   )

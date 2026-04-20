@@ -10,40 +10,83 @@ import DatasetDetail from './pages/DatasetDetail'
 import Feedback from './pages/Feedback'
 import ThemeToggle from './components/ThemeToggle'
 
-const navLinkClass = ({ isActive }: { isActive: boolean }) =>
-  `px-3 py-2 rounded text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:outline-none ${
-    isActive
-      ? 'bg-indigo-100 dark:bg-indigo-900 text-indigo-700 dark:text-indigo-200'
-      : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'
-  }`
+const NAV_LINKS = [
+  { to: '/', label: 'Dashboard', end: true },
+  { to: '/batches/new', label: 'New Batch', end: false },
+  { to: '/datasets', label: 'Datasets', end: true },
+  { to: '/datasets/discover', label: 'CVE Discovery', end: false },
+  { to: '/feedback', label: 'Feedback', end: false },
+]
 
 function NavBar() {
   return (
-    <nav className="bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 sticky top-0 z-50">
-      <div className="max-w-screen-xl mx-auto px-4 flex items-center justify-between h-14">
-        <div className="flex items-center gap-1">
-          <NavLink to="/" end className={navLinkClass} aria-current="page">
-            Dashboard
-          </NavLink>
-          <NavLink to="/batches/new" className={navLinkClass} aria-current="page">
-            New Batch
-          </NavLink>
-          <NavLink to="/datasets" end className={navLinkClass} aria-current="page">
-            Datasets
-          </NavLink>
-          <NavLink to="/datasets/discover" className={navLinkClass} aria-current="page">
-            CVE Discovery
-          </NavLink>
-          <NavLink to="/feedback" className={navLinkClass} aria-current="page">
-            Feedback
-          </NavLink>
+    <>
+      <style>{`
+        .nav-cursor::before {
+          content: '\\258A';
+          display: inline-block;
+          margin-right: 0.4em;
+          color: var(--color-primary, #f59e0b);
+        }
+      `}</style>
+      <nav className="bg-background/80 backdrop-blur-sm border-b border-border sticky top-0 z-50 h-12">
+        <div className="max-w-screen-xl mx-auto px-6 flex items-center justify-between h-full gap-8">
+
+          {/* Product mark */}
+          <div className="flex flex-col justify-center leading-none shrink-0">
+            <span className="font-display font-bold tracking-[0.2em] text-sm uppercase text-foreground">
+              SEC·REVIEW
+            </span>
+            <span className="text-[10px] text-muted-foreground font-mono tracking-wider mt-0.5">
+              v·MATRIX
+            </span>
+          </div>
+
+          {/* Route links */}
+          <div className="flex items-center gap-0 flex-1">
+            {NAV_LINKS.map(({ to, label, end }, idx) => (
+              <div key={to} className="flex items-center">
+                {idx > 0 && (
+                  <span
+                    className="text-muted-foreground/40 font-mono text-xs select-none mx-2"
+                    aria-hidden="true"
+                  >
+                    │
+                  </span>
+                )}
+                <NavLink
+                  to={to}
+                  end={end}
+                  className={({ isActive }) =>
+                    [
+                      'font-mono text-xs uppercase tracking-[0.15em] transition-colors',
+                      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary rounded-sm px-1 py-0.5',
+                      isActive
+                        ? 'text-primary nav-cursor'
+                        : 'text-muted-foreground hover:text-foreground',
+                    ].join(' ')
+                  }
+                >
+                  {label}
+                </NavLink>
+              </div>
+            ))}
+          </div>
+
+          {/* Right cluster: status lamp + theme toggle */}
+          <div className="flex items-center gap-3 shrink-0">
+            <div className="flex items-center gap-1.5" aria-label="System status: online">
+              <span className="h-1.5 w-1.5 rounded-full bg-signal-success animate-pulse" />
+              <span className="text-[10px] text-muted-foreground tracking-wider uppercase font-mono">
+                ONLINE
+              </span>
+            </div>
+            <ThemeToggle />
+          </div>
+
         </div>
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-gray-400 dark:text-gray-500 font-mono">sec-review</span>
-          <ThemeToggle />
-        </div>
-      </div>
-    </nav>
+      </nav>
+    </>
   )
 }
 

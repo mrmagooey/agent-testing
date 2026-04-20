@@ -176,6 +176,37 @@ uv run pytest -m "not slow"
 uv run pytest tests/unit/
 ```
 
+### Live e2e against a kind cluster
+
+Frontend specs tagged `@live` (currently `frontend/e2e/live-golden-path.spec.ts`) run against a real coordinator + worker deployed to a dedicated kind cluster. Every kubectl/helm call is pinned to `--context=kind-sec-review-e2e`, so these targets are safe to run regardless of your active context (e.g. while minikube is also up).
+
+Prereqs: `kind`, `helm`, `kubectl`, Node 22+, and one of the backend credentials:
+
+```bash
+export OPENROUTER_TEST_KEY=<key>                 # OpenRouter, or
+export LIVE_TEST_API_BASE=<url>                  # OpenAI-compatible
+export LIVE_TEST_API_KEY=<key>
+```
+
+One-shot (bootstraps the cluster if absent, manages port-forward, runs specs):
+
+```bash
+make kind-e2e-playwright-all
+make kind-e2e-down                      # when finished
+```
+
+Step-by-step (re-runnable while the cluster stays up):
+
+```bash
+make kind-e2e-up                        # kind + helm install + seed fixture
+./scripts/e2e-live/port-forward.sh &    # kubectl port-forward :8080 → coordinator
+make kind-e2e-pytest                    # backend live tests
+make kind-e2e-playwright                # Playwright --grep @live
+make kind-e2e-down
+```
+
+To add a spec to the live suite, tag its `describe` with `@live` and make it tolerant of real-backend state (no mocked `page.route()`, don't assume a clean dataset). See `live-golden-path.spec.ts` for the pattern — it submits via `request.post('/api/batches')` rather than driving the form, because the dataset and model lists come from the live database.
+
 ---
 
 ## Configuration
@@ -229,6 +260,11 @@ make test                     Run pytest (fails fast with -x)
 make lint                     ruff check
 make format                   ruff format
 make sync                     uv sync --all-extras
+make kind-e2e-up              Bootstrap kind cluster + helm install + seed
+make kind-e2e-pytest          Run backend live tests against the kind cluster
+make kind-e2e-playwright      Run @live Playwright specs (assumes port-forward :8080)
+make kind-e2e-playwright-all  One-shot: bootstrap (if needed) + port-forward + @live specs
+make kind-e2e-down            Delete the kind cluster
 ```
 
 ---

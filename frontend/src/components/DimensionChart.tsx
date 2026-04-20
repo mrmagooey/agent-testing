@@ -7,6 +7,7 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from 'recharts'
+import { useTheme } from '../hooks/useTheme'
 
 export interface DimensionChartProps {
   data: Array<Record<string, unknown>>
@@ -22,9 +23,12 @@ export default function DimensionChart({
   xKey,
   yKey,
   title,
-  color = '#6366f1',
+  color,
   isRatio,
 }: DimensionChartProps) {
+  const { isDark } = useTheme()
+  const barColor = color ?? (isDark ? '#F0B84E' : '#F5A524')
+
   const values = data.map((d) => d[yKey] as number).filter((v) => typeof v === 'number' && !isNaN(v))
   const maxVal = values.length > 0 ? Math.max(...values) : 1
 
@@ -33,19 +37,19 @@ export default function DimensionChart({
     : Math.min(1, Math.ceil(maxVal * 1.1 * 10) / 10) || 1
 
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-700">
-      <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-4">{title}</h3>
+    <div className="bg-card rounded-sm p-4 border border-border">
+      <h3 className="font-mono text-[11px] tracking-[0.2em] uppercase text-muted-foreground mb-4">{title}</h3>
       <ResponsiveContainer width="100%" height={300}>
         <BarChart data={data} margin={{ top: 4, right: 16, left: 0, bottom: 4 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#374151" opacity={0.3} />
+          <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" opacity={1} vertical={false} />
           <XAxis
             dataKey={xKey}
-            tick={{ fontSize: 11, fill: '#9ca3af' }}
+            tick={{ fontSize: 10, fill: 'var(--muted-foreground)', fontFamily: 'JetBrains Mono, monospace' }}
             axisLine={false}
             tickLine={false}
           />
           <YAxis
-            tick={{ fontSize: 11, fill: '#9ca3af' }}
+            tick={{ fontSize: 10, fill: 'var(--muted-foreground)', fontFamily: 'JetBrains Mono, monospace' }}
             axisLine={false}
             tickLine={false}
             domain={[0, domainMax]}
@@ -53,15 +57,16 @@ export default function DimensionChart({
           />
           <Tooltip
             contentStyle={{
-              backgroundColor: '#1f2937',
-              border: '1px solid #374151',
-              borderRadius: 6,
-              fontSize: 12,
+              backgroundColor: 'var(--card)',
+              border: '1px solid var(--border)',
+              borderRadius: '0.25rem',
+              fontSize: 11,
+              fontFamily: 'JetBrains Mono, monospace',
             }}
-            labelStyle={{ color: '#f9fafb' }}
-            itemStyle={{ color: '#d1d5db' }}
+            labelStyle={{ color: 'var(--card-foreground)' }}
+            itemStyle={{ color: 'var(--muted-foreground)' }}
           />
-          <Bar dataKey={yKey} fill={color} radius={[4, 4, 0, 0]} />
+          <Bar dataKey={yKey} fill={barColor} radius={[2, 2, 0, 0]} />
         </BarChart>
       </ResponsiveContainer>
     </div>

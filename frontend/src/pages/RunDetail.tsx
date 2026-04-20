@@ -7,6 +7,7 @@ import ConversationViewer from '../components/ConversationViewer'
 import DownloadButton from '../components/DownloadButton'
 import EmptyState from '../components/EmptyState'
 import PromptInjectionViewer from '../components/PromptInjectionViewer'
+import PageDescription from '../components/PageDescription'
 import { PageLoadingSpinner } from '../components/Skeleton'
 import { SEVERITY_COLORS, MATCH_STATUS_COLORS, metricTone } from '../constants/colors'
 
@@ -149,6 +150,11 @@ export default function RunDetail() {
           { label: run.experiment_id },
         ]}
       />
+
+      <PageDescription>
+        Everything a single experiment produced: findings with match status (TP/FP/FN), the tool-call audit, the assistant transcript, and the exact prompt that was sent to the model.
+        Use this when you need to understand <em>why</em> a run got the precision and recall it did, and to reclassify individual findings.
+      </PageDescription>
 
       {/* Header */}
       <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
