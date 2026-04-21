@@ -133,10 +133,10 @@ describe('DatasetSourceViewer', () => {
     await waitFor(() => {
       expect(screen.getByText(/file is large/i)).toBeInTheDocument()
     })
-    expect(screen.getByRole('button', { name: /load anyway/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /dismiss/i })).toBeInTheDocument()
   })
 
-  it('hides truncation banner when "Load anyway" is clicked', async () => {
+  it('hides truncation banner when "Dismiss" is clicked', async () => {
     mockFetch({
       path: 'huge.py',
       content: 'content',
@@ -148,9 +148,9 @@ describe('DatasetSourceViewer', () => {
     })
     render(<DatasetSourceViewer datasetName="myds" filePath="huge.py" />)
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /load anyway/i })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /dismiss/i })).toBeInTheDocument()
     })
-    fireEvent.click(screen.getByRole('button', { name: /load anyway/i }))
+    fireEvent.click(screen.getByRole('button', { name: /dismiss/i }))
     expect(screen.queryByText(/file is large/i)).not.toBeInTheDocument()
   })
 

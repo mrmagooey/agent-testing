@@ -172,13 +172,13 @@ export default function DatasetSourceViewer({
         <div className="flex items-center justify-between rounded border border-yellow-200 dark:border-yellow-700 bg-yellow-50 dark:bg-yellow-950 px-3 py-2 text-xs text-yellow-800 dark:text-yellow-300">
           <span>
             File is large ({(data.size_bytes / (1024 * 1024)).toFixed(1)} MiB) — showing head and
-            tail snippet.
+            tail snippet. Full content is not available.
           </span>
           <button
             onClick={() => setForceLoad(true)}
             className="ml-3 underline hover:no-underline focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:outline-none"
           >
-            Load anyway
+            Dismiss
           </button>
         </div>
       )}

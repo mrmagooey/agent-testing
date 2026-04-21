@@ -196,3 +196,28 @@ def test_missing_file_raises_404(tmp_path: Path):
     with pytest.raises(HTTPException) as exc_info:
         coord.get_file_content("myds", "nonexistent.py")
     assert exc_info.value.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Dataset name validation — reject separators / traversal / NUL
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "bad_name",
+    [
+        "../other",
+        "..",
+        ".",
+        "",
+        "foo/bar",
+        "foo\\bar",
+        "foo\x00bar",
+    ],
+)
+def test_rejects_invalid_dataset_name(tmp_path: Path, bad_name: str):
+    coord, _ = _make_coordinator(tmp_path)
+    with pytest.raises(HTTPException) as exc_info:
+        coord.get_file_content(bad_name, "anything.py")
+    assert exc_info.value.status_code == 400
+    assert "invalid dataset name" in exc_info.value.detail

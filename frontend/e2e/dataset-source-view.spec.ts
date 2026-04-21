@@ -16,7 +16,7 @@
 import { test, expect } from '@playwright/test'
 import { mockApi } from './helpers/mockApi'
 
-const BATCH_ID = 'aaaaaaaa-0001-0001-0001-000000000001'
+const EXPERIMENT_ID = 'aaaaaaaa-0001-0001-0001-000000000001'
 const RUN_ID = 'run-001-aaa'
 const DATASET_NAME = 'cve-2024-python'
 
@@ -32,7 +32,7 @@ test.beforeEach(async ({ page }) => {
 
 test.describe('View in dataset link on RunDetail', () => {
   test('link is visible after expanding a finding with a file_path', async ({ page }) => {
-    await page.goto(`/experiments/${BATCH_ID}/runs/${RUN_ID}`)
+    await page.goto(`/experiments/${EXPERIMENT_ID}/runs/${RUN_ID}`)
 
     const findingRow = page.getByRole('row', { name: /SQL Injection in user login handler/i })
     await findingRow.click()
@@ -43,7 +43,7 @@ test.describe('View in dataset link on RunDetail', () => {
   test('link URL contains correct path, line, end, from_experiment, from_run params', async ({
     page,
   }) => {
-    await page.goto(`/experiments/${BATCH_ID}/runs/${RUN_ID}`)
+    await page.goto(`/experiments/${EXPERIMENT_ID}/runs/${RUN_ID}`)
 
     const findingRow = page.getByRole('row', { name: /SQL Injection in user login handler/i })
     await findingRow.click()
@@ -56,12 +56,12 @@ test.describe('View in dataset link on RunDetail', () => {
     expect(href).toContain(`path=${encodeURIComponent(FILE_PATH)}`)
     expect(href).toContain(`line=${LINE_START}`)
     expect(href).toContain(`end=${LINE_END}`)
-    expect(href).toContain(`from_experiment=${BATCH_ID}`)
+    expect(href).toContain(`from_experiment=${EXPERIMENT_ID}`)
     expect(href).toContain(`from_run=${RUN_ID}`)
   })
 
   test('link opens in a new tab (target=_blank)', async ({ page }) => {
-    await page.goto(`/experiments/${BATCH_ID}/runs/${RUN_ID}`)
+    await page.goto(`/experiments/${EXPERIMENT_ID}/runs/${RUN_ID}`)
     const findingRow = page.getByRole('row', { name: /SQL Injection in user login handler/i })
     await findingRow.click()
 
@@ -78,7 +78,7 @@ test.describe('DatasetSourceView page', () => {
       path: FILE_PATH,
       line: String(LINE_START),
       end: String(LINE_END),
-      from_experiment: BATCH_ID,
+      from_experiment: EXPERIMENT_ID,
       from_run: RUN_ID,
     })
     await page.goto(`/datasets/${DATASET_NAME}/source?${params}`)
@@ -96,7 +96,7 @@ test.describe('DatasetSourceView page', () => {
   }) => {
     const params = new URLSearchParams({
       path: FILE_PATH,
-      from_experiment: BATCH_ID,
+      from_experiment: EXPERIMENT_ID,
       from_run: RUN_ID,
     })
     await page.goto(`/datasets/${DATASET_NAME}/source?${params}`)
@@ -183,6 +183,6 @@ test.describe('DatasetSourceView page', () => {
     const params = new URLSearchParams({ path: FILE_PATH })
     await page.goto(`/datasets/${DATASET_NAME}/source?${params}`)
     await expect(page.getByText(/file is large/i)).toBeVisible()
-    await expect(page.getByRole('button', { name: /load anyway/i })).toBeVisible()
+    await expect(page.getByRole('button', { name: /dismiss/i })).toBeVisible()
   })
 })

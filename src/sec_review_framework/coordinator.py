@@ -1471,6 +1471,11 @@ class ExperimentCoordinator:
         if path.startswith("/"):
             raise HTTPException(status_code=400, detail="path escapes dataset")
 
+        # Validate dataset_name up front: reject separators / traversal / NUL so
+        # we don't rely solely on the downstream resolve() containment check.
+        if "\x00" in dataset_name or "/" in dataset_name or "\\" in dataset_name or dataset_name in ("", ".", ".."):
+            raise HTTPException(status_code=400, detail="invalid dataset name")
+
         dataset_dir = (self.storage_root / "datasets" / dataset_name).resolve()
         candidate = (dataset_dir / path).resolve()
 
