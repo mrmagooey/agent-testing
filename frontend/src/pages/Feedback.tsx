@@ -1,13 +1,18 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import {
   listExperiments,
+  listDatasets,
+  getTrends,
   compareExperiments,
   getFPPatterns,
   type Experiment,
+  type Dataset,
   type FPPattern,
+  type TrendResponse,
 } from '../api/client'
 import { PageLoadingSpinner } from '../components/Skeleton'
 import PageDescription from '../components/PageDescription'
+import TrendGrid from '../components/TrendGrid'
 
 function DeltaCell({ value }: { value: number }) {
   const cls =
@@ -23,8 +28,77 @@ function DeltaCell({ value }: { value: number }) {
   )
 }
 
+// ---------------------------------------------------------------------------
+// Trends section
+// ---------------------------------------------------------------------------
+
+const TRENDS_LIMIT_OPTIONS = [5, 10, 20, 50]
+
+const LS_TREND_DATASET = 'feedback_trend_dataset'
+const LS_TREND_LIMIT = 'feedback_trend_limit'
+const LS_TREND_TOOL_EXT = 'feedback_trend_tool_ext'
+const LS_TREND_SINCE = 'feedback_trend_since'
+const LS_TREND_UNTIL = 'feedback_trend_until'
+
+function useTrendFilters() {
+  const [trendDataset, setTrendDataset] = useState<string>(
+    () => localStorage.getItem(LS_TREND_DATASET) ?? ''
+  )
+  const [trendLimit, setTrendLimit] = useState<number>(
+    () => parseInt(localStorage.getItem(LS_TREND_LIMIT) ?? '10', 10)
+  )
+  const [trendToolExt, setTrendToolExt] = useState<string>(
+    () => localStorage.getItem(LS_TREND_TOOL_EXT) ?? ''
+  )
+  const [trendSince, setTrendSince] = useState<string>(
+    () => localStorage.getItem(LS_TREND_SINCE) ?? ''
+  )
+  const [trendUntil, setTrendUntil] = useState<string>(
+    () => localStorage.getItem(LS_TREND_UNTIL) ?? ''
+  )
+
+  const setAndPersistDataset = (v: string) => {
+    setTrendDataset(v)
+    localStorage.setItem(LS_TREND_DATASET, v)
+  }
+  const setAndPersistLimit = (v: number) => {
+    setTrendLimit(v)
+    localStorage.setItem(LS_TREND_LIMIT, String(v))
+  }
+  const setAndPersistToolExt = (v: string) => {
+    setTrendToolExt(v)
+    localStorage.setItem(LS_TREND_TOOL_EXT, v)
+  }
+  const setAndPersistSince = (v: string) => {
+    setTrendSince(v)
+    localStorage.setItem(LS_TREND_SINCE, v)
+  }
+  const setAndPersistUntil = (v: string) => {
+    setTrendUntil(v)
+    localStorage.setItem(LS_TREND_UNTIL, v)
+  }
+
+  return {
+    trendDataset,
+    trendLimit,
+    trendToolExt,
+    trendSince,
+    trendUntil,
+    setTrendDataset: setAndPersistDataset,
+    setTrendLimit: setAndPersistLimit,
+    setTrendToolExt: setAndPersistToolExt,
+    setTrendSince: setAndPersistSince,
+    setTrendUntil: setAndPersistUntil,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Main Feedback page
+// ---------------------------------------------------------------------------
+
 export default function Feedback() {
   const [experiments, setExperiments] = useState<Experiment[]>([])
+  const [datasets, setDatasets] = useState<Dataset[]>([])
   const [experimentAId, setExperimentAId] = useState('')
   const [experimentBId, setExperimentBId] = useState('')
   const [loading, setLoading] = useState(true)
@@ -40,12 +114,51 @@ export default function Feedback() {
   const [fpPatterns, setFpPatterns] = useState<FPPattern[]>([])
   const [fpLoading, setFpLoading] = useState(false)
 
+  // Trends state
+  const {
+    trendDataset,
+    trendLimit,
+    trendToolExt,
+    trendSince,
+    trendUntil,
+    setTrendDataset,
+    setTrendLimit,
+    setTrendToolExt,
+    setTrendSince,
+    setTrendUntil,
+  } = useTrendFilters()
+  const [trendsData, setTrendsData] = useState<TrendResponse | null>(null)
+  const [trendsLoading, setTrendsLoading] = useState(false)
+  const [trendsError, setTrendsError] = useState<string | null>(null)
+
   useEffect(() => {
-    listExperiments()
-      .then(setExperiments)
-      .catch(() => null)
-      .finally(() => setLoading(false))
+    Promise.all([
+      listExperiments().catch(() => [] as Experiment[]),
+      listDatasets().catch(() => [] as Dataset[]),
+    ]).then(([experimentList, datasetList]) => {
+      setExperiments(experimentList)
+      setDatasets(datasetList)
+    }).finally(() => setLoading(false))
   }, [])
+
+  const handleLoadTrends = useCallback(async () => {
+    if (!trendDataset) return
+    setTrendsLoading(true)
+    setTrendsError(null)
+    try {
+      const data = await getTrends(trendDataset, {
+        limit: trendLimit,
+        tool_ext: trendToolExt || undefined,
+        since: trendSince || undefined,
+        until: trendUntil || undefined,
+      })
+      setTrendsData(data)
+    } catch (err) {
+      setTrendsError(err instanceof Error ? err.message : 'Failed to load trends')
+    } finally {
+      setTrendsLoading(false)
+    }
+  }, [trendDataset, trendLimit, trendToolExt, trendSince, trendUntil])
 
   const handleCompare = async () => {
     if (!experimentAId || !experimentBId) return
@@ -85,6 +198,114 @@ export default function Feedback() {
         Experiment-to-experiment accuracy deltas, stability across reruns, and recurring false-positive patterns mined from completed runs.
         Use it to quantify whether a prompt, model, or strategy change actually improved results against a baseline.
       </PageDescription>
+
+      {/* Trends */}
+      <section
+        className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6"
+        data-testid="trends-section"
+      >
+        <h2 className="font-semibold mb-5">Trends</h2>
+        <div className="flex flex-wrap items-end gap-4 mb-6">
+          {/* Dataset (required) */}
+          <div>
+            <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+              Dataset <span className="text-red-500">*</span>
+            </label>
+            <select
+              value={trendDataset}
+              onChange={(e) => setTrendDataset(e.target.value)}
+              className="text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2 min-w-48"
+            >
+              <option value="">Select dataset…</option>
+              {datasets.map((d) => (
+                <option key={d.name} value={d.name}>
+                  {d.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Limit */}
+          <div>
+            <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+              Last N experiments
+            </label>
+            <select
+              value={trendLimit}
+              onChange={(e) => setTrendLimit(Number(e.target.value))}
+              className="text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2"
+            >
+              {TRENDS_LIMIT_OPTIONS.map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Tool ext filter */}
+          <div>
+            <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+              Tool extension filter
+            </label>
+            <input
+              type="text"
+              value={trendToolExt}
+              onChange={(e) => setTrendToolExt(e.target.value)}
+              placeholder="e.g. tree_sitter"
+              className="text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2 w-40"
+            />
+          </div>
+
+          {/* Since */}
+          <div>
+            <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+              Since
+            </label>
+            <input
+              type="date"
+              value={trendSince}
+              onChange={(e) => setTrendSince(e.target.value)}
+              className="text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2"
+            />
+          </div>
+
+          {/* Until */}
+          <div>
+            <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+              Until
+            </label>
+            <input
+              type="date"
+              value={trendUntil}
+              onChange={(e) => setTrendUntil(e.target.value)}
+              className="text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2"
+            />
+          </div>
+
+          <button
+            onClick={handleLoadTrends}
+            disabled={!trendDataset || trendsLoading}
+            className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium transition-colors disabled:opacity-50"
+          >
+            {trendsLoading ? 'Loading…' : 'Load Trends'}
+          </button>
+        </div>
+
+        {trendsError && (
+          <p className="text-sm text-red-600 dark:text-red-400 mb-4">{trendsError}</p>
+        )}
+
+        {trendsData && (
+          <TrendGrid series={trendsData.series} />
+        )}
+
+        {!trendsData && !trendsLoading && !trendsError && (
+          <p className="text-sm text-gray-400 dark:text-gray-500">
+            Select a dataset and click Load Trends to see F1 history.
+          </p>
+        )}
+      </section>
 
       {/* Experiment Comparison */}
       <section className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">

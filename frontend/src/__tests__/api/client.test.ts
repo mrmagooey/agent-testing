@@ -12,8 +12,10 @@ import {
   listStrategies,
   listProfiles,
   listDatasets,
+  getTrends,
   type Experiment,
   type ExperimentConfig,
+  type TrendResponse,
 } from '../../api/client'
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -179,6 +181,79 @@ describe('estimateExperiment', () => {
     expect(url).toBe('/api/experiments/estimate')
     expect(init.method).toBe('POST')
     expect(JSON.parse(init.body as string)).toMatchObject({ models: ['claude-3-5-sonnet'], repetitions: 2 })
+  })
+})
+
+describe('getTrends', () => {
+  const mockResponse: TrendResponse = {
+    dataset: 'test-ds',
+    experiments: [{ experiment_id: 'b1', completed_at: '2026-01-01T10:00:00' }],
+    series: [],
+  }
+
+  it('serializes dataset param correctly', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(makeFetchResponse(mockResponse))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await getTrends('test-ds')
+
+    const [url] = fetchMock.mock.calls[0] as [string]
+    expect(url).toContain('/api/trends')
+    expect(url).toContain('dataset=test-ds')
+  })
+
+  it('serializes optional limit param', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(makeFetchResponse(mockResponse))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await getTrends('test-ds', { limit: 20 })
+
+    const [url] = fetchMock.mock.calls[0] as [string]
+    expect(url).toContain('limit=20')
+  })
+
+  it('serializes tool_ext param when provided', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(makeFetchResponse(mockResponse))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await getTrends('test-ds', { tool_ext: 'tree_sitter' })
+
+    const [url] = fetchMock.mock.calls[0] as [string]
+    expect(url).toContain('tool_ext=tree_sitter')
+  })
+
+  it('does not include tool_ext when empty string', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(makeFetchResponse(mockResponse))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await getTrends('test-ds', { tool_ext: '' })
+
+    const [url] = fetchMock.mock.calls[0] as [string]
+    expect(url).not.toContain('tool_ext')
+  })
+
+  it('includes since and until when provided', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(makeFetchResponse(mockResponse))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await getTrends('test-ds', { since: '2026-01-01', until: '2026-12-31' })
+
+    const [url] = fetchMock.mock.calls[0] as [string]
+    expect(url).toContain('since=2026-01-01')
+    expect(url).toContain('until=2026-12-31')
+  })
+
+  it('throws on 400 error from server (dataset required)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 400,
+        json: vi.fn().mockResolvedValue({ detail: 'dataset query parameter is required' }),
+      } as unknown as Response),
+    )
+
+    await expect(getTrends('')).rejects.toThrow('dataset query parameter is required')
   })
 })
 

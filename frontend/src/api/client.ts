@@ -527,3 +527,58 @@ export function searchFindingsGlobal(params: GlobalFindingsParams): Promise<Glob
 export async function runSmokeTest(): Promise<{ experiment_id: string; message: string; total_runs: number }> {
   return apiFetch('/smoke-test', { method: 'POST' })
 }
+
+// ─── Trends ────────────────────────────────────────────────────────────────
+
+export interface TrendPoint {
+  experiment_id: string
+  completed_at: string
+  f1: number
+  precision: number
+  recall: number
+  cost_usd: number
+  run_count: number
+}
+
+export interface TrendSummary {
+  latest_f1: number | null
+  prev_f1: number | null
+  delta_f1: number | null
+  trailing_median_f1: number | null
+  is_regression: boolean
+}
+
+export interface TrendSeriesKey {
+  model: string
+  strategy: string
+  tool_variant: string
+  tool_extensions: string[]
+}
+
+export interface TrendSeries {
+  key: TrendSeriesKey
+  points: TrendPoint[]
+  summary: TrendSummary
+}
+
+export interface TrendResponse {
+  dataset: string
+  experiments: Array<{ experiment_id: string; completed_at: string }>
+  series: TrendSeries[]
+}
+
+export interface TrendOptions {
+  limit?: number
+  tool_ext?: string
+  since?: string
+  until?: string
+}
+
+export function getTrends(dataset: string, opts: TrendOptions = {}): Promise<TrendResponse> {
+  const params = new URLSearchParams({ dataset })
+  if (opts.limit !== undefined) params.set('limit', String(opts.limit))
+  if (opts.tool_ext) params.set('tool_ext', opts.tool_ext)
+  if (opts.since) params.set('since', opts.since)
+  if (opts.until) params.set('until', opts.until)
+  return apiFetch<TrendResponse>(`/trends?${params.toString()}`)
+}

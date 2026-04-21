@@ -1,0 +1,98 @@
+{
+  "dataset": "cve-2024-python",
+  "experiments": [
+    { "experiment_id": "batch-001", "completed_at": "2026-01-01T10:00:00" },
+    { "experiment_id": "batch-002", "completed_at": "2026-01-08T10:00:00" },
+    { "experiment_id": "batch-003", "completed_at": "2026-01-15T10:00:00" }
+  ],
+  "series": [
+    {
+      "key": {
+        "model": "gpt-4o",
+        "strategy": "single_agent",
+        "tool_variant": "with_tools",
+        "tool_extensions": []
+      },
+      "points": [
+        {
+          "experiment_id": "batch-001",
+          "completed_at": "2026-01-01T10:00:00",
+          "f1": 0.85,
+          "precision": 0.80,
+          "recall": 0.90,
+          "cost_usd": 1.20,
+          "run_count": 1
+        },
+        {
+          "experiment_id": "batch-002",
+          "completed_at": "2026-01-08T10:00:00",
+          "f1": 0.86,
+          "precision": 0.82,
+          "recall": 0.90,
+          "cost_usd": 1.15,
+          "run_count": 1
+        },
+        {
+          "experiment_id": "batch-003",
+          "completed_at": "2026-01-15T10:00:00",
+          "f1": 0.74,
+          "precision": 0.70,
+          "recall": 0.78,
+          "cost_usd": 1.10,
+          "run_count": 1
+        }
+      ],
+      "summary": {
+        "latest_f1": 0.74,
+        "prev_f1": 0.86,
+        "delta_f1": -0.12,
+        "trailing_median_f1": 0.855,
+        "is_regression": true
+      }
+    },
+    {
+      "key": {
+        "model": "claude-3-sonnet",
+        "strategy": "single_agent",
+        "tool_variant": "with_tools",
+        "tool_extensions": []
+      },
+      "points": [
+        {
+          "experiment_id": "batch-001",
+          "completed_at": "2026-01-01T10:00:00",
+          "f1": 0.78,
+          "precision": 0.75,
+          "recall": 0.81,
+          "cost_usd": 0.90,
+          "run_count": 1
+        },
+        {
+          "experiment_id": "batch-002",
+          "completed_at": "2026-01-08T10:00:00",
+          "f1": 0.80,
+          "precision": 0.77,
+          "recall": 0.83,
+          "cost_usd": 0.88,
+          "run_count": 1
+        },
+        {
+          "experiment_id": "batch-003",
+          "completed_at": "2026-01-15T10:00:00",
+          "f1": 0.82,
+          "precision": 0.79,
+          "recall": 0.85,
+          "cost_usd": 0.85,
+          "run_count": 1
+        }
+      ],
+      "summary": {
+        "latest_f1": 0.82,
+        "prev_f1": 0.80,
+        "delta_f1": 0.02,
+        "trailing_median_f1": 0.79,
+        "is_regression": false
+      }
+    }
+  ]
+}

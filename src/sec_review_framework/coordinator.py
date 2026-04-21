@@ -164,6 +164,8 @@ class ExperimentCoordinator:
         self.worker_image_pull_policy = worker_image_pull_policy
         self._cost_trackers: dict[str, ExperimentCostTracker] = {}
         self._feedback_tracker = FeedbackTracker()
+        # Per-instance TTL cache for get_trends (class-level dict would be shared across instances).
+        self._trends_cache: dict[tuple, tuple[dict, float]] = {}
 
     # ------------------------------------------------------------------
     # Experiment lifecycle
@@ -496,6 +498,8 @@ class ExperimentCoordinator:
         await self.db.update_experiment_status(
             experiment_id, "completed", completed_at=datetime.utcnow().isoformat()
         )
+        # Invalidate the trend cache so the next request reflects this new data.
+        self._invalidate_trends_cache()
 
     async def cancel_experiment(self, experiment_id: str) -> int:
         cancelled = 0
@@ -1579,6 +1583,171 @@ class ExperimentCoordinator:
         ]
 
     # ------------------------------------------------------------------
+    # Trends
+    # ------------------------------------------------------------------
+
+    _TRENDS_CACHE_TTL_S: float = 60.0
+
+    def _invalidate_trends_cache(self) -> None:
+        """Drop all cached trend results (call when an experiment is finalised)."""
+        self._trends_cache.clear()
+
+    async def get_trends(
+        self,
+        dataset: str,
+        limit: int = 10,
+        tool_ext: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+    ) -> dict:
+        """Return F1 history grouped by (model, strategy, tool_variant, tool_extensions).
+
+        Only completed experiments whose ``dataset_name`` matches *dataset* are
+        included.  Results are cached in-process for ``_TRENDS_CACHE_TTL_S``
+        seconds and invalidated whenever an experiment is finalised.
+        """
+        import time
+        from sec_review_framework.feedback.tracker import _experiment_key
+
+        cache_key = (dataset, limit, tool_ext, since, until)
+        now_mono = time.monotonic()
+        cached = self._trends_cache.get(cache_key)
+        if cached is not None:
+            result, expiry = cached
+            if now_mono < expiry:
+                return result
+
+        # Fetch completed experiments for this dataset
+        all_experiments = await self.db.list_experiments()
+        completed = [
+            b for b in all_experiments
+            if b.get("status") == "completed"
+        ]
+
+        # Filter by dataset name (stored in config_json)
+        def _experiment_dataset(b: dict) -> str:
+            try:
+                cfg = json.loads(b.get("config_json") or "{}")
+                return cfg.get("dataset_name", "") or ""
+            except Exception:
+                return ""
+
+        matching = [b for b in completed if _experiment_dataset(b) == dataset]
+
+        # Optional time filters — values are ISO date strings, lexicographic comparison is valid
+        if since:
+            matching = [b for b in matching if (b.get("completed_at") or "") >= since]
+        if until:
+            matching = [b for b in matching if (b.get("completed_at") or "") <= until]
+
+        # Sort ascending by completed_at, take the *last* `limit` entries
+        matching.sort(key=lambda b: b.get("completed_at") or "")
+        if limit > 0:
+            matching = matching[-limit:]
+
+        experiments_meta = [
+            {
+                "experiment_id": b["id"],
+                "completed_at": b.get("completed_at") or "",
+            }
+            for b in matching
+        ]
+
+        # Build series: key → list of points
+        series_points: dict[tuple, list[dict]] = {}
+
+        for b in matching:
+            experiment_id = b["id"]
+            completed_at = b.get("completed_at") or ""
+            results = self.collect_results(experiment_id)
+
+            # Group by experiment key within this experiment (handle reruns — same key > 1)
+            key_groups: dict[tuple, list] = {}
+            for r in results:
+                if r.evaluation is None:
+                    continue
+                k = _experiment_key(r)
+                key_groups.setdefault(k, []).append(r)
+
+            for k, group in key_groups.items():
+                # Optional tool_ext filter: skip if key extensions don't include it
+                if tool_ext:
+                    ext_part = k[3]  # sorted tuple of extension values
+                    if tool_ext not in ext_part:
+                        continue
+
+                # Mean F1/precision/recall; sum cost; count runs
+                f1_vals = [
+                    r.evaluation.f1 or 0.0
+                    for r in group
+                    if r.evaluation is not None
+                ]
+                prec_vals = [
+                    r.evaluation.precision or 0.0
+                    for r in group
+                    if r.evaluation is not None
+                ]
+                rec_vals = [
+                    r.evaluation.recall or 0.0
+                    for r in group
+                    if r.evaluation is not None
+                ]
+                cost_vals = []
+                for r in group:
+                    rd = r.model_dump() if hasattr(r, "model_dump") else {}
+                    cost_vals.append(float(rd.get("estimated_cost_usd") or 0.0))
+
+                if not f1_vals:
+                    continue
+
+                avg_f1 = sum(f1_vals) / len(f1_vals)
+                avg_prec = sum(prec_vals) / len(prec_vals)
+                avg_rec = sum(rec_vals) / len(rec_vals)
+                total_cost = sum(cost_vals)
+
+                point = {
+                    "experiment_id": experiment_id,
+                    "completed_at": completed_at,
+                    "f1": round(avg_f1, 4),
+                    "precision": round(avg_prec, 4),
+                    "recall": round(avg_rec, 4),
+                    "cost_usd": round(total_cost, 4),
+                    "run_count": len(group),
+                }
+                series_points.setdefault(k, []).append(point)
+
+        # Build output series list
+        output_series: list[dict] = []
+        for k, points in series_points.items():
+            model_id, strategy, tool_variant, ext_tuple = k
+            summary = _compute_trend_summary(points)
+            output_series.append({
+                "key": {
+                    "model": model_id,
+                    "strategy": strategy,
+                    "tool_variant": tool_variant,
+                    "tool_extensions": list(ext_tuple),
+                },
+                "points": points,
+                "summary": summary,
+            })
+
+        # Sort series by latest_f1 descending for stable presentation
+        output_series.sort(
+            key=lambda s: s["summary"].get("latest_f1") or 0.0,
+            reverse=True,
+        )
+
+        result = {
+            "dataset": dataset,
+            "experiments": experiments_meta,
+            "series": output_series,
+        }
+
+        self._trends_cache[cache_key] = (result, now_mono + self._TRENDS_CACHE_TTL_S)
+        return result
+
+    # ------------------------------------------------------------------
     # Reference / ops
     # ------------------------------------------------------------------
 
@@ -1656,6 +1825,65 @@ class ExperimentCoordinator:
             return templates
         except Exception:
             return []
+
+
+# ---------------------------------------------------------------------------
+# Trend analysis helpers
+# ---------------------------------------------------------------------------
+
+def _compute_trend_summary(points: list[dict]) -> dict:
+    """Compute summary statistics for a single trend series.
+
+    Parameters
+    ----------
+    points:
+        Ascending-time list of dicts, each with an ``f1`` key.
+
+    Returns
+    -------
+    dict with keys:
+        latest_f1, prev_f1, delta_f1, trailing_median_f1, is_regression
+    """
+    if not points:
+        return {
+            "latest_f1": None,
+            "prev_f1": None,
+            "delta_f1": None,
+            "trailing_median_f1": None,
+            "is_regression": False,
+        }
+
+    latest_f1 = points[-1]["f1"]
+    prev_f1 = points[-2]["f1"] if len(points) >= 2 else None
+    delta_f1 = round(latest_f1 - prev_f1, 4) if prev_f1 is not None else None
+
+    # Trailing median: all points except the latest (for regression detection)
+    trailing = [p["f1"] for p in points[:-1]] if len(points) > 1 else []
+    if trailing:
+        sorted_t = sorted(trailing)
+        mid = len(sorted_t) // 2
+        trailing_median = (
+            sorted_t[mid] if len(sorted_t) % 2 == 1
+            else (sorted_t[mid - 1] + sorted_t[mid]) / 2.0
+        )
+        trailing_median = round(trailing_median, 4)
+    else:
+        trailing_median = None
+
+    # Regression: latest F1 is > 0.05 below trailing median, and >= 3 data points
+    is_regression = (
+        trailing_median is not None
+        and len(points) >= 3
+        and (latest_f1 - trailing_median) < -0.05
+    )
+
+    return {
+        "latest_f1": round(latest_f1, 4),
+        "prev_f1": round(prev_f1, 4) if prev_f1 is not None else None,
+        "delta_f1": delta_f1,
+        "trailing_median_f1": trailing_median,
+        "is_regression": is_regression,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -2227,6 +2455,33 @@ async def compare_experiments_endpoint(req: CompareRequest) -> dict:
 def get_fp_patterns(experiment_id: str) -> list[dict]:
     """Extract recurring false positive patterns from an experiment."""
     return coordinator.get_fp_patterns(experiment_id)
+
+
+# --- Trends ---
+
+@app.get("/trends")
+async def get_trends(
+    dataset: str | None = None,
+    limit: int = 10,
+    tool_ext: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+) -> dict:
+    """Historical F1 trend series per (model, strategy, tool_variant, tool_extensions) cell.
+
+    Required: ``dataset`` — 400 if omitted.
+    Optional: ``limit`` (default 10), ``tool_ext`` (filter by extension key),
+              ``since``/``until`` (ISO date strings, allowlisted to query params only — no SQL injection risk).
+    """
+    if not dataset:
+        raise HTTPException(status_code=400, detail="dataset query parameter is required")
+    return await coordinator.get_trends(
+        dataset=dataset,
+        limit=limit,
+        tool_ext=tool_ext,
+        since=since,
+        until=until,
+    )
 
 
 # --- Matrix ---

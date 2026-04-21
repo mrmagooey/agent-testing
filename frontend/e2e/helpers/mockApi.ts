@@ -24,6 +24,7 @@ const fpPatterns = loadFixture<unknown[]>('fp-patterns.json')
 const fileTree = loadFixture<unknown>('file-tree.json')
 const templates = loadFixture<unknown[]>('templates.json')
 const accuracyMatrix = loadFixture<unknown>('accuracy-matrix.json')
+const trendsData = loadFixture<unknown>('trends.json')
 
 function json(route: Route, body: unknown, status = 200) {
   return route.fulfill({
@@ -196,6 +197,15 @@ export async function mockApi(page: Page) {
     }
     if (path === '/templates' && method === 'GET') {
       return json(route, templates)
+    }
+
+    // --- Trends ---
+    if (path === '/trends' && method === 'GET') {
+      const dataset = url.searchParams.get('dataset')
+      if (!dataset) {
+        return json(route, { detail: 'dataset query parameter is required' }, 400)
+      }
+      return json(route, trendsData)
     }
 
     // --- Matrix ---
