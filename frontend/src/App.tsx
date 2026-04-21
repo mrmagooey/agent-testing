@@ -8,6 +8,7 @@ import CVEDiscovery from './pages/CVEDiscovery'
 import Datasets from './pages/Datasets'
 import DatasetDetail from './pages/DatasetDetail'
 import Feedback from './pages/Feedback'
+import Findings from './pages/Findings'
 import ThemeToggle from './components/ThemeToggle'
 
 const NAV_LINKS = [
@@ -15,6 +16,7 @@ const NAV_LINKS = [
   { to: '/experiments/new', label: 'New Experiment', end: false },
   { to: '/datasets', label: 'Datasets', end: true },
   { to: '/datasets/discover', label: 'CVE Discovery', end: false },
+  { to: '/findings', label: 'Findings', end: false },
   { to: '/feedback', label: 'Feedback', end: false },
 ]
 
@@ -105,6 +107,7 @@ export default function App() {
             <Route path="/datasets/discover" element={<CVEDiscovery />} />
             <Route path="/datasets/:name" element={<DatasetDetail />} />
             <Route path="/datasets" element={<Datasets />} />
+            <Route path="/findings" element={<Findings />} />
             <Route path="/feedback" element={<Feedback />} />
           </Routes>
         </main>

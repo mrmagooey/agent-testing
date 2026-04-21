@@ -64,5 +64,6 @@ markers = [
 
 [dependency-groups]
 dev = [
+    "pytest-asyncio>=0.25",
     "pytest-cov>=7.1.0",
 ]

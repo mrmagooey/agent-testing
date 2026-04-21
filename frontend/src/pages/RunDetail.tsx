@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { useParams, useSearchParams } from 'react-router-dom'
+import { useState, useEffect, useRef } from 'react'
+import { useParams, useSearchParams, useLocation } from 'react-router-dom'
 import { getRun, getFileContent, reclassifyFinding, type Run, type Finding, type ToolCall, type Message, type PromptSnapshot } from '../api/client'
 import Breadcrumbs from '../components/Breadcrumbs'
 import CodeViewer from '../components/CodeViewer'
@@ -86,6 +86,7 @@ type RunFull = Run & { findings: Finding[]; tool_calls: ToolCall[]; messages: Me
 export default function RunDetail() {
   const { experimentId, runId } = useParams<{ experimentId: string; runId: string }>()
   const [searchParams, setSearchParams] = useSearchParams()
+  const location = useLocation()
   const [run, setRun] = useState<RunFull | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -93,6 +94,7 @@ export default function RunDetail() {
   const [sourceContent] = useState<Record<string, string>>({})
   const [expandedTool, setExpandedTool] = useState<number | null>(null)
   const [findingsPage, setFindingsPage] = useState(0)
+  const hashScrolledRef = useRef(false)
 
   // URL-state filters (item 3)
   const severityFilter = searchParams.get('severity') ?? 'all'
@@ -119,6 +121,23 @@ export default function RunDetail() {
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false))
   }, [experimentId, runId])
+
+  // Scroll to and expand a specific finding when navigated via hash (#finding-<id>)
+  useEffect(() => {
+    if (!run || hashScrolledRef.current) return
+    const hash = location.hash
+    if (!hash.startsWith('#finding-')) return
+    const findingId = hash.slice('#finding-'.length)
+    setExpandedFinding(findingId)
+    hashScrolledRef.current = true
+    // Give the DOM time to render the expanded row before scrolling
+    setTimeout(() => {
+      const el = document.getElementById(`finding-${findingId}`)
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }
+    }, 150)
+  }, [run, location.hash])
 
   if (loading) return <PageLoadingSpinner />
 
@@ -281,6 +300,7 @@ export default function RunDetail() {
                     <>
                       <tr
                         key={f.finding_id}
+                        id={`finding-${f.finding_id}`}
                         onClick={() => {
                           setExpandedFinding((id) => id === f.finding_id ? null : f.finding_id)
                         }}

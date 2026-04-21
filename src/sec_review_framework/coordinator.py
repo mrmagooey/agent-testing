@@ -37,7 +37,7 @@ def _resolve_frontend_dist() -> Path:
 
 FRONTEND_DIST_DIR = _resolve_frontend_dist()
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError
@@ -714,6 +714,22 @@ class ExperimentCoordinator:
                     estimated_cost_usd=result.estimated_cost_usd,
                 )
 
+                # Index findings for cross-experiment search
+                if result.findings:
+                    try:
+                        await self.db.upsert_findings_for_run(
+                            run_id=run_id,
+                            experiment_id=experiment_id,
+                            findings=[f.model_dump(mode="json") for f in result.findings],
+                            model_id=result.experiment.model_id,
+                            strategy=result.experiment.strategy.value,
+                            dataset_name=result.experiment.dataset_name,
+                        )
+                    except Exception as exc:
+                        logger.error(
+                            "Failed to index findings for run %s: %s", run_id, exc
+                        )
+
                 # Record cost against the experiment — only if the run had no prior
                 # cost recorded (estimated_cost_usd was NULL or zero in DB).
                 prior_cost = run.get("estimated_cost_usd")
@@ -1018,6 +1034,103 @@ class ExperimentCoordinator:
                     matched.append(finding.model_dump())
         return matched
 
+    async def search_findings_global(
+        self,
+        q: str | None = None,
+        vuln_class: list[str] | None = None,
+        severity: list[str] | None = None,
+        match_status: list[str] | None = None,
+        model_id: list[str] | None = None,
+        strategy: list[str] | None = None,
+        experiment_id: list[str] | None = None,
+        dataset_name: list[str] | None = None,
+        created_from: str | None = None,
+        created_to: str | None = None,
+        sort: str = "created_at desc",
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict:
+        """Cross-experiment findings search backed by the findings index table."""
+        if limit < 1:
+            raise HTTPException(status_code=400, detail="limit must be >= 1")
+        if limit > 200:
+            raise HTTPException(status_code=400, detail="limit must be <= 200")
+        if offset < 0:
+            raise HTTPException(status_code=400, detail="offset must be >= 0")
+
+        filters: dict = {}
+        if q:
+            filters["q"] = q
+        if vuln_class:
+            filters["vuln_class"] = vuln_class
+        if severity:
+            filters["severity"] = severity
+        if match_status:
+            filters["match_status"] = match_status
+        if model_id:
+            filters["model_id"] = model_id
+        if strategy:
+            filters["strategy"] = strategy
+        if experiment_id:
+            filters["experiment_id"] = experiment_id
+        if dataset_name:
+            filters["dataset_name"] = dataset_name
+        if created_from:
+            filters["created_from"] = created_from
+        if created_to:
+            filters["created_to"] = created_to
+
+        total, items = await self.db.query_findings(
+            filters=filters, limit=limit, offset=offset, sort=sort
+        )
+        facets = await self.db.facet_findings(filters)
+
+        return {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "facets": facets,
+            "items": items,
+        }
+
+    async def backfill_findings_index(self) -> int:
+        """Walk all run_result.json files and index any findings not yet in the DB.
+
+        Returns the number of runs indexed. Idempotent: safe to call multiple
+        times since upsert_findings_for_run deletes existing rows first.
+        """
+        indexed = 0
+        outputs_dir = self.storage_root / "outputs"
+        if not outputs_dir.exists():
+            return 0
+        for experiment_dir in outputs_dir.iterdir():
+            if not experiment_dir.is_dir():
+                continue
+            experiment_id = experiment_dir.name
+            for run_dir in experiment_dir.iterdir():
+                if not run_dir.is_dir():
+                    continue
+                result_file = run_dir / "run_result.json"
+                if not result_file.exists():
+                    continue
+                try:
+                    result = RunResult.model_validate_json(result_file.read_text())
+                    if result.findings:
+                        await self.db.upsert_findings_for_run(
+                            run_id=result.experiment.id,
+                            experiment_id=experiment_id,
+                            findings=[f.model_dump(mode="json") for f in result.findings],
+                            model_id=result.experiment.model_id,
+                            strategy=result.experiment.strategy.value,
+                            dataset_name=result.experiment.dataset_name,
+                        )
+                        indexed += 1
+                except Exception as exc:
+                    logger.warning(
+                        "backfill_findings_index: skipping %s — %s", result_file, exc
+                    )
+        return indexed
+
     async def reclassify_finding(self, experiment_id: str, run_id: str, req) -> dict:
         result_file = self.storage_root / "outputs" / experiment_id / run_id / "run_result.json"
         if not result_file.exists():
@@ -1034,6 +1147,16 @@ class ExperimentCoordinator:
                 status_code=404, detail=f"Finding {req.finding_id} not found"
             )
         result_file.write_text(result.model_dump_json(indent=2))
+
+        # Keep the findings index in sync with the reclassification
+        try:
+            await self.db.update_finding_match_status(req.finding_id, "unlabeled_real")
+        except Exception as exc:
+            logger.warning(
+                "Could not update findings index for reclassified finding %s: %s",
+                req.finding_id, exc,
+            )
+
         return {"status": "reclassified", "finding_id": req.finding_id}
 
     async def audit_tool_calls(self, experiment_id: str, run_id: str) -> dict:
@@ -1694,6 +1817,24 @@ async def startup() -> None:
     if K8S_AVAILABLE or _enable_loop in ("1", "true", "yes"):
         _background_tasks.add(asyncio.create_task(coordinator._reconcile_loop()))
 
+    # Backfill findings index if the table is empty but experiments exist.
+    # Runs asynchronously to not block startup.
+    async def _maybe_backfill() -> None:
+        try:
+            finding_count = await coordinator.db.count_all_findings()
+            if finding_count == 0:
+                experiments = await coordinator.db.list_experiments()
+                if experiments:
+                    logger.info(
+                        "findings table empty but experiments exist — running backfill"
+                    )
+                    n = await coordinator.backfill_findings_index()
+                    logger.info("backfill_findings_index indexed %d runs", n)
+        except Exception as exc:
+            logger.warning("backfill check failed: %s", exc)
+
+    _background_tasks.add(asyncio.create_task(_maybe_backfill()))
+
 
 @app.on_event("shutdown")
 async def shutdown() -> None:
@@ -1876,7 +2017,47 @@ async def delete_experiment(experiment_id: str) -> None:
     await coordinator.delete_experiment(experiment_id)
 
 
-# --- Findings ---
+# --- Cross-experiment findings search ---
+
+@app.get("/findings")
+async def search_findings_global(
+    q: str | None = None,
+    vuln_class: list[str] | None = Query(default=None),
+    severity: list[str] | None = Query(default=None),
+    match_status: list[str] | None = Query(default=None),
+    model_id: list[str] | None = Query(default=None),
+    strategy: list[str] | None = Query(default=None),
+    experiment_id: list[str] | None = Query(default=None),
+    dataset_name: list[str] | None = Query(default=None),
+    created_from: str | None = None,
+    created_to: str | None = None,
+    sort: str = "created_at desc",
+    limit: int = 50,
+    offset: int = 0,
+) -> dict:
+    """Search findings across ALL experiments.
+
+    Supports FTS (q=), multi-value filters (vuln_class[]=...), date range,
+    and pagination. Returns facet counts alongside results.
+    """
+    return await coordinator.search_findings_global(
+        q=q,
+        vuln_class=vuln_class,
+        severity=severity,
+        match_status=match_status,
+        model_id=model_id,
+        strategy=strategy,
+        experiment_id=experiment_id,
+        dataset_name=dataset_name,
+        created_from=created_from,
+        created_to=created_to,
+        sort=sort,
+        limit=limit,
+        offset=offset,
+    )
+
+
+# --- Per-experiment findings ---
 
 @app.get("/experiments/{experiment_id}/findings/search")
 async def search_findings(

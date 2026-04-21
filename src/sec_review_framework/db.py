@@ -1,9 +1,28 @@
 """SQLite-based persistence for the coordinator service. Uses aiosqlite for async access."""
 
 import aiosqlite
+import json
+import re
 from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
+
+
+# ---------------------------------------------------------------------------
+# Safe FTS query escaping
+# ---------------------------------------------------------------------------
+
+def _escape_fts_query(q: str) -> str:
+    """Escape a user-supplied query for use with FTS5 MATCH.
+
+    FTS5 supports a rich query syntax; unescaped user input can cause
+    parse errors or unexpected behaviour.  We wrap the whole input as a
+    phrase query using double-quotes and escape any embedded double-quotes
+    by doubling them.  This gives simple substring/phrase search semantics
+    without exposing FTS query operators to the user.
+    """
+    escaped = q.replace('"', '""')
+    return f'"{escaped}"'
 
 
 class Database:
@@ -62,6 +81,90 @@ class Database:
                 await db.commit()
             except Exception:
                 pass  # Column already exists — safe to ignore
+
+            # ---------------------------------------------------------------------------
+            # Findings index table
+            # ---------------------------------------------------------------------------
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS findings (
+                    id TEXT PRIMARY KEY,
+                    run_id TEXT REFERENCES runs(id),
+                    experiment_id TEXT REFERENCES experiments(id),
+                    file_path TEXT,
+                    line_start INT,
+                    line_end INT,
+                    vuln_class TEXT,
+                    cwe_ids TEXT,
+                    severity TEXT,
+                    confidence REAL,
+                    title TEXT,
+                    description TEXT,
+                    match_status TEXT,
+                    model_id TEXT,
+                    strategy TEXT,
+                    dataset_name TEXT,
+                    created_at TEXT
+                )
+            """)
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_findings_vuln_class ON findings(vuln_class)"
+            )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_findings_severity ON findings(severity)"
+            )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_findings_experiment ON findings(experiment_id)"
+            )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_findings_model ON findings(model_id)"
+            )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_findings_strategy ON findings(strategy)"
+            )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_findings_match_status ON findings(match_status)"
+            )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_findings_created_at ON findings(created_at)"
+            )
+
+            # FTS5 virtual table for full-text search across findings
+            await db.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS findings_fts USING fts5(
+                    title,
+                    description,
+                    vuln_class,
+                    cwe_ids,
+                    content='findings',
+                    content_rowid='rowid'
+                )
+            """)
+
+            # Triggers to keep FTS in sync
+            await db.execute("""
+                CREATE TRIGGER IF NOT EXISTS findings_fts_ai
+                AFTER INSERT ON findings BEGIN
+                    INSERT INTO findings_fts(rowid, title, description, vuln_class, cwe_ids)
+                    VALUES (new.rowid, new.title, new.description, new.vuln_class, new.cwe_ids);
+                END
+            """)
+            await db.execute("""
+                CREATE TRIGGER IF NOT EXISTS findings_fts_ad
+                AFTER DELETE ON findings BEGIN
+                    INSERT INTO findings_fts(findings_fts, rowid, title, description, vuln_class, cwe_ids)
+                    VALUES ('delete', old.rowid, old.title, old.description, old.vuln_class, old.cwe_ids);
+                END
+            """)
+            await db.execute("""
+                CREATE TRIGGER IF NOT EXISTS findings_fts_au
+                AFTER UPDATE ON findings BEGIN
+                    INSERT INTO findings_fts(findings_fts, rowid, title, description, vuln_class, cwe_ids)
+                    VALUES ('delete', old.rowid, old.title, old.description, old.vuln_class, old.cwe_ids);
+                    INSERT INTO findings_fts(rowid, title, description, vuln_class, cwe_ids)
+                    VALUES (new.rowid, new.title, new.description, new.vuln_class, new.cwe_ids);
+                END
+            """)
+
             await db.commit()
 
     async def create_experiment(
@@ -226,3 +329,253 @@ class Database:
             ) as cursor:
                 row = await cursor.fetchone()
                 return row[0] if row else 0.0
+
+    # ---------------------------------------------------------------------------
+    # Findings index
+    # ---------------------------------------------------------------------------
+
+    async def upsert_findings_for_run(
+        self,
+        run_id: str,
+        experiment_id: str,
+        findings: list[dict],
+        model_id: str,
+        strategy: str,
+        dataset_name: str,
+    ) -> None:
+        """Idempotent bulk upsert of findings for a run.
+
+        Deletes all existing rows for the run then inserts fresh rows, so
+        repeated calls are safe (e.g. after reclassification).
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            # Delete existing findings for this run (triggers clean FTS)
+            await db.execute("DELETE FROM findings WHERE run_id = ?", (run_id,))
+
+            for f in findings:
+                cwe_ids_raw = f.get("cwe_ids") or []
+                if isinstance(cwe_ids_raw, list):
+                    cwe_ids_str = json.dumps(cwe_ids_raw)
+                else:
+                    cwe_ids_str = str(cwe_ids_raw)
+
+                # Determine match_status from evaluation fields if present
+                match_status = f.get("match_status") or _infer_match_status(f)
+
+                await db.execute(
+                    """
+                    INSERT INTO findings (
+                        id, run_id, experiment_id, file_path, line_start, line_end,
+                        vuln_class, cwe_ids, severity, confidence, title, description,
+                        match_status, model_id, strategy, dataset_name, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        f.get("id", ""),
+                        run_id,
+                        experiment_id,
+                        f.get("file_path"),
+                        f.get("line_start"),
+                        f.get("line_end"),
+                        f.get("vuln_class") or "",
+                        cwe_ids_str,
+                        f.get("severity") or "",
+                        f.get("confidence"),
+                        f.get("title") or "",
+                        f.get("description") or "",
+                        match_status,
+                        model_id,
+                        strategy,
+                        dataset_name,
+                        datetime.utcnow().isoformat(),
+                    ),
+                )
+            await db.commit()
+
+    async def update_finding_match_status(
+        self, finding_id: str, match_status: str
+    ) -> None:
+        """Update a single finding's match_status after reclassification."""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE findings SET match_status = ? WHERE id = ?",
+                (match_status, finding_id),
+            )
+            await db.commit()
+
+    async def count_all_findings(self) -> int:
+        """Return total number of indexed findings."""
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute("SELECT COUNT(*) FROM findings") as cursor:
+                row = await cursor.fetchone()
+                return row[0] if row else 0
+
+    async def query_findings(
+        self,
+        filters: dict,
+        limit: int = 50,
+        offset: int = 0,
+        sort: str = "created_at desc",
+    ) -> tuple[int, list[dict]]:
+        """Search findings with optional FTS and filter facets.
+
+        Returns (total_count, rows).
+
+        ``filters`` keys:
+          q, vuln_class, severity, match_status, model_id, strategy,
+          experiment_id, dataset_name, created_from, created_to
+        All list-valued filters use IN logic.  ``q`` triggers FTS MATCH.
+        """
+        # Validate / allow-list sort column and direction to prevent injection
+        _SORTABLE = {
+            "created_at", "severity", "vuln_class", "match_status",
+            "model_id", "strategy", "confidence",
+        }
+        sort_parts = sort.strip().lower().split()
+        sort_col = sort_parts[0] if sort_parts else "created_at"
+        sort_dir = sort_parts[1] if len(sort_parts) > 1 else "desc"
+        if sort_col not in _SORTABLE:
+            sort_col = "created_at"
+        if sort_dir not in ("asc", "desc"):
+            sort_dir = "desc"
+
+        where_clauses: list[str] = []
+        params: list = []
+
+        # FTS path: join against findings_fts virtual table
+        use_fts = bool(filters.get("q"))
+        if use_fts:
+            safe_q = _escape_fts_query(str(filters["q"]))
+            where_clauses.append(
+                "f.rowid IN (SELECT rowid FROM findings_fts WHERE findings_fts MATCH ?)"
+            )
+            params.append(safe_q)
+
+        # List filters (multi-value IN)
+        for col in ("vuln_class", "severity", "match_status", "model_id",
+                    "strategy", "experiment_id", "dataset_name"):
+            vals = filters.get(col)
+            if vals:
+                if isinstance(vals, str):
+                    vals = [vals]
+                placeholders = ",".join("?" * len(vals))
+                where_clauses.append(f"f.{col} IN ({placeholders})")
+                params.extend(vals)
+
+        # Date range filters
+        if filters.get("created_from"):
+            where_clauses.append("f.created_at >= ?")
+            params.append(filters["created_from"])
+        if filters.get("created_to"):
+            where_clauses.append("f.created_at <= ?")
+            params.append(filters["created_to"])
+
+        where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+
+        count_sql = f"SELECT COUNT(*) FROM findings f {where_sql}"
+        data_sql = (
+            f"SELECT f.*, e.config_json AS _experiment_config_json "
+            f"FROM findings f "
+            f"LEFT JOIN experiments e ON e.id = f.experiment_id "
+            f"{where_sql} "
+            f"ORDER BY f.{sort_col} {sort_dir} "
+            f"LIMIT ? OFFSET ?"
+        )
+
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(count_sql, params) as cursor:
+                total_row = await cursor.fetchone()
+                total = total_row[0] if total_row else 0
+
+            async with db.execute(data_sql, params + [limit, offset]) as cursor:
+                rows = await cursor.fetchall()
+
+        # Enrich each row with experiment_name from experiment config_json
+        result = []
+        for row in rows:
+            d = dict(row)
+            config_json = d.pop("_experiment_config_json", None)
+            experiment_name = d.get("experiment_id", "")
+            if config_json:
+                try:
+                    cfg = json.loads(config_json)
+                    experiment_name = cfg.get("experiment_id") or experiment_name
+                except Exception:
+                    pass
+            d["experiment_name"] = experiment_name
+            # Parse cwe_ids back to list for API consumers
+            try:
+                d["cwe_ids"] = json.loads(d.get("cwe_ids") or "[]")
+            except Exception:
+                d["cwe_ids"] = []
+            result.append(d)
+
+        return total, result
+
+    async def facet_findings(self, filters: dict) -> dict:
+        """Return per-facet counts, each excluding its own filter.
+
+        Returns a dict like:
+          { "vuln_class": {"sqli": 5, "xss": 2}, "severity": {...}, ... }
+        """
+        facet_columns = [
+            "vuln_class", "severity", "match_status",
+            "model_id", "strategy", "dataset_name",
+        ]
+        result: dict[str, dict] = {}
+        async with aiosqlite.connect(self.db_path) as db:
+            for facet_col in facet_columns:
+                # Build WHERE excluding the facet's own filter
+                where_clauses: list[str] = []
+                params: list = []
+
+                if filters.get("q"):
+                    safe_q = _escape_fts_query(str(filters["q"]))
+                    where_clauses.append(
+                        "f.rowid IN (SELECT rowid FROM findings_fts WHERE findings_fts MATCH ?)"
+                    )
+                    params.append(safe_q)
+
+                for col in ("vuln_class", "severity", "match_status", "model_id",
+                            "strategy", "experiment_id", "dataset_name"):
+                    if col == facet_col:
+                        continue  # Exclude this facet's own filter
+                    vals = filters.get(col)
+                    if vals:
+                        if isinstance(vals, str):
+                            vals = [vals]
+                        placeholders = ",".join("?" * len(vals))
+                        where_clauses.append(f"f.{col} IN ({placeholders})")
+                        params.extend(vals)
+
+                if filters.get("created_from"):
+                    where_clauses.append("f.created_at >= ?")
+                    params.append(filters["created_from"])
+                if filters.get("created_to"):
+                    where_clauses.append("f.created_at <= ?")
+                    params.append(filters["created_to"])
+
+                where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+                sql = (
+                    f"SELECT f.{facet_col}, COUNT(*) "
+                    f"FROM findings f {where_sql} "
+                    f"GROUP BY f.{facet_col} "
+                    f"ORDER BY COUNT(*) DESC"
+                )
+                async with db.execute(sql, params) as cursor:
+                    rows = await cursor.fetchall()
+                result[facet_col] = {row[0]: row[1] for row in rows if row[0]}
+
+        return result
+
+
+def _infer_match_status(finding: dict) -> str | None:
+    """Infer match_status from evaluation fields in a raw finding dict."""
+    # Check for explicit verified field
+    verified = finding.get("verified")
+    if verified is True:
+        return "tp"
+    if verified is False:
+        return "fp"
+    return None

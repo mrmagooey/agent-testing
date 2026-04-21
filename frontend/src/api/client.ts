@@ -445,6 +445,69 @@ export function listTemplates(): Promise<InjectionTemplate[]> {
   return apiFetch<InjectionTemplate[]>('/templates')
 }
 
+// ─── Global findings search ────────────────────────────────────────────────
+
+export interface GlobalFinding extends Finding {
+  experiment_name: string
+  model_id: string
+  strategy: string
+  dataset_name: string
+  created_at: string
+  confidence?: number
+  cwe_ids?: string[]
+}
+
+export interface FindingFacets {
+  vuln_class: Record<string, number>
+  severity: Record<string, number>
+  match_status: Record<string, number>
+  model_id: Record<string, number>
+  strategy: Record<string, number>
+  dataset_name: Record<string, number>
+}
+
+export interface GlobalFindingsResponse {
+  total: number
+  limit: number
+  offset: number
+  facets: FindingFacets
+  items: GlobalFinding[]
+}
+
+export interface GlobalFindingsParams {
+  q?: string
+  vuln_class?: string[]
+  severity?: string[]
+  match_status?: string[]
+  model_id?: string[]
+  strategy?: string[]
+  experiment_id?: string[]
+  dataset_name?: string[]
+  created_from?: string
+  created_to?: string
+  sort?: string
+  limit?: number
+  offset?: number
+}
+
+export function searchFindingsGlobal(params: GlobalFindingsParams): Promise<GlobalFindingsResponse> {
+  const qs = new URLSearchParams()
+  if (params.q) qs.set('q', params.q)
+  for (const key of ['vuln_class', 'severity', 'match_status', 'model_id', 'strategy', 'experiment_id', 'dataset_name'] as const) {
+    const vals = params[key]
+    if (vals && vals.length > 0) {
+      for (const v of vals) qs.append(key, v)
+    }
+  }
+  if (params.created_from) qs.set('created_from', params.created_from)
+  if (params.created_to) qs.set('created_to', params.created_to)
+  if (params.sort) qs.set('sort', params.sort)
+  if (params.limit !== undefined) qs.set('limit', String(params.limit))
+  if (params.offset !== undefined) qs.set('offset', String(params.offset))
+  const query = qs.toString()
+  return apiFetch<GlobalFindingsResponse>(`/findings${query ? `?${query}` : ''}`)
+}
+
 // ─── Smoke Test ────────────────────────────────────────────────────────────
 
 export async function runSmokeTest(): Promise<{ experiment_id: string; message: string; total_runs: number }> {
