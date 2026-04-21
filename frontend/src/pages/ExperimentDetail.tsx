@@ -200,6 +200,12 @@ export default function ExperimentDetail() {
                 Cancel
               </button>
             )}
+            <button
+              onClick={() => navigate(`/compare?a_experiment=${experimentId}`)}
+              className="px-3 py-1 rounded-lg text-sm border border-indigo-300 dark:border-indigo-700 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950 transition-colors"
+            >
+              Compare with another
+            </button>
             {isTerminal && experimentId && <DownloadButton experimentId={experimentId} />}
           </div>
         </div>

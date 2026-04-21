@@ -1194,12 +1194,27 @@ class ExperimentCoordinator:
         return {"counts_by_tool": counts, "suspicious_calls": suspicious}
 
     async def compare_runs(self, experiment_id: str, run_a_id: str, run_b_id: str) -> dict:
+        """Thin shim: same-experiment comparison delegates to the cross-experiment implementation."""
+        return await self.compare_runs_cross(
+            a_experiment=experiment_id,
+            a_run=run_a_id,
+            b_experiment=experiment_id,
+            b_run=run_b_id,
+        )
+
+    async def compare_runs_cross(
+        self,
+        a_experiment: str,
+        a_run: str,
+        b_experiment: str,
+        b_run: str,
+    ) -> dict:
         from sec_review_framework.data.findings import FindingIdentity, Finding
 
-        result_a_dict = await self.get_run_result(experiment_id, run_a_id)
-        result_b_dict = await self.get_run_result(experiment_id, run_b_id)
+        result_a_dict = await self.get_run_result(a_experiment, a_run)
+        result_b_dict = await self.get_run_result(b_experiment, b_run)
 
-        def index_findings(result_dict: dict) -> dict[str, dict]:
+        def index_findings(result_dict: dict, run_label: str) -> dict[str, dict]:
             out = {}
             for f in result_dict.get("findings") or []:
                 try:
@@ -1208,13 +1223,13 @@ class ExperimentCoordinator:
                     out[identity] = f
                 except Exception as exc:
                     logger.warning(
-                        "compare_runs: skipping malformed finding in run %s/%s — %s: %.80s",
-                        run_a_id, run_b_id, exc, str(f),
+                        "compare_runs: skipping malformed finding in run %s — %s: %.80s",
+                        run_label, exc, str(f),
                     )
             return out
 
-        findings_a = index_findings(result_a_dict)
-        findings_b = index_findings(result_b_dict)
+        findings_a = index_findings(result_a_dict, a_run)
+        findings_b = index_findings(result_b_dict, b_run)
 
         both, only_a, only_b = [], [], []
         for identity, finding in findings_a.items():
@@ -1226,12 +1241,48 @@ class ExperimentCoordinator:
             if identity not in findings_a:
                 only_b.append({"identity": identity, "finding": finding})
 
+        # Gather experiment-level metadata to attach to each run side.
+        warnings: list[str] = []
+
+        async def _experiment_meta(exp_id: str) -> dict:
+            row = await self.db.get_experiment(exp_id)
+            if not row:
+                return {"experiment_id": exp_id, "experiment_name": exp_id, "dataset": ""}
+            dataset = ""
+            try:
+                config = json.loads(row.get("config_json") or "{}")
+                dataset = config.get("dataset_name", "") or ""
+            except (json.JSONDecodeError, TypeError):
+                pass
+            name = row.get("name") or exp_id
+            return {"experiment_id": exp_id, "experiment_name": name, "dataset": dataset}
+
+        meta_a = await _experiment_meta(a_experiment)
+        meta_b = await _experiment_meta(b_experiment)
+
+        dataset_mismatch = (
+            a_experiment != b_experiment
+            and bool(meta_a["dataset"])
+            and bool(meta_b["dataset"])
+            and meta_a["dataset"] != meta_b["dataset"]
+        )
+        if dataset_mismatch:
+            warnings.append(
+                f"Datasets differ: {meta_a['dataset']} vs {meta_b['dataset']} — "
+                "only findings with identical file paths will match via FindingIdentity"
+            )
+
+        run_a_info: dict = {"id": a_run, **meta_a}
+        run_b_info: dict = {"id": b_run, **meta_b}
+
         return {
-            "run_a": {"id": run_a_id},
-            "run_b": {"id": run_b_id},
+            "run_a": run_a_info,
+            "run_b": run_b_info,
             "both": both,
             "only_a": only_a,
             "only_b": only_b,
+            "dataset_mismatch": dataset_mismatch,
+            "warnings": warnings,
         }
 
     # ------------------------------------------------------------------
@@ -2290,10 +2341,34 @@ async def cancel_experiment(experiment_id: str) -> dict:
 @app.get("/experiments/{experiment_id}/compare-runs")
 async def compare_runs(experiment_id: str, run_a: str, run_b: str) -> dict:
     """
-    Side-by-side comparison of two runs. Returns findings matched
-    by FindingIdentity: which were found by both, only by A, only by B.
+    Side-by-side comparison of two runs within the same experiment.
+    Delegates to the cross-experiment endpoint with both sides sharing the same experiment.
     """
     return await coordinator.compare_runs(experiment_id, run_a, run_b)
+
+
+@app.get("/compare-runs")
+async def compare_runs_cross(
+    a_experiment: str,
+    a_run: str,
+    b_experiment: str,
+    b_run: str,
+) -> dict:
+    """
+    Cross-experiment run comparison. Runs may belong to different experiments.
+
+    Returns the same shape as the single-experiment endpoint, with additional
+    fields on each run side: experiment_id, experiment_name, dataset.
+    Top-level dataset_mismatch flag and warnings list are always present.
+
+    Returns 404 if either run result is missing.
+    """
+    return await coordinator.compare_runs_cross(
+        a_experiment=a_experiment,
+        a_run=a_run,
+        b_experiment=b_experiment,
+        b_run=b_run,
+    )
 
 
 @app.delete("/experiments/{experiment_id}", status_code=204)

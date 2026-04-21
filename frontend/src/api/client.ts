@@ -130,12 +130,20 @@ export interface Message {
 
 export type FileTree = Record<string, unknown>
 
+export interface ComparisonRun extends Run {
+  experiment_id: string
+  experiment_name: string
+  dataset: string
+}
+
 export interface RunComparison {
-  run_a: Run
-  run_b: Run
+  run_a: ComparisonRun
+  run_b: ComparisonRun
   found_by_both: Finding[]
   only_in_a: Finding[]
   only_in_b: Finding[]
+  dataset_mismatch: boolean
+  warnings: string[]
 }
 
 export interface FPPattern {
@@ -282,9 +290,32 @@ export function compareRuns(
   runAId: string,
   runBId: string
 ): Promise<RunComparison> {
-  return apiFetch<RunComparison>(
-    `/experiments/${experimentId}/compare?a=${encodeURIComponent(runAId)}&b=${encodeURIComponent(runBId)}`
-  )
+  return compareRunsCross({
+    aExperiment: experimentId,
+    aRun: runAId,
+    bExperiment: experimentId,
+    bRun: runBId,
+  })
+}
+
+export function compareRunsCross({
+  aExperiment,
+  aRun,
+  bExperiment,
+  bRun,
+}: {
+  aExperiment: string
+  aRun: string
+  bExperiment: string
+  bRun: string
+}): Promise<RunComparison> {
+  const params = new URLSearchParams({
+    a_experiment: aExperiment,
+    a_run: aRun,
+    b_experiment: bExperiment,
+    b_run: bRun,
+  })
+  return apiFetch<RunComparison>(`/compare-runs?${params}`)
 }
 
 export function searchFindings(experimentId: string, q: string): Promise<Finding[]> {

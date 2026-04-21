@@ -268,12 +268,21 @@ export default function Dashboard() {
             <h1 className="font-display font-bold text-3xl tracking-tight">Dashboard</h1>
             <p className="mt-1 text-xs text-muted-foreground font-mono uppercase tracking-wider">// SYSTEM OVERVIEW</p>
           </div>
-          <Button
-            onClick={() => navigate('/experiments/new')}
-            className="bg-primary text-primary-foreground hover:bg-primary/90 font-mono text-xs uppercase tracking-wider"
-          >
-            New Experiment
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              onClick={() => navigate('/compare')}
+              variant="outline"
+              className="font-mono text-xs uppercase tracking-wider"
+            >
+              Compare
+            </Button>
+            <Button
+              onClick={() => navigate('/experiments/new')}
+              className="bg-primary text-primary-foreground hover:bg-primary/90 font-mono text-xs uppercase tracking-wider"
+            >
+              New Experiment
+            </Button>
+          </div>
         </div>
         <PageDescription>
           Live view of active and recent experiments, total spend against cap, and model-vs-strategy accuracy across completed runs.

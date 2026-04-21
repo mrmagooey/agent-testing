@@ -15,6 +15,7 @@ import ThemeToggle from './components/ThemeToggle'
 const NAV_LINKS = [
   { to: '/', label: 'Dashboard', end: true },
   { to: '/experiments/new', label: 'New Experiment', end: false },
+  { to: '/compare', label: 'Compare', end: false },
   { to: '/datasets', label: 'Datasets', end: true },
   { to: '/datasets/discover', label: 'CVE Discovery', end: false },
   { to: '/findings', label: 'Findings', end: false },
@@ -102,6 +103,7 @@ export default function App() {
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/experiments/new" element={<ExperimentNew />} />
+            <Route path="/compare" element={<RunCompare />} />
             <Route path="/experiments/:id/compare" element={<RunCompare />} />
             <Route path="/experiments/:experimentId/runs/:runId" element={<RunDetail />} />
             <Route path="/experiments/:id" element={<ExperimentDetail />} />
