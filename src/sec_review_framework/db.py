@@ -4,7 +4,7 @@ import aiosqlite
 import json
 import re
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -180,7 +180,7 @@ class Database:
                 INSERT INTO experiments (id, config_json, status, total_runs, max_cost_usd, spent_usd, created_at)
                 VALUES (?, ?, 'pending', ?, ?, 0, ?)
                 """,
-                (experiment_id, config_json, total_runs, max_cost_usd, datetime.utcnow().isoformat()),
+                (experiment_id, config_json, total_runs, max_cost_usd, datetime.now(UTC).isoformat()),
             )
             await db.commit()
 
@@ -244,7 +244,7 @@ class Database:
                 (
                     run_id, experiment_id, config_json, model_id, strategy,
                     tool_variant, review_profile, verification_variant,
-                    estimated_cost_usd, datetime.utcnow().isoformat(), ext_str,
+                    estimated_cost_usd, datetime.now(UTC).isoformat(), ext_str,
                 ),
             )
             await db.commit()
@@ -387,7 +387,7 @@ class Database:
                         model_id,
                         strategy,
                         dataset_name,
-                        datetime.utcnow().isoformat(),
+                        datetime.now(UTC).isoformat(),
                     ),
                 )
             await db.commit()

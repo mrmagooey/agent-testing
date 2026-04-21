@@ -21,7 +21,7 @@ import pytest_asyncio
 from fastapi.testclient import TestClient
 
 import sec_review_framework.coordinator as coord_module
-from sec_review_framework.coordinator import ExperimentCoordinator as BatchCoordinator, app
+from sec_review_framework.coordinator import ExperimentCoordinator, app
 from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
 from sec_review_framework.db import Database
 from sec_review_framework.reporting.markdown import MarkdownReportGenerator
@@ -32,7 +32,7 @@ from sec_review_framework.reporting.markdown import MarkdownReportGenerator
 # ---------------------------------------------------------------------------
 
 
-def _make_coordinator(tmp_path: Path, db: Database) -> BatchCoordinator:
+def _make_coordinator(tmp_path: Path, db: Database) -> ExperimentCoordinator:
     cost_calc = CostCalculator(
         pricing={
             "gpt-4o": ModelPricing(input_per_million=5.0, output_per_million=15.0),
@@ -42,7 +42,7 @@ def _make_coordinator(tmp_path: Path, db: Database) -> BatchCoordinator:
     config_dir.mkdir(parents=True, exist_ok=True)
     storage = tmp_path / "storage"
     storage.mkdir(parents=True, exist_ok=True)
-    return BatchCoordinator(
+    return ExperimentCoordinator(
         k8s_client=None,
         storage_root=storage,
         concurrency_caps={},
@@ -341,6 +341,24 @@ def test_facets_counts_match_filter_off(findings_client):
     facets = resp.json()["facets"]
     assert facets["vuln_class"].get("sqli", 0) == 2
     assert facets["vuln_class"].get("xss", 0) == 1
+
+
+# ---------------------------------------------------------------------------
+# Multi-value query params (regression test)
+# ---------------------------------------------------------------------------
+
+
+def test_multi_value_vuln_class_filter(findings_client):
+    """Repeated query-string params must be honored (Query(default=None) regression)."""
+    # Request findings with BOTH sqli AND xss
+    resp = findings_client.get("/api/findings?vuln_class=sqli&vuln_class=xss")
+    assert resp.status_code == 200
+    body = resp.json()
+    # Should return 3 findings: 2 sqli + 1 xss
+    assert body["total"] == 3
+    assert len(body["items"]) == 3
+    vuln_classes = {item["vuln_class"] for item in body["items"]}
+    assert vuln_classes == {"sqli", "xss"}
 
 
 # ---------------------------------------------------------------------------

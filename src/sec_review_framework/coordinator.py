@@ -1150,7 +1150,7 @@ class ExperimentCoordinator:
 
         # Keep the findings index in sync with the reclassification
         try:
-            await self.db.update_finding_match_status(req.finding_id, "unlabeled_real")
+            await self.db.update_finding_match_status(req.finding_id, req.status)
         except Exception as exc:
             logger.warning(
                 "Could not update findings index for reclassified finding %s: %s",
@@ -2021,7 +2021,7 @@ async def delete_experiment(experiment_id: str) -> None:
 
 @app.get("/findings")
 async def search_findings_global(
-    q: str | None = None,
+    q: str | None = Query(default=None),
     vuln_class: list[str] | None = Query(default=None),
     severity: list[str] | None = Query(default=None),
     match_status: list[str] | None = Query(default=None),

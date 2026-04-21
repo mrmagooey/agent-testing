@@ -7,7 +7,7 @@ row count + shapes. Idempotent: second run yields same count.
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -90,7 +90,7 @@ def _make_run_result(
         verification_tokens=0,
         estimated_cost_usd=0.01,
         duration_seconds=5.0,
-        completed_at=datetime.utcnow(),
+        completed_at=datetime.now(UTC),
     )
 
 
@@ -140,8 +140,8 @@ async def test_backfill_indexes_all_runs(db: Database, storage_root: Path) -> No
 
     indexed = 0
     outputs_dir = storage_root / "outputs"
-    for batch_dir in outputs_dir.iterdir():
-        for run_dir in batch_dir.iterdir():
+    for experiment_dir in outputs_dir.iterdir():
+        for run_dir in experiment_dir.iterdir():
             rf = run_dir / "run_result.json"
             if not rf.exists():
                 continue
@@ -149,7 +149,7 @@ async def test_backfill_indexes_all_runs(db: Database, storage_root: Path) -> No
             if r.findings:
                 await db.upsert_findings_for_run(
                     run_id=r.experiment.id,
-                    experiment_id=batch_dir.name,
+                    experiment_id=experiment_dir.name,
                     findings=[f.model_dump(mode="json") for f in r.findings],
                     model_id=r.experiment.model_id,
                     strategy=r.experiment.strategy.value,
@@ -171,8 +171,8 @@ async def test_backfill_idempotent(db: Database, storage_root: Path) -> None:
     from sec_review_framework.data.experiment import RunResult as RR
 
     async def do_backfill() -> None:
-        for batch_dir in (storage_root / "outputs").iterdir():
-            for run_dir in batch_dir.iterdir():
+        for experiment_dir in (storage_root / "outputs").iterdir():
+            for run_dir in experiment_dir.iterdir():
                 rf = run_dir / "run_result.json"
                 if not rf.exists():
                     continue
@@ -180,7 +180,7 @@ async def test_backfill_idempotent(db: Database, storage_root: Path) -> None:
                 if r.findings:
                     await db.upsert_findings_for_run(
                         run_id=r.experiment.id,
-                        experiment_id=batch_dir.name,
+                        experiment_id=experiment_dir.name,
                         findings=[f.model_dump(mode="json") for f in r.findings],
                         model_id=r.experiment.model_id,
                         strategy=r.experiment.strategy.value,
@@ -224,13 +224,13 @@ async def test_backfill_finding_shapes(db: Database, storage_root: Path) -> None
 
     from sec_review_framework.data.experiment import RunResult as RR
 
-    for batch_dir in (storage_root / "outputs").iterdir():
-        for run_dir in batch_dir.iterdir():
+    for experiment_dir in (storage_root / "outputs").iterdir():
+        for run_dir in experiment_dir.iterdir():
             rf = run_dir / "run_result.json"
             r = RR.model_validate_json(rf.read_text())
             await db.upsert_findings_for_run(
                 run_id=r.experiment.id,
-                experiment_id=batch_dir.name,
+                experiment_id=experiment_dir.name,
                 findings=[f.model_dump(mode="json") for f in r.findings],
                 model_id=r.experiment.model_id,
                 strategy=r.experiment.strategy.value,

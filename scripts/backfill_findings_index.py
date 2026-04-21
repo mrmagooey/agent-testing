@@ -44,11 +44,11 @@ async def backfill(storage_root: Path, db_path: Path) -> int:
     indexed = 0
     skipped = 0
 
-    for batch_dir in sorted(outputs_dir.iterdir()):
-        if not batch_dir.is_dir():
+    for experiment_dir in sorted(outputs_dir.iterdir()):
+        if not experiment_dir.is_dir():
             continue
-        batch_id = batch_dir.name
-        for run_dir in sorted(batch_dir.iterdir()):
+        experiment_id = experiment_dir.name
+        for run_dir in sorted(experiment_dir.iterdir()):
             if not run_dir.is_dir():
                 continue
             result_file = run_dir / "run_result.json"
@@ -67,7 +67,7 @@ async def backfill(storage_root: Path, db_path: Path) -> int:
             try:
                 await db.upsert_findings_for_run(
                     run_id=result.experiment.id,
-                    experiment_id=batch_id,
+                    experiment_id=experiment_id,
                     findings=[f.model_dump(mode="json") for f in result.findings],
                     model_id=result.experiment.model_id,
                     strategy=result.experiment.strategy.value,
@@ -76,10 +76,10 @@ async def backfill(storage_root: Path, db_path: Path) -> int:
                 indexed += 1
                 logger.info(
                     "Indexed %d findings from %s/%s",
-                    len(result.findings), batch_id, result.experiment.id,
+                    len(result.findings), experiment_id, result.experiment.id,
                 )
             except Exception as exc:
-                logger.error("Failed to index run %s/%s: %s", batch_id, result.experiment.id, exc)
+                logger.error("Failed to index run %s/%s: %s", experiment_id, result.experiment.id, exc)
                 skipped += 1
 
     logger.info(
