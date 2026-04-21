@@ -6,29 +6,29 @@ test.beforeEach(async ({ page }) => {
 })
 
 // ---------------------------------------------------------------------------
-// Cross-route navigation from /batches/new
+// Cross-route navigation from /experiments/new
 // ---------------------------------------------------------------------------
 
-test('from /batches/new: clicking Dashboard navigates to /', async ({ page }) => {
-  await page.goto('/batches/new')
+test('from /experiments/new: clicking Dashboard navigates to /', async ({ page }) => {
+  await page.goto('/experiments/new')
   await page.getByRole('navigation').getByRole('link', { name: 'Dashboard', exact: true }).click()
   await expect(page).toHaveURL('/')
 })
 
-test('from /batches/new: clicking Datasets navigates to /datasets', async ({ page }) => {
-  await page.goto('/batches/new')
+test('from /experiments/new: clicking Datasets navigates to /datasets', async ({ page }) => {
+  await page.goto('/experiments/new')
   await page.getByRole('navigation').getByRole('link', { name: 'Datasets', exact: true }).click()
   await expect(page).toHaveURL('/datasets')
 })
 
-test('from /batches/new: clicking CVE Discovery navigates to /datasets/discover', async ({ page }) => {
-  await page.goto('/batches/new')
+test('from /experiments/new: clicking CVE Discovery navigates to /datasets/discover', async ({ page }) => {
+  await page.goto('/experiments/new')
   await page.getByRole('navigation').getByRole('link', { name: 'CVE Discovery', exact: true }).click()
   await expect(page).toHaveURL('/datasets/discover')
 })
 
-test('from /batches/new: clicking Feedback navigates to /feedback', async ({ page }) => {
-  await page.goto('/batches/new')
+test('from /experiments/new: clicking Feedback navigates to /feedback', async ({ page }) => {
+  await page.goto('/experiments/new')
   await page.getByRole('navigation').getByRole('link', { name: 'Feedback', exact: true }).click()
   await expect(page).toHaveURL('/feedback')
 })
@@ -43,10 +43,10 @@ test('from /datasets: clicking Dashboard navigates to /', async ({ page }) => {
   await expect(page).toHaveURL('/')
 })
 
-test('from /datasets: clicking New Batch navigates to /batches/new', async ({ page }) => {
+test('from /datasets: clicking New Experiment navigates to /experiments/new', async ({ page }) => {
   await page.goto('/datasets')
-  await page.getByRole('navigation').getByRole('link', { name: 'New Batch', exact: true }).click()
-  await expect(page).toHaveURL('/batches/new')
+  await page.getByRole('navigation').getByRole('link', { name: 'New Experiment', exact: true }).click()
+  await expect(page).toHaveURL('/experiments/new')
 })
 
 test('from /datasets: clicking CVE Discovery navigates to /datasets/discover', async ({ page }) => {
@@ -71,10 +71,10 @@ test('from /datasets/discover: clicking Dashboard navigates to /', async ({ page
   await expect(page).toHaveURL('/')
 })
 
-test('from /datasets/discover: clicking New Batch navigates to /batches/new', async ({ page }) => {
+test('from /datasets/discover: clicking New Experiment navigates to /experiments/new', async ({ page }) => {
   await page.goto('/datasets/discover')
-  await page.getByRole('navigation').getByRole('link', { name: 'New Batch', exact: true }).click()
-  await expect(page).toHaveURL('/batches/new')
+  await page.getByRole('navigation').getByRole('link', { name: 'New Experiment', exact: true }).click()
+  await expect(page).toHaveURL('/experiments/new')
 })
 
 test('from /datasets/discover: clicking Datasets navigates to /datasets', async ({ page }) => {
@@ -99,10 +99,10 @@ test('from /feedback: clicking Dashboard navigates to /', async ({ page }) => {
   await expect(page).toHaveURL('/')
 })
 
-test('from /feedback: clicking New Batch navigates to /batches/new', async ({ page }) => {
+test('from /feedback: clicking New Experiment navigates to /experiments/new', async ({ page }) => {
   await page.goto('/feedback')
-  await page.getByRole('navigation').getByRole('link', { name: 'New Batch', exact: true }).click()
-  await expect(page).toHaveURL('/batches/new')
+  await page.getByRole('navigation').getByRole('link', { name: 'New Experiment', exact: true }).click()
+  await expect(page).toHaveURL('/experiments/new')
 })
 
 test('from /feedback: clicking Datasets navigates to /datasets', async ({ page }) => {

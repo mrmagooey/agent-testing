@@ -95,7 +95,7 @@ class TestJSONReportGenerator:
         gen = JSONReportGenerator()
         gen.render_run(sample_run_result, tmp_path)
         data = json.loads((tmp_path / "report.json").read_text())
-        for key in ("experiment_id", "batch_id", "model_id", "strategy",
+        for key in ("run_id", "experiment_id", "model_id", "strategy",
                     "status", "dedup", "token_usage", "findings"):
             assert key in data, f"Missing key: {key}"
 
@@ -108,7 +108,7 @@ class TestJSONReportGenerator:
         gen = JSONReportGenerator()
         gen.render_matrix([sample_run_result], tmp_path)
         data = json.loads((tmp_path / "matrix_report.json").read_text())
-        for key in ("batch_id", "dataset", "runs", "dimension_analysis", "cost_analysis"):
+        for key in ("experiment_id", "dataset", "runs", "dimension_analysis", "cost_analysis"):
             assert key in data, f"Missing key: {key}"
 
     def test_render_matrix_empty_results_no_crash(self, tmp_path: Path):

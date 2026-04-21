@@ -1,9 +1,9 @@
 """B4: Integration tests for smoke-test route, /feedback/patterns, run detail shape.
 
 Routes covered:
-  - POST /smoke-test                     — creates a batch, returns batch_id + message
-  - GET  /feedback/patterns/{batch_id}   — returns list (empty for new batch)
-  - GET  /batches/{id}/runs/{run_id}     — 404 for missing; shape contract on hit
+  - POST /smoke-test                          — creates an experiment, returns experiment_id + message
+  - GET  /feedback/patterns/{experiment_id}   — returns list (empty for new experiment)
+  - GET  /experiments/{id}/runs/{run_id}      — 404 for missing; shape contract on hit
 """
 
 from __future__ import annotations
@@ -57,12 +57,12 @@ def test_smoke_test_returns_200(coordinator_client):
     assert resp.status_code == 200
 
 
-def test_smoke_test_returns_batch_id(coordinator_client):
+def test_smoke_test_returns_experiment_id(coordinator_client):
     client, *_ = coordinator_client
     data = client.post("/smoke-test").json()
-    assert "batch_id" in data
-    assert isinstance(data["batch_id"], str)
-    assert len(data["batch_id"]) > 0
+    assert "experiment_id" in data
+    assert isinstance(data["experiment_id"], str)
+    assert len(data["experiment_id"]) > 0
 
 
 def test_smoke_test_returns_message(coordinator_client):
@@ -80,21 +80,21 @@ def test_smoke_test_returns_total_runs(coordinator_client):
     assert data["total_runs"] >= 1
 
 
-def test_smoke_test_batch_id_starts_with_smoke_test(coordinator_client):
-    """Smoke test batch IDs are prefixed 'smoke-test-' for easy identification."""
+def test_smoke_test_experiment_id_starts_with_smoke_test(coordinator_client):
+    """Smoke test experiment IDs are prefixed 'smoke-test-' for easy identification."""
     client, *_ = coordinator_client
     data = client.post("/smoke-test").json()
-    assert data["batch_id"].startswith("smoke-test-")
+    assert data["experiment_id"].startswith("smoke-test-")
 
 
-def test_smoke_test_creates_batch_in_db(coordinator_client):
-    """The smoke test batch should be retrievable via GET /batches/{id}."""
+def test_smoke_test_creates_experiment_in_db(coordinator_client):
+    """The smoke test experiment should be retrievable via GET /experiments/{id}."""
     client, *_ = coordinator_client
     data = client.post("/smoke-test").json()
-    batch_id = data["batch_id"]
-    get_resp = client.get(f"/batches/{batch_id}")
+    experiment_id = data["experiment_id"]
+    get_resp = client.get(f"/experiments/{experiment_id}")
     assert get_resp.status_code == 200
-    assert get_resp.json()["batch_id"] == batch_id
+    assert get_resp.json()["experiment_id"] == experiment_id
 
 
 def test_smoke_test_503_when_coordinator_none():
@@ -130,17 +130,17 @@ def test_smoke_test_503_when_coordinator_none():
 
 
 def test_smoke_test_sets_max_turns_10(coordinator_client):
-    """submit_batch receives a matrix with strategy_configs max_turns=10."""
+    """submit_experiment receives a matrix with strategy_configs max_turns=10."""
     client, c, _ = coordinator_client
     captured = {}
 
-    original = c.submit_batch
+    original = c.submit_experiment
 
     async def _capture(matrix):
         captured["matrix"] = matrix
         return await original(matrix)
 
-    with patch.object(c, "submit_batch", side_effect=_capture):
+    with patch.object(c, "submit_experiment", side_effect=_capture):
         resp = client.post("/smoke-test")
     assert resp.status_code == 200
     assert captured["matrix"].strategy_configs["single_agent"]["max_turns"] == 10
@@ -169,7 +169,7 @@ def test_smoke_test_returns_409_when_already_running(coordinator_client):
     client, *_ = coordinator_client
     first = client.post("/smoke-test")
     assert first.status_code == 200
-    first_id = first.json()["batch_id"]
+    first_id = first.json()["experiment_id"]
 
     second = client.post("/smoke-test")
     assert second.status_code == 409
@@ -178,7 +178,7 @@ def test_smoke_test_returns_409_when_already_running(coordinator_client):
 
 @pytest.mark.asyncio
 async def test_smoke_test_allows_new_after_previous_completes(tmp_path: Path):
-    """POST /smoke-test succeeds after the previous smoke batch is completed."""
+    """POST /smoke-test succeeds after the previous smoke experiment is completed."""
     from unittest.mock import patch as _patch
     import sec_review_framework.coordinator as _coord_mod
 
@@ -194,9 +194,9 @@ async def test_smoke_test_allows_new_after_previous_completes(tmp_path: Path):
                     mock_dt.utcnow.return_value.timestamp.return_value = 1000000
                     first = client.post("/smoke-test")
                 assert first.status_code == 200
-                first_id = first.json()["batch_id"]
+                first_id = first.json()["experiment_id"]
 
-                await c.db.update_batch_status(first_id, "completed")
+                await c.db.update_experiment_status(first_id, "completed")
 
                 with _patch("sec_review_framework.coordinator.datetime") as mock_dt:
                     mock_dt.utcnow.return_value.timestamp.return_value = 1000001
@@ -205,13 +205,13 @@ async def test_smoke_test_allows_new_after_previous_completes(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# GET /feedback/patterns/{batch_id}
+# GET /feedback/patterns/{experiment_id}
 # ---------------------------------------------------------------------------
 
-def test_fp_patterns_empty_batch_returns_list(coordinator_client):
-    """feedback/patterns for a batch with no runs returns an empty list."""
+def test_fp_patterns_empty_experiment_returns_list(coordinator_client):
+    """feedback/patterns for an experiment with no runs returns an empty list."""
     client, *_ = coordinator_client
-    resp = client.get("/feedback/patterns/nonexistent-batch")
+    resp = client.get("/feedback/patterns/nonexistent-experiment")
     assert resp.status_code == 200
     assert isinstance(resp.json(), list)
 
@@ -219,7 +219,7 @@ def test_fp_patterns_empty_batch_returns_list(coordinator_client):
 def test_fp_patterns_returns_list_type(coordinator_client):
     """feedback/patterns always returns a JSON list."""
     client, *_ = coordinator_client
-    resp = client.get("/feedback/patterns/any-batch")
+    resp = client.get("/feedback/patterns/any-experiment")
     assert resp.status_code == 200
     data = resp.json()
     assert isinstance(data, list)
@@ -232,7 +232,7 @@ def test_fp_patterns_items_have_expected_fields_when_nonempty(coordinator_client
     with patch.object(c, "get_fp_patterns", return_value=[
         {"pattern": "import os", "count": 3, "severity": "high"},
     ]):
-        resp = client.get("/feedback/patterns/some-batch")
+        resp = client.get("/feedback/patterns/some-experiment")
     assert resp.status_code == 200
     data = resp.json()
     assert len(data) == 1
@@ -240,20 +240,20 @@ def test_fp_patterns_items_have_expected_fields_when_nonempty(coordinator_client
 
 
 # ---------------------------------------------------------------------------
-# GET /batches/{id}/runs/{run_id} — shape contract
+# GET /experiments/{id}/runs/{run_id} — shape contract
 # ---------------------------------------------------------------------------
 
 def test_get_run_404_for_missing_run(coordinator_client):
-    """GET /batches/{id}/runs/{run_id} returns 404 when run doesn't exist."""
+    """GET /experiments/{id}/runs/{run_id} returns 404 when run doesn't exist."""
     client, *_ = coordinator_client
-    resp = client.get("/batches/no-batch/runs/no-run")
+    resp = client.get("/experiments/no-experiment/runs/no-run")
     assert resp.status_code == 404
 
 
 def test_get_run_404_message_is_informative(coordinator_client):
     """404 response for missing run includes a detail field."""
     client, *_ = coordinator_client
-    resp = client.get("/batches/no-batch/runs/no-run")
+    resp = client.get("/experiments/no-experiment/runs/no-run")
     data = resp.json()
     assert "detail" in data
 
@@ -269,7 +269,7 @@ async def test_get_run_shape_after_submit(tmp_path: Path):
     c = _make_coordinator(tmp_path, db)
 
     matrix = ExperimentMatrix(
-        batch_id="shape-test",
+        experiment_id="shape-test",
         dataset_name="ds",
         dataset_version="1.0",
         model_ids=["gpt-4o"],
@@ -279,7 +279,7 @@ async def test_get_run_shape_after_submit(tmp_path: Path):
         verification_variants=[VerificationVariant.NONE],
         parallel_modes=[False],
     )
-    await c.submit_batch(matrix)
+    await c.submit_experiment(matrix)
 
     # Get run list
     runs = await db.list_runs("shape-test")
@@ -290,7 +290,7 @@ async def test_get_run_shape_after_submit(tmp_path: Path):
     with patch.object(coord_module, "coordinator", c):
         with patch.object(c, "reconcile", return_value=None):
             with TestClient(app, raise_server_exceptions=True) as client:
-                resp = client.get(f"/batches/shape-test/runs/{run_id}")
+                resp = client.get(f"/experiments/shape-test/runs/{run_id}")
 
     # Run is pending — should return 200 with run data or 404 if not yet in results
     # Either is acceptable; we check shape if 200

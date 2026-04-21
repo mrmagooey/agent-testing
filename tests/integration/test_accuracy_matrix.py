@@ -11,7 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import sec_review_framework.coordinator as coord_module
-from sec_review_framework.coordinator import BatchCoordinator, app
+from sec_review_framework.coordinator import ExperimentCoordinator, app
 from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
 from sec_review_framework.data.evaluation import EvaluationResult
 from sec_review_framework.data.experiment import (
@@ -33,13 +33,13 @@ from sec_review_framework.reporting.markdown import MarkdownReportGenerator
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_coordinator(tmp_path: Path, db: Database) -> BatchCoordinator:
+def _make_coordinator(tmp_path: Path, db: Database) -> ExperimentCoordinator:
     cost_calc = CostCalculator(
         pricing={
             "gpt-4o": ModelPricing(input_per_million=5.0, output_per_million=15.0),
         }
     )
-    return BatchCoordinator(
+    return ExperimentCoordinator(
         k8s_client=None,
         storage_root=tmp_path / "storage",
         concurrency_caps={},
@@ -54,7 +54,7 @@ def _make_coordinator(tmp_path: Path, db: Database) -> BatchCoordinator:
 
 def _write_run_result(
     storage_root: Path,
-    batch_id: str,
+    experiment_id: str,
     run_id: str,
     model_id: str,
     strategy: StrategyName,
@@ -62,7 +62,7 @@ def _write_run_result(
 ) -> None:
     run = ExperimentRun(
         id=run_id,
-        batch_id=batch_id,
+        experiment_id=experiment_id,
         model_id=model_id,
         strategy=strategy,
         tool_variant=ToolVariant.WITH_TOOLS,
@@ -108,7 +108,7 @@ def _write_run_result(
         evaluation=evaluation,
         completed_at=datetime(2026, 4, 1, 1, 0, 0, tzinfo=timezone.utc),
     )
-    out_dir = storage_root / "outputs" / batch_id / run_id
+    out_dir = storage_root / "outputs" / experiment_id / run_id
     out_dir.mkdir(parents=True)
     (out_dir / "run_result.json").write_text(result.model_dump_json(indent=2))
 
@@ -145,7 +145,7 @@ def test_accuracy_matrix_empty_returns_empty_cells(coordinator_client):
 def test_accuracy_matrix_response_shape(coordinator_client):
     client, _, tmp_path = coordinator_client
     storage = tmp_path / "storage"
-    _write_run_result(storage, "batch-1", "run-1", "gpt-4o", StrategyName.SINGLE_AGENT, 0.8)
+    _write_run_result(storage, "experiment-1", "run-1", "gpt-4o", StrategyName.SINGLE_AGENT, 0.8)
 
     resp = client.get("/api/matrix/accuracy")
     assert resp.status_code == 200
@@ -161,7 +161,7 @@ def test_accuracy_matrix_response_shape(coordinator_client):
 def test_accuracy_matrix_single_run(coordinator_client):
     client, _, tmp_path = coordinator_client
     storage = tmp_path / "storage"
-    _write_run_result(storage, "batch-1", "run-1", "gpt-4o", StrategyName.SINGLE_AGENT, 0.75)
+    _write_run_result(storage, "experiment-1", "run-1", "gpt-4o", StrategyName.SINGLE_AGENT, 0.75)
 
     resp = client.get("/api/matrix/accuracy")
     data = resp.json()
@@ -211,7 +211,7 @@ def test_accuracy_matrix_skips_runs_without_evaluation(coordinator_client):
     # Write a run result with no evaluation (failed run)
     run = ExperimentRun(
         id="r-failed",
-        batch_id="b1",
+        experiment_id="e1",
         model_id="gpt-4o",
         strategy=StrategyName.PER_FILE,
         tool_variant=ToolVariant.WITH_TOOLS,

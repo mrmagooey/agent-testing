@@ -172,8 +172,8 @@ def smoke_dirs(tmp_path: Path):
 @pytest.fixture
 def smoke_run(smoke_dirs) -> ExperimentRun:
     return ExperimentRun(
-        id="smoke-batch_fake-model_single_agent_with_tools_default_none",
-        batch_id="smoke-batch",
+        id="smoke-experiment_fake-model_single_agent_with_tools_default_none",
+        experiment_id="smoke-experiment",
         model_id="fake-model",
         strategy=StrategyName.SINGLE_AGENT,
         tool_variant=ToolVariant.WITH_TOOLS,

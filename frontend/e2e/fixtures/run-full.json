@@ -1,7 +1,6 @@
 {
   "run_id": "run-001-aaa",
-  "batch_id": "aaaaaaaa-0001-0001-0001-000000000001",
-  "experiment_id": "gpt-4o__zero_shot__with_tools__default__none",
+  "experiment_id": "aaaaaaaa-0001-0001-0001-000000000001",
   "model": "gpt-4o",
   "strategy": "zero_shot",
   "tool_variant": "with_tools",
@@ -23,7 +22,7 @@
     {
       "finding_id": "find-001",
       "run_id": "run-001-aaa",
-      "batch_id": "aaaaaaaa-0001-0001-0001-000000000001",
+      "experiment_id": "aaaaaaaa-0001-0001-0001-000000000001",
       "title": "SQL Injection in user login handler",
       "description": "User-supplied input is concatenated directly into a SQL query without parameterization.",
       "vuln_class": "sqli",
@@ -39,7 +38,7 @@
     {
       "finding_id": "find-002",
       "run_id": "run-001-aaa",
-      "batch_id": "aaaaaaaa-0001-0001-0001-000000000001",
+      "experiment_id": "aaaaaaaa-0001-0001-0001-000000000001",
       "title": "Reflected XSS in search results",
       "description": "The search query parameter is reflected in the response without HTML encoding.",
       "vuln_class": "xss",

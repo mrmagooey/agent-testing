@@ -1,19 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
-  listBatches,
-  getBatch,
-  submitBatch,
+  listExperiments,
+  getExperiment,
+  submitExperiment,
   searchFindings,
   getFileContent,
-  estimateBatch,
+  estimateExperiment,
   downloadReports,
-  cancelBatch,
+  cancelExperiment,
   listModels,
   listStrategies,
   listProfiles,
   listDatasets,
-  type Batch,
-  type BatchConfig,
+  type Experiment,
+  type ExperimentConfig,
 } from '../../api/client'
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -36,10 +36,10 @@ beforeEach(() => {
 
 describe('apiFetch helper behaviour', () => {
   it('returns parsed JSON on a successful 200 response', async () => {
-    const payload = { batch_id: 'b1', status: 'completed' }
+    const payload = { experiment_id: 'e1', status: 'completed' }
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeFetchResponse(payload, 200)))
 
-    const result = await getBatch('b1')
+    const result = await getExperiment('e1')
     expect(result).toEqual(payload)
   })
 
@@ -49,11 +49,11 @@ describe('apiFetch helper behaviour', () => {
       vi.fn().mockResolvedValue({
         ok: false,
         status: 404,
-        json: vi.fn().mockResolvedValue({ detail: 'Batch not found' }),
+        json: vi.fn().mockResolvedValue({ detail: 'Experiment not found' }),
       } as unknown as Response),
     )
 
-    await expect(getBatch('missing')).rejects.toThrow('Batch not found')
+    await expect(getExperiment('missing')).rejects.toThrow('Experiment not found')
   })
 
   it('handles 204 No Content by returning undefined without calling .json()', async () => {
@@ -67,7 +67,7 @@ describe('apiFetch helper behaviour', () => {
       } as unknown as Response),
     )
 
-    const result = await cancelBatch('b1')
+    const result = await cancelExperiment('e1')
     expect(result).toBeUndefined()
     expect(jsonFn).not.toHaveBeenCalled()
   })
@@ -82,42 +82,42 @@ describe('apiFetch helper behaviour', () => {
       } as unknown as Response),
     )
 
-    await expect(getBatch('b1')).rejects.toThrow('API error 500')
+    await expect(getExperiment('e1')).rejects.toThrow('API error 500')
   })
 })
 
-describe('listBatches', () => {
-  it('calls GET /api/batches and returns the array', async () => {
-    const batches: Partial<Batch>[] = [{ batch_id: 'b1' }, { batch_id: 'b2' }]
-    const fetchMock = vi.fn().mockResolvedValue(makeFetchResponse(batches))
+describe('listExperiments', () => {
+  it('calls GET /api/experiments and returns the array', async () => {
+    const experiments: Partial<Experiment>[] = [{ experiment_id: 'e1' }, { experiment_id: 'e2' }]
+    const fetchMock = vi.fn().mockResolvedValue(makeFetchResponse(experiments))
     vi.stubGlobal('fetch', fetchMock)
 
-    const result = await listBatches()
+    const result = await listExperiments()
 
     expect(fetchMock).toHaveBeenCalledOnce()
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
-    expect(url).toBe('/api/batches')
+    expect(url).toBe('/api/experiments')
     expect(init?.method).toBeUndefined() // default GET has no explicit method
-    expect(result).toEqual(batches)
+    expect(result).toEqual(experiments)
   })
 })
 
-describe('getBatch', () => {
-  it('calls GET /api/batches/:id with the correct path', async () => {
-    const batch: Partial<Batch> = { batch_id: 'abc-123', status: 'running' }
-    const fetchMock = vi.fn().mockResolvedValue(makeFetchResponse(batch))
+describe('getExperiment', () => {
+  it('calls GET /api/experiments/:id with the correct path', async () => {
+    const experiment: Partial<Experiment> = { experiment_id: 'abc-123', status: 'running' }
+    const fetchMock = vi.fn().mockResolvedValue(makeFetchResponse(experiment))
     vi.stubGlobal('fetch', fetchMock)
 
-    await getBatch('abc-123')
+    await getExperiment('abc-123')
 
     const [url] = fetchMock.mock.calls[0] as [string]
-    expect(url).toBe('/api/batches/abc-123')
+    expect(url).toBe('/api/experiments/abc-123')
   })
 })
 
-describe('submitBatch', () => {
-  it('sends POST /api/batches with the serialised config body', async () => {
-    const config: BatchConfig = {
+describe('submitExperiment', () => {
+  it('sends POST /api/experiments with the serialised config body', async () => {
+    const config: ExperimentConfig = {
       dataset: 'ds1',
       models: ['gpt-4'],
       strategies: ['basic'],
@@ -126,13 +126,13 @@ describe('submitBatch', () => {
       verification: ['none'],
       repetitions: 1,
     }
-    const fetchMock = vi.fn().mockResolvedValue(makeFetchResponse({ batch_id: 'new' }))
+    const fetchMock = vi.fn().mockResolvedValue(makeFetchResponse({ experiment_id: 'new' }))
     vi.stubGlobal('fetch', fetchMock)
 
-    await submitBatch(config)
+    await submitExperiment(config)
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
-    expect(url).toBe('/api/batches')
+    expect(url).toBe('/api/experiments')
     expect(init.method).toBe('POST')
     expect(JSON.parse(init.body as string)).toEqual(config)
   })
@@ -143,10 +143,10 @@ describe('searchFindings', () => {
     const fetchMock = vi.fn().mockResolvedValue(makeFetchResponse([]))
     vi.stubGlobal('fetch', fetchMock)
 
-    await searchFindings('b1', 'SQL injection & XSS')
+    await searchFindings('e1', 'SQL injection & XSS')
 
     const [url] = fetchMock.mock.calls[0] as [string]
-    expect(url).toContain('/api/batches/b1/findings/search?q=')
+    expect(url).toContain('/api/experiments/e1/findings/search?q=')
     expect(url).toContain(encodeURIComponent('SQL injection & XSS'))
   })
 })
@@ -166,17 +166,17 @@ describe('getFileContent', () => {
   })
 })
 
-describe('estimateBatch', () => {
-  it('sends POST /api/batches/estimate with partial config', async () => {
+describe('estimateExperiment', () => {
+  it('sends POST /api/experiments/estimate with partial config', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       makeFetchResponse({ total_runs: 20, estimated_cost_usd: 1.5, by_model: {} }),
     )
     vi.stubGlobal('fetch', fetchMock)
 
-    await estimateBatch({ models: ['claude-3-5-sonnet'], repetitions: 2 })
+    await estimateExperiment({ models: ['claude-3-5-sonnet'], repetitions: 2 })
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
-    expect(url).toBe('/api/batches/estimate')
+    expect(url).toBe('/api/experiments/estimate')
     expect(init.method).toBe('POST')
     expect(JSON.parse(init.body as string)).toMatchObject({ models: ['claude-3-5-sonnet'], repetitions: 2 })
   })
@@ -187,9 +187,9 @@ describe('downloadReports', () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
 
-    const url = downloadReports('batch-xyz')
+    const url = downloadReports('experiment-xyz')
 
-    expect(url).toBe('/api/batches/batch-xyz/results/download')
+    expect(url).toBe('/api/experiments/experiment-xyz/results/download')
     expect(fetchMock).not.toHaveBeenCalled()
   })
 })
@@ -197,7 +197,7 @@ describe('downloadReports', () => {
 // Regression: the coordinator's /models, /strategies, /profiles endpoints
 // return `list[dict]` (objects with `id`/`name`/etc.), not the plain `list[str]`
 // that the frontend historically assumed. Rendering those objects as React
-// children triggers React error #31 on /batches/new. The client must
+// children triggers React error #31 on /experiments/new. The client must
 // normalize them to plain string IDs so the UI never sees a raw object.
 describe('config endpoint normalization (regression for React error #31)', () => {
   it('listModels flattens object responses to their id', async () => {

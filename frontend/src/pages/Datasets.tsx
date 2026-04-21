@@ -110,7 +110,7 @@ export default function Datasets() {
         </button>
       </div>
       <PageDescription>
-        Source-code repositories with labelled vulnerabilities (ground truth) that batches evaluate against.
+        Source-code repositories with labelled vulnerabilities (ground truth) that experiments evaluate against.
         Browse existing datasets or discover and import new ones from public CVE feeds.
       </PageDescription>
 

@@ -111,7 +111,7 @@ def test_finding_identity_contains_file_and_vuln_class():
 
 def _minimal_matrix(**overrides) -> ExperimentMatrix:
     defaults = dict(
-        batch_id="batch-1",
+        experiment_id="experiment-1",
         dataset_name="ds",
         dataset_version="1.0",
         model_ids=["model-a"],
@@ -165,7 +165,7 @@ def test_expand_num_repetitions_triples_count():
 
 
 def test_expand_run_id_includes_all_dimensions():
-    """Run ID must include batch_id, model_id, strategy, tool_variant, profile, verif."""
+    """Run ID must include experiment_id, model_id, strategy, tool_variant, profile, verif."""
     matrix = _minimal_matrix(
         model_ids=["gpt-4o"],
         strategies=[StrategyName.PER_VULN_CLASS],
@@ -174,7 +174,7 @@ def test_expand_run_id_includes_all_dimensions():
         verification_variants=[VerificationVariant.WITH_VERIFICATION],
     )
     run = matrix.expand()[0]
-    assert "batch-1" in run.id
+    assert "experiment-1" in run.id
     assert "gpt-4o" in run.id
     assert "per_vuln_class" in run.id
     assert "without_tools" in run.id
@@ -234,7 +234,7 @@ def test_expand_verifier_model_id_propagated():
 def test_effective_verifier_model_uses_verifier_when_set():
     run = ExperimentRun(
         id="r1",
-        batch_id="b1",
+        experiment_id="e1",
         model_id="primary-model",
         strategy=StrategyName.SINGLE_AGENT,
         tool_variant=ToolVariant.WITH_TOOLS,
@@ -250,7 +250,7 @@ def test_effective_verifier_model_uses_verifier_when_set():
 def test_effective_verifier_model_falls_back_to_model_id():
     run = ExperimentRun(
         id="r1",
-        batch_id="b1",
+        experiment_id="e1",
         model_id="primary-model",
         strategy=StrategyName.SINGLE_AGENT,
         tool_variant=ToolVariant.WITH_TOOLS,
@@ -345,7 +345,7 @@ def test_expand_tool_extension_sets_produces_correct_run_ids():
     run_ids = [r.id for r in runs]
 
     # Empty set: no suffix at all (backwards-compat)
-    base = "batch-1_model-a_single_agent_with_tools_default_none"
+    base = "experiment-1_model-a_single_agent_with_tools_default_none"
     assert base in run_ids
     assert f"{base}_ext-lsp" in run_ids
     assert f"{base}_ext-devdocs+tree_sitter" in run_ids
@@ -356,7 +356,7 @@ def test_expand_empty_extension_set_produces_no_suffix():
     matrix = _minimal_matrix()
     runs = matrix.expand()
     assert len(runs) == 1
-    assert runs[0].id == "batch-1_model-a_single_agent_with_tools_default_none"
+    assert runs[0].id == "experiment-1_model-a_single_agent_with_tools_default_none"
 
 
 def test_tool_extension_sets_powerset_returns_all_subsets():
@@ -379,7 +379,7 @@ def test_experiment_run_tool_extensions_default_is_empty():
     """ExperimentRun.tool_extensions defaults to empty frozenset."""
     run = ExperimentRun(
         id="r1",
-        batch_id="b1",
+        experiment_id="e1",
         model_id="m1",
         strategy=StrategyName.SINGLE_AGENT,
         tool_variant=ToolVariant.WITH_TOOLS,
@@ -395,7 +395,7 @@ def test_experiment_run_tool_extensions_serializes_sorted():
     """tool_extensions serializes to a sorted list of string values."""
     run = ExperimentRun(
         id="r1",
-        batch_id="b1",
+        experiment_id="e1",
         model_id="m1",
         strategy=StrategyName.SINGLE_AGENT,
         tool_variant=ToolVariant.WITH_TOOLS,
@@ -413,7 +413,7 @@ def test_experiment_run_tool_extensions_round_trips():
     """model_dump_json → model_validate_json preserves tool_extensions."""
     run = ExperimentRun(
         id="r1",
-        batch_id="b1",
+        experiment_id="e1",
         model_id="m1",
         strategy=StrategyName.SINGLE_AGENT,
         tool_variant=ToolVariant.WITH_TOOLS,

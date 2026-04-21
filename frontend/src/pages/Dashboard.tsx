@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { listBatches, runSmokeTest, type Batch } from '../api/client'
+import { listExperiments, runSmokeTest, type Experiment } from '../api/client'
 import AccuracyHeatmap from '../components/AccuracyHeatmap'
 import {
   LineChart,
@@ -20,7 +20,7 @@ import {
 } from '@/components/ui/card'
 
 const POLL_INTERVAL_MS = 15_000
-const DEFAULT_SPEND_CAP = 50 // USD — shown if batch has no explicit cap
+const DEFAULT_SPEND_CAP = 50 // USD — shown if experiment has no explicit cap
 
 function formatElapsed(createdAt: string): string {
   const ms = Date.now() - new Date(createdAt).getTime()
@@ -60,7 +60,7 @@ function SimpleProgressBar({ completed, total }: { completed: number; total: num
   )
 }
 
-const STATUS_SIGNAL: Record<Batch['status'], string> = {
+const STATUS_SIGNAL: Record<Experiment['status'], string> = {
   pending: 'text-muted-foreground',
   running: 'text-signal-info',
   completed: 'text-signal-success',
@@ -71,7 +71,7 @@ const STATUS_SIGNAL: Record<Batch['status'], string> = {
 type SmokeTestState =
   | { status: 'idle' }
   | { status: 'running' }
-  | { status: 'success'; batch_id: string; message: string }
+  | { status: 'success'; experiment_id: string; message: string }
   | { status: 'error'; message: string }
 
 function SparklineChart({ data, dataKey, label }: {
@@ -133,12 +133,12 @@ function PollingIndicator({ polling, lastUpdated }: { polling: boolean; lastUpda
   )
 }
 
-function CostHeadroomCard({ batches }: { batches: Batch[] }) {
-  const completedBatches = batches.filter((b) => b.status === 'completed')
-  if (completedBatches.length === 0) return null
+function CostHeadroomCard({ experiments }: { experiments: Experiment[] }) {
+  const completedExperiments = experiments.filter((b) => b.status === 'completed')
+  if (completedExperiments.length === 0) return null
 
-  const totalSpend = completedBatches.reduce((sum, b) => sum + b.total_cost_usd, 0)
-  const cap = completedBatches[0]?.spend_cap_usd ?? DEFAULT_SPEND_CAP
+  const totalSpend = completedExperiments.reduce((sum, b) => sum + b.total_cost_usd, 0)
+  const cap = completedExperiments[0]?.spend_cap_usd ?? DEFAULT_SPEND_CAP
   const pct = Math.min((totalSpend / cap) * 100, 100)
 
   const isWarn = pct >= 80 && pct < 95
@@ -164,7 +164,7 @@ function CostHeadroomCard({ batches }: { batches: Batch[] }) {
       </div>
       {(isWarn || isCrit) && (
         <p className={`text-xs font-mono px-2 py-1 ${alertCls}`}>
-          {isCrit ? 'CRITICAL — spending near cap. Consider pausing new batches.' : 'WARNING — 80% of spend cap reached.'}
+          {isCrit ? 'CRITICAL — spending near cap. Consider pausing new experiments.' : 'WARNING — 80% of spend cap reached.'}
         </p>
       )}
     </div>
@@ -191,7 +191,7 @@ const ROW_REVEAL_STYLE = (i: number): React.CSSProperties => ({
 
 export default function Dashboard() {
   const navigate = useNavigate()
-  const [batches, setBatches] = useState<Batch[]>([])
+  const [experiments, setExperiments] = useState<Experiment[]>([])
   const [loading, setLoading] = useState(true)
   const [polling, setPolling] = useState(false)
   const [lastUpdated, setLastUpdated] = useState<number | null>(null)
@@ -204,17 +204,17 @@ export default function Dashboard() {
     setSmokeTest({ status: 'running' })
     try {
       const result = await runSmokeTest()
-      setSmokeTest({ status: 'success', batch_id: result.batch_id, message: result.message })
+      setSmokeTest({ status: 'success', experiment_id: result.experiment_id, message: result.message })
     } catch (e) {
       setSmokeTest({ status: 'error', message: (e as Error).message })
     }
   }
 
-  const fetchBatches = useCallback(async (isInitial = false) => {
+  const fetchExperiments = useCallback(async (isInitial = false) => {
     if (!isInitial) setPolling(true)
     try {
-      const data = await listBatches()
-      setBatches(data)
+      const data = await listExperiments()
+      setExperiments(data)
       setLastUpdated(Date.now())
     } catch (e) {
       if (isInitial) setError((e as Error).message)
@@ -225,15 +225,15 @@ export default function Dashboard() {
   }, [])
 
   useEffect(() => {
-    fetchBatches(true)
-    pollingRef.current = setInterval(() => fetchBatches(false), POLL_INTERVAL_MS)
+    fetchExperiments(true)
+    pollingRef.current = setInterval(() => fetchExperiments(false), POLL_INTERVAL_MS)
     return () => {
       if (pollingRef.current) clearInterval(pollingRef.current)
     }
-  }, [fetchBatches])
+  }, [fetchExperiments])
 
-  const active = batches.filter((b) => b.status === 'running' || b.status === 'pending')
-  const completed = batches
+  const active = experiments.filter((b) => b.status === 'running' || b.status === 'pending')
+  const completed = experiments
     .filter((b) => b.status === 'completed')
     .sort((a, b) => new Date(b.completed_at ?? b.created_at).getTime() - new Date(a.completed_at ?? a.created_at).getTime())
     .slice(0, 10)
@@ -269,15 +269,15 @@ export default function Dashboard() {
             <p className="mt-1 text-xs text-muted-foreground font-mono uppercase tracking-wider">// SYSTEM OVERVIEW</p>
           </div>
           <Button
-            onClick={() => navigate('/batches/new')}
+            onClick={() => navigate('/experiments/new')}
             className="bg-primary text-primary-foreground hover:bg-primary/90 font-mono text-xs uppercase tracking-wider"
           >
-            New Batch
+            New Experiment
           </Button>
         </div>
         <PageDescription>
-          Live view of active and recent batches, total spend against cap, and model-vs-strategy accuracy across completed runs.
-          Start a new batch, trigger a smoke test, or click any batch row to drill into its per-run results.
+          Live view of active and recent experiments, total spend against cap, and model-vs-strategy accuracy across completed runs.
+          Start a new experiment, trigger a smoke test, or click any experiment row to drill into its per-run results.
         </PageDescription>
 
         {/* Smoke Test */}
@@ -287,7 +287,7 @@ export default function Dashboard() {
             <CardContent className="pt-6">
               <div className="flex items-start justify-between gap-4 flex-wrap">
                 <p className="text-sm text-muted-foreground max-w-sm">
-                  Runs a single-model, single-strategy batch against the first available dataset.
+                  Runs a single-model, single-strategy experiment against the first available dataset.
                   Capped at{' '}
                   <span className="font-mono tabular-nums">$5.00</span>.
                 </p>
@@ -309,10 +309,10 @@ export default function Dashboard() {
                   <span>
                     {smokeTest.message}{' '}
                     <Link
-                      to={`/batches/${smokeTest.batch_id}`}
+                      to={`/experiments/${smokeTest.experiment_id}`}
                       className="underline hover:text-signal-success/80 focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
                     >
-                      View batch →
+                      View experiment →
                     </Link>
                   </span>
                 </div>
@@ -328,10 +328,10 @@ export default function Dashboard() {
 
         <hr className="border-border" />
 
-        {/* Active Batches */}
+        {/* Active Experiments */}
         <section>
           <div className="flex items-center justify-between mb-3">
-            <SectionHeader label="Active Batches" count={active.length} />
+            <SectionHeader label="Active Experiments" count={active.length} />
             <PollingIndicator polling={polling} lastUpdated={lastUpdated} />
           </div>
           {active.length === 0 ? (
@@ -341,15 +341,15 @@ export default function Dashboard() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
               }
-              title="No active batches."
-              subtitle="Start a new batch to see it here."
+              title="No active experiments."
+              subtitle="Start a new experiment to see it here."
             />
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-border">
-                    <th className="text-left pb-2 font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">Batch ID</th>
+                    <th className="text-left pb-2 font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">Experiment ID</th>
                     <th className="text-left pb-2 font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">Dataset</th>
                     <th className="text-left pb-2 font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground w-48">Progress</th>
                     <th className="text-right pb-2 font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">Cost</th>
@@ -360,13 +360,13 @@ export default function Dashboard() {
                 <tbody>
                   {active.map((b, i) => (
                     <tr
-                      key={b.batch_id}
-                      onClick={() => navigate(`/batches/${b.batch_id}`)}
+                      key={b.experiment_id}
+                      onClick={() => navigate(`/experiments/${b.experiment_id}`)}
                       className="border-b border-border cursor-pointer hover:bg-muted/40 transition-colors"
                       style={ROW_REVEAL_STYLE(i)}
                     >
                       <td className="py-2.5 font-mono text-xs text-primary">
-                        {b.batch_id.slice(0, 8)}…
+                        {b.experiment_id.slice(0, 8)}…
                       </td>
                       <td className="py-2.5 text-sm">{b.dataset}</td>
                       <td className="py-2.5 w-48">
@@ -395,18 +395,18 @@ export default function Dashboard() {
 
         {/* Recent Completed */}
         <section>
-          <SectionHeader label="Recent Batches" count={completed.length} />
+          <SectionHeader label="Recent Experiments" count={completed.length} />
           {completed.length === 0 ? (
             <EmptyState
-              title="No completed batches yet."
-              subtitle="Completed batches will appear here."
+              title="No completed experiments yet."
+              subtitle="Completed experiments will appear here."
             />
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-border">
-                    <th className="text-left pb-2 font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">Batch ID</th>
+                    <th className="text-left pb-2 font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">Experiment ID</th>
                     <th className="text-left pb-2 font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">Dataset</th>
                     <th className="text-left pb-2 font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">Completed</th>
                     <th className="text-right pb-2 font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">Runs</th>
@@ -416,13 +416,13 @@ export default function Dashboard() {
                 <tbody>
                   {completed.map((b, i) => (
                     <tr
-                      key={b.batch_id}
-                      onClick={() => navigate(`/batches/${b.batch_id}`)}
+                      key={b.experiment_id}
+                      onClick={() => navigate(`/experiments/${b.experiment_id}`)}
                       className="border-b border-border cursor-pointer hover:bg-muted/40 transition-colors"
                       style={ROW_REVEAL_STYLE(i)}
                     >
                       <td className="py-2.5 font-mono text-xs text-primary">
-                        {b.batch_id.slice(0, 8)}…
+                        {b.experiment_id.slice(0, 8)}…
                       </td>
                       <td className="py-2.5 text-sm">{b.dataset}</td>
                       <td className="py-2.5 text-xs text-muted-foreground font-mono tabular-nums">
@@ -450,9 +450,9 @@ export default function Dashboard() {
               <SparklineChart
                 data={costSparkData}
                 dataKey="cost"
-                label="Cost per batch (USD)"
+                label="Cost per experiment (USD)"
               />
-              <CostHeadroomCard batches={batches} />
+              <CostHeadroomCard experiments={experiments} />
             </div>
             <hr className="border-border mt-10" />
           </section>

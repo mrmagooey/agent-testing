@@ -1,7 +1,7 @@
-"""Unit tests for BatchCoordinator._reconcile_once() and _reconcile_loop().
+"""Unit tests for ExperimentCoordinator._reconcile_once() and _reconcile_loop().
 
 Tests exercise the result-scanning reconcile step that flips runs from
-'running' -> 'completed'/'failed' and finalises batches.  No K8s, no real
+'running' -> 'completed'/'failed' and finalises experiments.  No K8s, no real
 worker — we manipulate the filesystem and DB directly.
 """
 
@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from sec_review_framework.coordinator import BatchCoordinator
+from sec_review_framework.coordinator import ExperimentCoordinator
 from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
 from sec_review_framework.data.experiment import (
     ExperimentRun,
@@ -41,13 +41,13 @@ from sec_review_framework.reporting.markdown import MarkdownReportGenerator
 # Helpers
 # ---------------------------------------------------------------------------
 
-BATCH_ID = "test-batch-reconcile"
+EXPERIMENT_ID = "test-experiment-reconcile"
 MODEL_ID = "fake-model"
 DATASET = "test-ds"
 
 
-def _make_coordinator(tmp_path: Path, db: Database) -> BatchCoordinator:
-    return BatchCoordinator(
+def _make_coordinator(tmp_path: Path, db: Database) -> ExperimentCoordinator:
+    return ExperimentCoordinator(
         k8s_client=None,
         storage_root=tmp_path / "storage",
         concurrency_caps={},
@@ -62,11 +62,11 @@ def _make_coordinator(tmp_path: Path, db: Database) -> BatchCoordinator:
     )
 
 
-def _make_run(batch_id: str = BATCH_ID, run_id: str | None = None) -> ExperimentRun:
-    rid = run_id or f"{batch_id}_{MODEL_ID}_single_agent_with_tools_default_none"
+def _make_run(experiment_id: str = EXPERIMENT_ID, run_id: str | None = None) -> ExperimentRun:
+    rid = run_id or f"{experiment_id}_{MODEL_ID}_single_agent_with_tools_default_none"
     return ExperimentRun(
         id=rid,
-        batch_id=batch_id,
+        experiment_id=experiment_id,
         model_id=MODEL_ID,
         strategy=StrategyName.SINGLE_AGENT,
         tool_variant=ToolVariant.WITH_TOOLS,
@@ -105,20 +105,20 @@ def _make_run_result(run: ExperimentRun, status: RunStatus = RunStatus.COMPLETED
     )
 
 
-async def _setup_batch_and_run(db: Database, coord: BatchCoordinator) -> ExperimentRun:
-    """Create batch + run in DB and mark run as 'running'."""
+async def _setup_experiment_and_run(db: Database, coord: ExperimentCoordinator) -> ExperimentRun:
+    """Create experiment + run in DB and mark run as 'running'."""
     run = _make_run()
     coord.storage_root.mkdir(parents=True, exist_ok=True)
 
-    await db.create_batch(
-        batch_id=BATCH_ID,
+    await db.create_experiment(
+        experiment_id=EXPERIMENT_ID,
         config_json="{}",
         total_runs=1,
         max_cost_usd=None,
     )
     await db.create_run(
         run_id=run.id,
-        batch_id=BATCH_ID,
+        experiment_id=EXPERIMENT_ID,
         config_json=run.model_dump_json(),
         model_id=run.model_id,
         strategy=run.strategy.value,
@@ -130,8 +130,8 @@ async def _setup_batch_and_run(db: Database, coord: BatchCoordinator) -> Experim
     return run
 
 
-def _write_result_file(coord: BatchCoordinator, run: ExperimentRun, result: RunResult) -> Path:
-    out_dir = coord.storage_root / "outputs" / BATCH_ID / run.id
+def _write_result_file(coord: ExperimentCoordinator, run: ExperimentRun, result: RunResult) -> Path:
+    out_dir = coord.storage_root / "outputs" / EXPERIMENT_ID / run.id
     out_dir.mkdir(parents=True, exist_ok=True)
     result_file = out_dir / "run_result.json"
     result_file.write_text(result.model_dump_json())
@@ -158,7 +158,7 @@ async def temp_db(tmp_path: Path) -> Database:
 @pytest.mark.asyncio
 async def test_reconcile_once_marks_run_completed(tmp_path: Path, temp_db: Database):
     coord = _make_coordinator(tmp_path, temp_db)
-    run = await _setup_batch_and_run(temp_db, coord)
+    run = await _setup_experiment_and_run(temp_db, coord)
 
     result = _make_run_result(run, RunStatus.COMPLETED)
     _write_result_file(coord, run, result)
@@ -173,40 +173,40 @@ async def test_reconcile_once_marks_run_completed(tmp_path: Path, temp_db: Datab
 
 
 # ---------------------------------------------------------------------------
-# Test 2: all runs completed on disk → finalize_batch called exactly once
+# Test 2: all runs completed on disk → finalize_experiment called exactly once
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_reconcile_once_finalizes_batch_once(tmp_path: Path, temp_db: Database):
+async def test_reconcile_once_finalizes_experiment_once(tmp_path: Path, temp_db: Database):
     coord = _make_coordinator(tmp_path, temp_db)
-    run = await _setup_batch_and_run(temp_db, coord)
+    run = await _setup_experiment_and_run(temp_db, coord)
 
     result = _make_run_result(run, RunStatus.COMPLETED)
     _write_result_file(coord, run, result)
 
     finalize_calls: list[str] = []
-    original_finalize = coord.finalize_batch
+    original_finalize = coord.finalize_experiment
 
-    async def _tracked_finalize(batch_id: str) -> None:
-        finalize_calls.append(batch_id)
-        await original_finalize(batch_id)
+    async def _tracked_finalize(experiment_id: str) -> None:
+        finalize_calls.append(experiment_id)
+        await original_finalize(experiment_id)
 
-    coord.finalize_batch = _tracked_finalize  # type: ignore[method-assign]
+    coord.finalize_experiment = _tracked_finalize  # type: ignore[method-assign]
 
-    # Call twice — must only finalize once (second call skips completed batch)
+    # Call twice — must only finalize once (second call skips completed experiment)
     await asyncio.wait_for(coord._reconcile_once(), timeout=5.0)
     await asyncio.wait_for(coord._reconcile_once(), timeout=5.0)
 
-    assert finalize_calls.count(BATCH_ID) == 1, (
-        f"Expected finalize_batch called exactly once, got {len(finalize_calls)} calls"
+    assert finalize_calls.count(EXPERIMENT_ID) == 1, (
+        f"Expected finalize_experiment called exactly once, got {len(finalize_calls)} calls"
     )
 
-    batch = await temp_db.get_batch(BATCH_ID)
-    assert batch is not None
-    assert batch["status"] == "completed"
+    experiment = await temp_db.get_experiment(EXPERIMENT_ID)
+    assert experiment is not None
+    assert experiment["status"] == "completed"
 
-    report_file = coord.storage_root / "outputs" / BATCH_ID / "matrix_report.md"
+    report_file = coord.storage_root / "outputs" / EXPERIMENT_ID / "matrix_report.md"
     assert report_file.exists(), "matrix_report.md was not written"
 
 
@@ -218,10 +218,10 @@ async def test_reconcile_once_finalizes_batch_once(tmp_path: Path, temp_db: Data
 @pytest.mark.asyncio
 async def test_reconcile_once_corrupted_result_marks_failed(tmp_path: Path, temp_db: Database):
     coord = _make_coordinator(tmp_path, temp_db)
-    run = await _setup_batch_and_run(temp_db, coord)
+    run = await _setup_experiment_and_run(temp_db, coord)
 
     # Write truncated / invalid JSON
-    out_dir = coord.storage_root / "outputs" / BATCH_ID / run.id
+    out_dir = coord.storage_root / "outputs" / EXPERIMENT_ID / run.id
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "run_result.json").write_text("{this is not valid json ...")
 
@@ -238,42 +238,42 @@ async def test_reconcile_once_corrupted_result_marks_failed(tmp_path: Path, temp
 
 
 # ---------------------------------------------------------------------------
-# Test 4: cancelled batch is NOT re-finalized to 'completed'
+# Test 4: cancelled experiment is NOT re-finalized to 'completed'
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_reconcile_once_does_not_finalize_cancelled_batch(
+async def test_reconcile_once_does_not_finalize_cancelled_experiment(
     tmp_path: Path, temp_db: Database
 ):
     coord = _make_coordinator(tmp_path, temp_db)
-    run = await _setup_batch_and_run(temp_db, coord)
+    run = await _setup_experiment_and_run(temp_db, coord)
 
-    # Cancel the batch before reconcile runs
-    await temp_db.update_batch_status(BATCH_ID, "cancelled")
+    # Cancel the experiment before reconcile runs
+    await temp_db.update_experiment_status(EXPERIMENT_ID, "cancelled")
 
     result = _make_run_result(run, RunStatus.COMPLETED)
     _write_result_file(coord, run, result)
 
     finalize_calls: list[str] = []
-    original_finalize = coord.finalize_batch
+    original_finalize = coord.finalize_experiment
 
-    async def _tracked_finalize(batch_id: str) -> None:
-        finalize_calls.append(batch_id)
-        await original_finalize(batch_id)
+    async def _tracked_finalize(experiment_id: str) -> None:
+        finalize_calls.append(experiment_id)
+        await original_finalize(experiment_id)
 
-    coord.finalize_batch = _tracked_finalize  # type: ignore[method-assign]
+    coord.finalize_experiment = _tracked_finalize  # type: ignore[method-assign]
 
     await asyncio.wait_for(coord._reconcile_once(), timeout=5.0)
 
     assert len(finalize_calls) == 0, (
-        "finalize_batch should not be called for a cancelled batch"
+        "finalize_experiment should not be called for a cancelled experiment"
     )
 
-    batch = await temp_db.get_batch(BATCH_ID)
-    assert batch is not None
-    assert batch["status"] == "cancelled", (
-        f"Cancelled batch should stay 'cancelled', got '{batch['status']}'"
+    experiment = await temp_db.get_experiment(EXPERIMENT_ID)
+    assert experiment is not None
+    assert experiment["status"] == "cancelled", (
+        f"Cancelled experiment should stay 'cancelled', got '{experiment['status']}'"
     )
 
 
@@ -322,22 +322,22 @@ async def test_reconcile_marks_missing_config_run_as_failed(
     """
     A pending run whose config file doesn't exist should be transitioned to
     'failed' by reconcile(), not silently skipped.  This prevents the
-    reconciler from spamming "orphaned runs" for deleted batches.
+    reconciler from spamming "orphaned runs" for deleted experiments.
     """
     coord = _make_coordinator(tmp_path, temp_db)
     coord.storage_root.mkdir(parents=True, exist_ok=True)
 
     run = _make_run()
 
-    await temp_db.create_batch(
-        batch_id=BATCH_ID,
+    await temp_db.create_experiment(
+        experiment_id=EXPERIMENT_ID,
         config_json="{}",
         total_runs=1,
         max_cost_usd=None,
     )
     await temp_db.create_run(
         run_id=run.id,
-        batch_id=BATCH_ID,
+        experiment_id=EXPERIMENT_ID,
         config_json=run.model_dump_json(),
         model_id=run.model_id,
         strategy=run.strategy.value,
@@ -377,7 +377,7 @@ async def test_reconcile_marks_stalled_job_as_failed(tmp_path: Path, temp_db: Da
 
     coord = _make_coordinator(tmp_path, temp_db)
     coord.storage_root.mkdir(parents=True, exist_ok=True)
-    run = await _setup_batch_and_run(temp_db, coord)
+    run = await _setup_experiment_and_run(temp_db, coord)
 
     # Build a fake K8s BatchV1Api that returns one stale Job with active=1,
     # no succeeded/failed, and an empty pod list.
@@ -548,15 +548,15 @@ async def test_schedule_jobs_marks_run_failed_after_max_attempts(
 
     run = _make_run()
 
-    await temp_db.create_batch(
-        batch_id=BATCH_ID,
+    await temp_db.create_experiment(
+        experiment_id=EXPERIMENT_ID,
         config_json="{}",
         total_runs=1,
         max_cost_usd=None,
     )
     await temp_db.create_run(
         run_id=run.id,
-        batch_id=BATCH_ID,
+        experiment_id=EXPERIMENT_ID,
         config_json=run.model_dump_json(),
         model_id=run.model_id,
         strategy=run.strategy.value,
@@ -573,7 +573,7 @@ async def test_schedule_jobs_marks_run_failed_after_max_attempts(
         mock_asyncio.sleep = AsyncMock(return_value=None)
         # Must complete (not loop forever) within the timeout
         await asyncio.wait_for(
-            coord._schedule_jobs(BATCH_ID, [run]),
+            coord._schedule_jobs(EXPERIMENT_ID, [run]),
             timeout=5.0,
         )
 
@@ -605,12 +605,12 @@ async def test_schedule_jobs_cap_wait_does_not_increment_attempt_count(
     coord.storage_root.mkdir(parents=True, exist_ok=True)
 
     # Use a cap of 1 and two runs for the same model so the second waits
-    run_a = _make_run(run_id=f"{BATCH_ID}_{MODEL_ID}_single_agent_with_tools_default_none_A")
-    run_b = _make_run(run_id=f"{BATCH_ID}_{MODEL_ID}_single_agent_with_tools_default_none_B")
+    run_a = _make_run(run_id=f"{EXPERIMENT_ID}_{MODEL_ID}_single_agent_with_tools_default_none_A")
+    run_b = _make_run(run_id=f"{EXPERIMENT_ID}_{MODEL_ID}_single_agent_with_tools_default_none_B")
     coord.concurrency_caps = {MODEL_ID: 1}
 
-    await temp_db.create_batch(
-        batch_id=BATCH_ID,
+    await temp_db.create_experiment(
+        experiment_id=EXPERIMENT_ID,
         config_json="{}",
         total_runs=2,
         max_cost_usd=None,
@@ -618,7 +618,7 @@ async def test_schedule_jobs_cap_wait_does_not_increment_attempt_count(
     for run in (run_a, run_b):
         await temp_db.create_run(
             run_id=run.id,
-            batch_id=BATCH_ID,
+            experiment_id=EXPERIMENT_ID,
             config_json=run.model_dump_json(),
             model_id=run.model_id,
             strategy=run.strategy.value,
@@ -629,7 +629,7 @@ async def test_schedule_jobs_cap_wait_does_not_increment_attempt_count(
 
     call_count = 0
 
-    def _create_side_effect(batch_id, run):
+    def _create_side_effect(experiment_id, run):
         nonlocal call_count
         call_count += 1
         # Always succeed
@@ -654,7 +654,7 @@ async def test_schedule_jobs_cap_wait_does_not_increment_attempt_count(
     with patch("sec_review_framework.coordinator.asyncio") as mock_asyncio:
         mock_asyncio.sleep = AsyncMock(side_effect=_fake_sleep)
         with pytest.raises(_LoopBreak):
-            await coord._schedule_jobs(BATCH_ID, [run_a, run_b])
+            await coord._schedule_jobs(EXPERIMENT_ID, [run_a, run_b])
 
     # Round 1: run_a scheduled (cap=1 consumed), run_b waiting.
     db_run_a = await temp_db.get_run(run_a.id)
@@ -676,29 +676,29 @@ async def test_schedule_jobs_cap_wait_does_not_increment_attempt_count(
 
 
 # ---------------------------------------------------------------------------
-# Test: DB error on one batch does not halt other batches (Issue 1)
+# Test: DB error on one experiment does not halt other experiments (Issue 1)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_reconcile_once_db_error_one_batch_continues_others(
+async def test_reconcile_once_db_error_one_experiment_continues_others(
     tmp_path: Path, temp_db: Database
 ):
-    """A transient DB error on one batch must not prevent other batches from
+    """A transient DB error on one experiment must not prevent other experiments from
     being processed in the same _reconcile_once pass."""
-    BATCH_A = "batch-error"
-    BATCH_B = "batch-ok"
+    EXPERIMENT_A = "experiment-error"
+    EXPERIMENT_B = "experiment-ok"
 
     coord = _make_coordinator(tmp_path, temp_db)
     coord.storage_root.mkdir(parents=True, exist_ok=True)
 
-    # Create two batches, each with one running run
-    for bid in (BATCH_A, BATCH_B):
-        run = _make_run(batch_id=bid, run_id=f"{bid}_{MODEL_ID}_single_agent_with_tools_default_none")
-        await temp_db.create_batch(batch_id=bid, config_json="{}", total_runs=1, max_cost_usd=None)
+    # Create two experiments, each with one running run
+    for bid in (EXPERIMENT_A, EXPERIMENT_B):
+        run = _make_run(experiment_id=bid, run_id=f"{bid}_{MODEL_ID}_single_agent_with_tools_default_none")
+        await temp_db.create_experiment(experiment_id=bid, config_json="{}", total_runs=1, max_cost_usd=None)
         await temp_db.create_run(
             run_id=run.id,
-            batch_id=bid,
+            experiment_id=bid,
             config_json=run.model_dump_json(),
             model_id=run.model_id,
             strategy=run.strategy.value,
@@ -708,34 +708,34 @@ async def test_reconcile_once_db_error_one_batch_continues_others(
         )
         await temp_db.update_run(run.id, status="running")
 
-        # Write a valid result file for BATCH_B only
-        if bid == BATCH_B:
+        # Write a valid result file for EXPERIMENT_B only
+        if bid == EXPERIMENT_B:
             result = _make_run_result(run, RunStatus.COMPLETED)
             out_dir = coord.storage_root / "outputs" / bid / run.id
             out_dir.mkdir(parents=True, exist_ok=True)
             (out_dir / "run_result.json").write_text(result.model_dump_json())
 
-    # Patch db.get_batch so it raises for BATCH_A but works for BATCH_B
-    original_get_batch = temp_db.get_batch
+    # Patch db.get_experiment so it raises for EXPERIMENT_A but works for EXPERIMENT_B
+    original_get_experiment = temp_db.get_experiment
 
-    async def _patched_get_batch(batch_id: str):
-        if batch_id == BATCH_A:
+    async def _patched_get_experiment(experiment_id: str):
+        if experiment_id == EXPERIMENT_A:
             raise RuntimeError("simulated DB connection error")
-        return await original_get_batch(batch_id)
+        return await original_get_experiment(experiment_id)
 
-    temp_db.get_batch = _patched_get_batch  # type: ignore[method-assign]
+    temp_db.get_experiment = _patched_get_experiment  # type: ignore[method-assign]
 
-    # Should not raise; BATCH_B should still be processed
+    # Should not raise; EXPERIMENT_B should still be processed
     await asyncio.wait_for(coord._reconcile_once(), timeout=5.0)
 
     # Restore
-    temp_db.get_batch = original_get_batch  # type: ignore[method-assign]
+    temp_db.get_experiment = original_get_experiment  # type: ignore[method-assign]
 
-    run_b_id = f"{BATCH_B}_{MODEL_ID}_single_agent_with_tools_default_none"
+    run_b_id = f"{EXPERIMENT_B}_{MODEL_ID}_single_agent_with_tools_default_none"
     db_run_b = await temp_db.get_run(run_b_id)
     assert db_run_b is not None
     assert db_run_b["status"] == "completed", (
-        f"BATCH_B run should be 'completed' despite BATCH_A error, got '{db_run_b['status']}'"
+        f"EXPERIMENT_B run should be 'completed' despite EXPERIMENT_A error, got '{db_run_b['status']}'"
     )
 
 
@@ -755,7 +755,7 @@ async def test_audit_tool_calls_logs_warning_for_malformed_jsonl(
     coord = _make_coordinator(tmp_path, temp_db)
     coord.storage_root.mkdir(parents=True, exist_ok=True)
 
-    out_dir = coord.storage_root / "outputs" / BATCH_ID / "some-run-id"
+    out_dir = coord.storage_root / "outputs" / EXPERIMENT_ID / "some-run-id"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     good_line = '{"tool_name": "read_file", "inputs": {"path": "/tmp/x"}}'
@@ -763,7 +763,7 @@ async def test_audit_tool_calls_logs_warning_for_malformed_jsonl(
     (out_dir / "tool_calls.jsonl").write_text(f"{good_line}\n{bad_line}\n")
 
     with caplog.at_level(logging.WARNING, logger="sec_review_framework.coordinator"):
-        result = await coord.audit_tool_calls(BATCH_ID, "some-run-id")
+        result = await coord.audit_tool_calls(EXPERIMENT_ID, "some-run-id")
 
     # Good line was processed
     assert result["counts_by_tool"].get("read_file") == 1
@@ -817,18 +817,18 @@ async def test_compare_runs_logs_warning_for_malformed_finding(
 
     # Write result files for two fake runs
     for run_id in ("run-a", "run-b"):
-        out_dir = coord.storage_root / "outputs" / BATCH_ID / run_id
+        out_dir = coord.storage_root / "outputs" / EXPERIMENT_ID / run_id
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / "run_result.json").write_text(_json.dumps(result_payload))
 
     # Patch get_run_result to return our dict directly
-    async def _fake_get_run_result(batch_id: str, run_id: str) -> dict:
+    async def _fake_get_run_result(experiment_id: str, run_id: str) -> dict:
         return result_payload
 
     coord.get_run_result = _fake_get_run_result  # type: ignore[method-assign]
 
     with caplog.at_level(logging.WARNING, logger="sec_review_framework.coordinator"):
-        await coord.compare_runs(BATCH_ID, "run-a", "run-b")
+        await coord.compare_runs(EXPERIMENT_ID, "run-a", "run-b")
 
     assert any(
         "malformed" in record.message.lower() or "skipping" in record.message.lower()

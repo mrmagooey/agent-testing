@@ -5,10 +5,10 @@ import {
   listModels,
   listStrategies,
   listProfiles,
-  submitBatch,
+  submitExperiment,
   listToolExtensions,
   type Dataset,
-  type BatchConfig,
+  type ExperimentConfig,
   type ToolExtension,
 } from '../api/client'
 import { useEstimate } from '../hooks/useEstimate'
@@ -91,7 +91,7 @@ function ChipGroup({
   )
 }
 
-export default function BatchNew() {
+export default function ExperimentNew() {
   const navigate = useNavigate()
   const [datasets, setDatasets] = useState<Dataset[]>([])
   const [models, setModels] = useState<string[]>([])
@@ -122,7 +122,7 @@ export default function BatchNew() {
         ? generatePowerSet(selectedToolExtensions)
         : [selectedToolExtensions]
 
-  const config: Partial<BatchConfig> = {
+  const config: Partial<ExperimentConfig> = {
     dataset: selectedDataset || undefined,
     models: selectedModels,
     strategies: selectedStrategies,
@@ -171,7 +171,7 @@ export default function BatchNew() {
     setSubmitting(true)
     setError(null)
     try {
-      const batchConfig: BatchConfig = {
+      const experimentConfig: ExperimentConfig = {
         dataset: selectedDataset,
         models: selectedModels,
         strategies: selectedStrategies,
@@ -182,8 +182,8 @@ export default function BatchNew() {
         repetitions,
         spend_cap_usd: spendCapInput ? parseFloat(spendCapInput) : undefined,
       }
-      const batch = await submitBatch(batchConfig)
-      navigate(`/batches/${batch.batch_id}`)
+      const experiment = await submitExperiment(experimentConfig)
+      navigate(`/experiments/${experiment.experiment_id}`)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Submission failed')
     } finally {
@@ -197,9 +197,9 @@ export default function BatchNew() {
 
   return (
     <div className="max-w-4xl mx-auto">
-      <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">New Batch</h1>
+      <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">New Experiment</h1>
       <PageDescription>
-        A batch runs the full experiment matrix — every combination of models × strategies × tool variants × extensions × verification modes × repetitions — against a labelled dataset.
+        An experiment runs the full experiment matrix — every combination of models × strategies × tool variants × extensions × verification modes × repetitions — against a labelled dataset.
         Submit one here to measure how well each configuration catches known vulnerabilities, with an up-front cost estimate and optional spend cap.
       </PageDescription>
       <div className="h-6" />
@@ -358,7 +358,7 @@ export default function BatchNew() {
               disabled={submitting || (submitAttempted && !isValid)}
               className="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold transition-colors disabled:opacity-50"
             >
-              {submitting ? 'Submitting…' : 'Submit Batch'}
+              {submitting ? 'Submitting…' : 'Submit Experiment'}
             </button>
             {submitAttempted && !isValid && (
               <p className="text-xs text-red-600 dark:text-red-400 text-center">

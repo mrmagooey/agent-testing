@@ -5,12 +5,12 @@ import { useEstimate } from '../../hooks/useEstimate'
 // ─── Mock the API client ─────────────────────────────────────────────────────
 
 vi.mock('../../api/client', () => ({
-  estimateBatch: vi.fn(),
+  estimateExperiment: vi.fn(),
 }))
 
-import { estimateBatch } from '../../api/client'
-import type { CostEstimate, BatchConfig } from '../../api/client'
-const mockEstimate = vi.mocked(estimateBatch)
+import { estimateExperiment } from '../../api/client'
+import type { CostEstimate, ExperimentConfig } from '../../api/client'
+const mockEstimate = vi.mocked(estimateExperiment)
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -23,7 +23,7 @@ function makeEstimate(overrides: Partial<CostEstimate> = {}): CostEstimate {
   }
 }
 
-function makeConfig(overrides: Partial<BatchConfig> = {}): Partial<BatchConfig> {
+function makeConfig(overrides: Partial<ExperimentConfig> = {}): Partial<ExperimentConfig> {
   return {
     models: ['gpt-4o'],
     strategies: ['single_agent'],
@@ -130,7 +130,7 @@ describe('useEstimate', () => {
     mockEstimate.mockResolvedValue(makeEstimate())
 
     const { result, rerender } = renderHook(
-      ({ config }: { config: Partial<BatchConfig> }) => useEstimate(config),
+      ({ config }: { config: Partial<ExperimentConfig> }) => useEstimate(config),
       { initialProps: { config: makeConfig({ models: ['gpt-4o'] }) } }
     )
 
@@ -148,7 +148,7 @@ describe('useEstimate', () => {
 
     const config = makeConfig()
     const { result, rerender } = renderHook(
-      ({ c }: { c: Partial<BatchConfig> }) => useEstimate(c),
+      ({ c }: { c: Partial<ExperimentConfig> }) => useEstimate(c),
       { initialProps: { c: config } }
     )
 

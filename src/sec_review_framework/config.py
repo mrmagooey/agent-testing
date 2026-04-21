@@ -140,7 +140,7 @@ class DatasetConfig(BaseModel):
 class ExperimentFileConfig(BaseModel):
     """Maps the experiments.yaml file structure."""
 
-    batch_id: str
+    experiment_id: str
     dataset: DatasetConfig
     models: list[ModelProviderConfig]
     strategies: list[StrategyEntryConfig]
@@ -150,7 +150,7 @@ class ExperimentFileConfig(BaseModel):
     parallel_modes: list[bool] = [False]
     num_repetitions: int = 1
     verifier_model_id: str | None = None
-    max_batch_cost_usd: float | None = None
+    max_experiment_cost_usd: float | None = None
     max_parallel_runs: int = 10
     evaluation: EvaluationConfig = EvaluationConfig()
     output_root: str = "outputs/"

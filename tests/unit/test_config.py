@@ -134,7 +134,7 @@ def test_experiment_file_config_from_yaml_loads(tmp_path: Path):
     cfg_path = _write_yaml(
         tmp_path / "experiment.yaml",
         {
-            "batch_id": "test-batch",
+            "experiment_id": "test-experiment",
             "dataset": {"name": "mydata", "version": "1.0.0"},
             "models": [
                 {"id": "gpt-4o", "model_name": "gpt-4o"}
@@ -145,7 +145,7 @@ def test_experiment_file_config_from_yaml_loads(tmp_path: Path):
         },
     )
     cfg = ExperimentFileConfig.from_yaml(cfg_path)
-    assert cfg.batch_id == "test-batch"
+    assert cfg.experiment_id == "test-experiment"
     assert cfg.dataset.name == "mydata"
     assert len(cfg.models) == 1
     assert len(cfg.strategies) == 1

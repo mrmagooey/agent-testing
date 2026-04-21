@@ -7,9 +7,9 @@
 import { test, expect } from '@playwright/test'
 import { mockApi } from './helpers/mockApi'
 
-const BATCH_ID = 'aaaaaaaa-0001-0001-0001-000000000001'
+const EXPERIMENT_ID = 'aaaaaaaa-0001-0001-0001-000000000001'
 const RUN_ID = 'run-001-aaa'
-const BASE_URL = `/batches/${BATCH_ID}/runs/${RUN_ID}`
+const BASE_URL = `/experiments/${EXPERIMENT_ID}/runs/${RUN_ID}`
 
 test.beforeEach(async ({ page }) => {
   await mockApi(page)
@@ -155,12 +155,12 @@ test('URL filter state is applied immediately on navigation', async ({ page }) =
 })
 
 // ---------------------------------------------------------------------------
-// FindingsSearch component interaction (batch-level search via API)
+// FindingsSearch component interaction (experiment-level search via API)
 // ---------------------------------------------------------------------------
 
 test('FindingsSearch input triggers API search and updates results', async ({ page }) => {
-  // The FindingsSearch input searches across the batch via API
-  // It appears in BatchDetail's FindingsExplorer, not RunDetail.
+  // The FindingsSearch input searches across the experiment via API
+  // It appears in ExperimentDetail's FindingsExplorer, not RunDetail.
   // RunDetail has an inline search input that filters local findings.
   // Test the inline search:
   const inlineSearch = page.locator('input[type="search"]')

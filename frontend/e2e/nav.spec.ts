@@ -11,10 +11,10 @@ test('dashboard nav link is active on root route', async ({ page }) => {
   await expect(dashboardLink).toHaveClass(/nav-cursor/)
 })
 
-test('new batch nav link is active on /batches/new', async ({ page }) => {
-  await page.goto('/batches/new')
-  const newBatchLink = page.getByRole('navigation').getByRole('link', { name: 'New Batch' })
-  await expect(newBatchLink).toHaveClass(/nav-cursor/)
+test('new experiment nav link is active on /experiments/new', async ({ page }) => {
+  await page.goto('/experiments/new')
+  const newExperimentLink = page.getByRole('navigation').getByRole('link', { name: 'New Experiment' })
+  await expect(newExperimentLink).toHaveClass(/nav-cursor/)
 })
 
 test('datasets nav link is active on /datasets', async ({ page }) => {
@@ -37,8 +37,8 @@ test('feedback nav link is active on /feedback', async ({ page }) => {
 
 test('clicking nav links navigates to correct pages', async ({ page }) => {
   await page.goto('/')
-  await page.getByRole('navigation').getByRole('link', { name: 'New Batch' }).click()
-  await expect(page).toHaveURL('/batches/new')
+  await page.getByRole('navigation').getByRole('link', { name: 'New Experiment' }).click()
+  await expect(page).toHaveURL('/experiments/new')
 
   await page.getByRole('navigation').getByRole('link', { name: /Datasets/ }).click()
   await expect(page).toHaveURL('/datasets')

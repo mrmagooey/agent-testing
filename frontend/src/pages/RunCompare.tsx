@@ -86,7 +86,7 @@ function VennDiagram({ aOnly, overlap, bOnly }: { aOnly: number; overlap: number
 }
 
 export default function RunCompare() {
-  const { id: batchId } = useParams<{ id: string }>()
+  const { id: experimentId } = useParams<{ id: string }>()
   const [searchParams] = useSearchParams()
   const runAId = searchParams.get('a') ?? ''
   const runBId = searchParams.get('b') ?? ''
@@ -98,12 +98,12 @@ export default function RunCompare() {
   const [activeTab, setActiveTab] = useState<'both' | 'only_a' | 'only_b'>('both')
 
   useEffect(() => {
-    if (!batchId || !runAId || !runBId) { setLoading(false); return }
-    compareRuns(batchId, runAId, runBId)
+    if (!experimentId || !runAId || !runBId) { setLoading(false); return }
+    compareRuns(experimentId, runAId, runBId)
       .then(setComparison)
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false))
-  }, [batchId, runAId, runBId])
+  }, [experimentId, runAId, runBId])
 
   if (loading) {
     return <div className="flex items-center justify-center h-64 text-gray-400">Loading comparison...</div>
@@ -136,7 +136,7 @@ export default function RunCompare() {
       <Breadcrumbs
         items={[
           { label: 'Dashboard', to: '/' },
-          { label: batchId ?? '', to: `/batches/${batchId}` },
+          { label: experimentId ?? '', to: `/experiments/${experimentId}` },
           { label: 'Compare' },
         ]}
       />

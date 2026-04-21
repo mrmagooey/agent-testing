@@ -1,7 +1,7 @@
 /**
- * Batch detail interaction tests covering:
- * - Cancel button visibility and modal flow (non-terminal vs terminal batches)
- * - Download button presence on terminal batches
+ * Experiment detail interaction tests covering:
+ * - Cancel button visibility and modal flow (non-terminal vs terminal experiments)
+ * - Download button presence on terminal experiments
  * - Matrix table row click navigation
  * - Row selection checkboxes, sticky bar, Compare Selected, Clear
  * - Max-2 selection enforcement
@@ -9,10 +9,10 @@
 import { test, expect } from '@playwright/test'
 import { mockApi } from './helpers/mockApi'
 
-const COMPLETED_BATCH_ID = 'aaaaaaaa-0001-0001-0001-000000000001'
-const RUNNING_BATCH_ID = 'bbbbbbbb-0002-0002-0002-000000000002'
+const COMPLETED_EXPERIMENT_ID = 'aaaaaaaa-0001-0001-0001-000000000001'
+const RUNNING_EXPERIMENT_ID = 'bbbbbbbb-0002-0002-0002-000000000002'
 
-// Run IDs from batch-results.json (served for any batch by mockApi)
+// Run IDs from experiment-results.json (served for any experiment by mockApi)
 const RUN_ID_1 = 'run-001-aaa'
 const RUN_ID_2 = 'run-002-bbb'
 const RUN_ID_3 = 'run-003-ccc'
@@ -22,23 +22,23 @@ test.beforeEach(async ({ page }) => {
 })
 
 // ---------------------------------------------------------------------------
-// Cancel button / modal — non-terminal (running) batch
+// Cancel button / modal — non-terminal (running) experiment
 // ---------------------------------------------------------------------------
 
-test.describe('Cancel button on running batch', () => {
-  test('Cancel button is visible for a running batch', async ({ page }) => {
-    await page.goto(`/batches/${RUNNING_BATCH_ID}`)
+test.describe('Cancel button on running experiment', () => {
+  test('Cancel button is visible for a running experiment', async ({ page }) => {
+    await page.goto(`/experiments/${RUNNING_EXPERIMENT_ID}`)
     await expect(page.getByRole('button', { name: 'Cancel' })).toBeVisible()
   })
 
   test('clicking Cancel opens the confirmation modal with correct heading', async ({ page }) => {
-    await page.goto(`/batches/${RUNNING_BATCH_ID}`)
+    await page.goto(`/experiments/${RUNNING_EXPERIMENT_ID}`)
     await page.getByRole('button', { name: 'Cancel' }).click()
     await expect(page.getByRole('heading', { name: 'Stop all pending runs?' })).toBeVisible()
   })
 
   test('"Keep running" button closes the modal without POSTing cancel', async ({ page }) => {
-    await page.goto(`/batches/${RUNNING_BATCH_ID}`)
+    await page.goto(`/experiments/${RUNNING_EXPERIMENT_ID}`)
 
     // Track any cancel POST requests
     const cancelRequests: string[] = []
@@ -60,7 +60,7 @@ test.describe('Cancel button on running batch', () => {
   })
 
   test('modal can be reopened after dismissal via "Keep running"', async ({ page }) => {
-    await page.goto(`/batches/${RUNNING_BATCH_ID}`)
+    await page.goto(`/experiments/${RUNNING_EXPERIMENT_ID}`)
 
     await page.getByRole('button', { name: 'Cancel' }).click()
     await expect(page.getByRole('heading', { name: 'Stop all pending runs?' })).toBeVisible()
@@ -72,62 +72,62 @@ test.describe('Cancel button on running batch', () => {
     await expect(page.getByRole('heading', { name: 'Stop all pending runs?' })).toBeVisible()
   })
 
-  test('"Stop batch" POSTs to /api/batches/{id}/cancel', async ({ page }) => {
-    await page.goto(`/batches/${RUNNING_BATCH_ID}`)
+  test('"Stop experiment" POSTs to /api/experiments/{id}/cancel', async ({ page }) => {
+    await page.goto(`/experiments/${RUNNING_EXPERIMENT_ID}`)
 
     // Intercept the cancel request
     const cancelPromise = page.waitForRequest(
       (req) =>
-        req.url().includes(`/batches/${RUNNING_BATCH_ID}/cancel`) && req.method() === 'POST'
+        req.url().includes(`/experiments/${RUNNING_EXPERIMENT_ID}/cancel`) && req.method() === 'POST'
     )
 
     await page.getByRole('button', { name: 'Cancel' }).click()
     await expect(page.getByRole('heading', { name: 'Stop all pending runs?' })).toBeVisible()
-    await page.getByRole('button', { name: 'Stop batch' }).click()
+    await page.getByRole('button', { name: 'Stop experiment' }).click()
 
     const cancelReq = await cancelPromise
-    expect(cancelReq.url()).toContain(`/batches/${RUNNING_BATCH_ID}/cancel`)
+    expect(cancelReq.url()).toContain(`/experiments/${RUNNING_EXPERIMENT_ID}/cancel`)
     expect(cancelReq.method()).toBe('POST')
   })
 })
 
 // ---------------------------------------------------------------------------
-// Cancel button and Download button — terminal (completed) batch
+// Cancel button and Download button — terminal (completed) experiment
 // ---------------------------------------------------------------------------
 
-test.describe('Cancel and Download on completed batch', () => {
-  test('Cancel button is NOT present for a completed batch', async ({ page }) => {
-    await page.goto(`/batches/${COMPLETED_BATCH_ID}`)
+test.describe('Cancel and Download on completed experiment', () => {
+  test('Cancel button is NOT present for a completed experiment', async ({ page }) => {
+    await page.goto(`/experiments/${COMPLETED_EXPERIMENT_ID}`)
     await expect(page.getByRole('button', { name: 'Cancel' })).not.toBeVisible()
   })
 
-  test('Download button is present for a completed batch', async ({ page }) => {
-    await page.goto(`/batches/${COMPLETED_BATCH_ID}`)
-    // DownloadButton renders a <button> with label "Download Reports" (default)
-    await expect(page.getByRole('button', { name: 'Download Reports' })).toBeVisible()
+  test('Download button is present for a completed experiment', async ({ page }) => {
+    await page.goto(`/experiments/${COMPLETED_EXPERIMENT_ID}`)
+    // DownloadButton renders a <button> with label "Download Results" (default)
+    await expect(page.getByRole('button', { name: 'Download Results' })).toBeVisible()
   })
 
   test('Download button click triggers a download with the expected filename', async ({
     page,
   }) => {
     await page.route(
-      `**/api/batches/${COMPLETED_BATCH_ID}/results/download`,
+      `**/api/experiments/${COMPLETED_EXPERIMENT_ID}/results/download`,
       (route) =>
         route.fulfill({
           status: 200,
-          headers: { 'content-disposition': `attachment; filename=batch-${COMPLETED_BATCH_ID}-reports.zip` },
+          headers: { 'content-disposition': `attachment; filename=experiment-${COMPLETED_EXPERIMENT_ID}-reports.zip` },
           contentType: 'application/zip',
           body: 'zip-bytes',
         })
     )
 
-    await page.goto(`/batches/${COMPLETED_BATCH_ID}`)
+    await page.goto(`/experiments/${COMPLETED_EXPERIMENT_ID}`)
 
     const downloadPromise = page.waitForEvent('download')
-    await page.getByRole('button', { name: 'Download Reports' }).click()
+    await page.getByRole('button', { name: 'Download Results' }).click()
     const download = await downloadPromise
 
-    expect(download.suggestedFilename()).toBe(`batch-${COMPLETED_BATCH_ID}-reports.zip`)
+    expect(download.suggestedFilename()).toBe(`experiment-${COMPLETED_EXPERIMENT_ID}-reports.zip`)
   })
 })
 
@@ -136,31 +136,31 @@ test.describe('Cancel and Download on completed batch', () => {
 // ---------------------------------------------------------------------------
 
 test.describe('MatrixTable row click navigation', () => {
-  test('clicking a run row navigates to /batches/{id}/runs/{runId}', async ({ page }) => {
-    await page.goto(`/batches/${COMPLETED_BATCH_ID}`)
+  test('clicking a run row navigates to /experiments/{id}/runs/{runId}', async ({ page }) => {
+    await page.goto(`/experiments/${COMPLETED_EXPERIMENT_ID}`)
 
     // Wait for the matrix to render
-    await expect(page.getByRole('heading', { name: 'Comparative Matrix' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Experiment Matrix' })).toBeVisible()
 
-    const matrixSection = page.locator('section').filter({ hasText: 'Comparative Matrix' })
+    const matrixSection = page.locator('section').filter({ hasText: 'Experiment Matrix' })
 
     // Click a data cell (model name) — avoids the checkbox and expand button
     const runCell = matrixSection.locator('td.font-mono').filter({ hasText: 'gpt-4o' }).first()
     await runCell.click()
 
-    await expect(page).toHaveURL(/\/batches\/[^/]+\/runs\//)
+    await expect(page).toHaveURL(/\/experiments\/[^/]+\/runs\//)
   })
 
-  test('navigated run URL contains both the batch id and a run id segment', async ({ page }) => {
-    await page.goto(`/batches/${COMPLETED_BATCH_ID}`)
-    await expect(page.getByRole('heading', { name: 'Comparative Matrix' })).toBeVisible()
+  test('navigated run URL contains both the experiment id and a run id segment', async ({ page }) => {
+    await page.goto(`/experiments/${COMPLETED_EXPERIMENT_ID}`)
+    await expect(page.getByRole('heading', { name: 'Experiment Matrix' })).toBeVisible()
 
-    const matrixSection = page.locator('section').filter({ hasText: 'Comparative Matrix' })
+    const matrixSection = page.locator('section').filter({ hasText: 'Experiment Matrix' })
     const runCell = matrixSection.locator('td.font-mono').filter({ hasText: 'gpt-4o' }).first()
     await runCell.click()
 
     await expect(page).toHaveURL(
-      new RegExp(`/batches/${COMPLETED_BATCH_ID}/runs/[^/]+`)
+      new RegExp(`/experiments/${COMPLETED_EXPERIMENT_ID}/runs/[^/]+`)
     )
   })
 })
@@ -171,12 +171,12 @@ test.describe('MatrixTable row click navigation', () => {
 
 test.describe('Row selection and sticky bar', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto(`/batches/${COMPLETED_BATCH_ID}`)
-    await expect(page.getByRole('heading', { name: 'Comparative Matrix' })).toBeVisible()
+    await page.goto(`/experiments/${COMPLETED_EXPERIMENT_ID}`)
+    await expect(page.getByRole('heading', { name: 'Experiment Matrix' })).toBeVisible()
   })
 
   test('selecting 1 run shows "1 run selected" in the sticky bar', async ({ page }) => {
-    const matrixSection = page.locator('section').filter({ hasText: 'Comparative Matrix' })
+    const matrixSection = page.locator('section').filter({ hasText: 'Experiment Matrix' })
     const checkboxes = matrixSection.locator('input[type="checkbox"]')
 
     await checkboxes.nth(0).click()
@@ -188,7 +188,7 @@ test.describe('Row selection and sticky bar', () => {
   })
 
   test('"Compare Selected" is NOT shown with only 1 run selected', async ({ page }) => {
-    const matrixSection = page.locator('section').filter({ hasText: 'Comparative Matrix' })
+    const matrixSection = page.locator('section').filter({ hasText: 'Experiment Matrix' })
     const checkboxes = matrixSection.locator('input[type="checkbox"]')
 
     await checkboxes.nth(0).click()
@@ -199,7 +199,7 @@ test.describe('Row selection and sticky bar', () => {
   test('selecting 2 runs shows "2 runs selected" and "Compare Selected" button', async ({
     page,
   }) => {
-    const matrixSection = page.locator('section').filter({ hasText: 'Comparative Matrix' })
+    const matrixSection = page.locator('section').filter({ hasText: 'Experiment Matrix' })
     const checkboxes = matrixSection.locator('input[type="checkbox"]')
 
     await checkboxes.nth(0).click()
@@ -210,8 +210,8 @@ test.describe('Row selection and sticky bar', () => {
     await expect(page.getByRole('button', { name: 'Compare Selected' })).toBeVisible()
   })
 
-  test('"Compare Selected" navigates to /batches/{id}/compare?a=…&b=…', async ({ page }) => {
-    const matrixSection = page.locator('section').filter({ hasText: 'Comparative Matrix' })
+  test('"Compare Selected" navigates to /experiments/{id}/compare?a=…&b=…', async ({ page }) => {
+    const matrixSection = page.locator('section').filter({ hasText: 'Experiment Matrix' })
     const checkboxes = matrixSection.locator('input[type="checkbox"]')
 
     await checkboxes.nth(0).click()
@@ -220,14 +220,14 @@ test.describe('Row selection and sticky bar', () => {
     await page.getByRole('button', { name: 'Compare Selected' }).click()
 
     await expect(page).toHaveURL(
-      new RegExp(`/batches/${COMPLETED_BATCH_ID}/compare\\?a=[^&]+&b=.+`)
+      new RegExp(`/experiments/${COMPLETED_EXPERIMENT_ID}/compare\\?a=[^&]+&b=.+`)
     )
   })
 
   test('"Compare Selected" URL contains the two selected run IDs as query params', async ({
     page,
   }) => {
-    const matrixSection = page.locator('section').filter({ hasText: 'Comparative Matrix' })
+    const matrixSection = page.locator('section').filter({ hasText: 'Experiment Matrix' })
     const checkboxes = matrixSection.locator('input[type="checkbox"]')
 
     // Click the first two checkboxes (runs are sorted by f1 desc by default:
@@ -244,7 +244,7 @@ test.describe('Row selection and sticky bar', () => {
   })
 
   test('sticky "Clear" button deselects all and hides the sticky bar', async ({ page }) => {
-    const matrixSection = page.locator('section').filter({ hasText: 'Comparative Matrix' })
+    const matrixSection = page.locator('section').filter({ hasText: 'Experiment Matrix' })
     const checkboxes = matrixSection.locator('input[type="checkbox"]')
 
     await checkboxes.nth(0).click()
@@ -260,7 +260,7 @@ test.describe('Row selection and sticky bar', () => {
   })
 
   test('sticky "Clear" button deselects after 1 selection too', async ({ page }) => {
-    const matrixSection = page.locator('section').filter({ hasText: 'Comparative Matrix' })
+    const matrixSection = page.locator('section').filter({ hasText: 'Experiment Matrix' })
     const checkboxes = matrixSection.locator('input[type="checkbox"]')
 
     await checkboxes.nth(0).click()
@@ -282,10 +282,10 @@ test.describe('Max-2 selection enforcement', () => {
   test('checking a 3rd row evicts the first selection (selection stays at 2)', async ({
     page,
   }) => {
-    await page.goto(`/batches/${COMPLETED_BATCH_ID}`)
-    await expect(page.getByRole('heading', { name: 'Comparative Matrix' })).toBeVisible()
+    await page.goto(`/experiments/${COMPLETED_EXPERIMENT_ID}`)
+    await expect(page.getByRole('heading', { name: 'Experiment Matrix' })).toBeVisible()
 
-    const matrixSection = page.locator('section').filter({ hasText: 'Comparative Matrix' })
+    const matrixSection = page.locator('section').filter({ hasText: 'Experiment Matrix' })
     const checkboxes = matrixSection.locator('input[type="checkbox"]')
 
     const total = await checkboxes.count()
@@ -313,10 +313,10 @@ test.describe('Max-2 selection enforcement', () => {
   test('after 3rd row click, 1st originally-selected checkbox becomes unchecked', async ({
     page,
   }) => {
-    await page.goto(`/batches/${COMPLETED_BATCH_ID}`)
-    await expect(page.getByRole('heading', { name: 'Comparative Matrix' })).toBeVisible()
+    await page.goto(`/experiments/${COMPLETED_EXPERIMENT_ID}`)
+    await expect(page.getByRole('heading', { name: 'Experiment Matrix' })).toBeVisible()
 
-    const matrixSection = page.locator('section').filter({ hasText: 'Comparative Matrix' })
+    const matrixSection = page.locator('section').filter({ hasText: 'Experiment Matrix' })
     const checkboxes = matrixSection.locator('input[type="checkbox"]')
 
     const total = await checkboxes.count()

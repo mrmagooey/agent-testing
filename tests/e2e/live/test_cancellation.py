@@ -1,8 +1,8 @@
 """Layer 4: Cancel mid-flight.
 
-Submits an 8-run batch, briefly waits for at least one run to start or become
+Submits an 8-run experiment, briefly waits for at least one run to start or become
 pending (proving the scheduler is working), issues a cancel, then verifies
-the batch reaches a terminal state with no lingering pending runs.
+the experiment reaches a terminal state with no lingering pending runs.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import time
 
 import pytest
 
-from tests.e2e.live.conftest import K8S_LIVE_MARK, poll_until_done, unique_batch_id
+from tests.e2e.live.conftest import K8S_LIVE_MARK, poll_until_done, unique_experiment_id
 
 pytestmark = [
     K8S_LIVE_MARK,
@@ -38,32 +38,32 @@ MATRIX_PAYLOAD = {
     "parallel_modes": [False],
     "tool_extension_sets": [[]],
     "num_repetitions": 2,
-    "max_batch_cost_usd": 0.50,
+    "max_experiment_cost_usd": 0.50,
     "strategy_configs": {"single_agent": {"max_turns": 3}, "per_file": {"max_turns": 3}},
 }
 
 
-def test_cancel_batch(live_client, batch_cleanup):
-    batch_id = unique_batch_id("live-e2e-cancel")
-    payload = {**MATRIX_PAYLOAD, "batch_id": batch_id}
-    batch_cleanup.append(batch_id)
+def test_cancel_experiment(live_client, experiment_cleanup):
+    experiment_id = unique_experiment_id("live-e2e-cancel")
+    payload = {**MATRIX_PAYLOAD, "experiment_id": experiment_id}
+    experiment_cleanup.append(experiment_id)
 
     # --- Submit ---
-    resp = live_client.post("/batches", json=payload)
+    resp = live_client.post("/experiments", json=payload)
     assert resp.status_code == 201, f"Expected 201, got {resp.status_code}: {resp.text}"
     submit_body = resp.json()
-    assert submit_body["batch_id"] == batch_id
+    assert submit_body["experiment_id"] == experiment_id
     assert submit_body["total_runs"] == 8, (
         f"Expected 8 runs, got {submit_body['total_runs']}"
     )
     total_runs = submit_body["total_runs"]
 
-    # --- Wait briefly for the batch to register at least some activity ---
+    # --- Wait briefly for the experiment to register at least some activity ---
     # We give up to 30 s; if the scheduler is slow, that's OK — we cancel anyway.
     deadline = time.monotonic() + 30
     observed_activity = False
     while time.monotonic() < deadline:
-        status_resp = live_client.get(f"/batches/{batch_id}")
+        status_resp = live_client.get(f"/experiments/{experiment_id}")
         assert status_resp.status_code == 200
         status = status_resp.json()
         running = status.get("running_runs", 0)
@@ -78,7 +78,7 @@ def test_cancel_batch(live_client, batch_cleanup):
     # should be idempotent and safe.
 
     # --- Cancel ---
-    cancel_resp = live_client.post(f"/batches/{batch_id}/cancel")
+    cancel_resp = live_client.post(f"/experiments/{experiment_id}/cancel")
     assert cancel_resp.status_code == 200, (
         f"Cancel returned {cancel_resp.status_code}: {cancel_resp.text}"
     )
@@ -90,7 +90,7 @@ def test_cancel_batch(live_client, batch_cleanup):
     )
 
     # --- Poll until terminal (5 min — running workers should be allowed to finish) ---
-    final = poll_until_done(live_client, batch_id, timeout_s=300, poll_interval_s=10)
+    final = poll_until_done(live_client, experiment_id, timeout_s=300, poll_interval_s=10)
 
     # No run should still be sitting in pending state
     pending_runs = final.get("pending_runs", 0)
@@ -108,5 +108,5 @@ def test_cancel_batch(live_client, batch_cleanup):
     assert accounted_for >= total_runs or final.get("status") in ("cancelled", "completed", "failed"), (
         f"Not all runs accounted for after cancel. "
         f"completed={completed}, failed={failed}, cancelled_jobs={cancelled_jobs}, "
-        f"total={total_runs}, batch_status={final.get('status')}"
+        f"total={total_runs}, experiment_status={final.get('status')}"
     )

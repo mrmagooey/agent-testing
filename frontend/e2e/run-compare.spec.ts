@@ -1,13 +1,13 @@
 import { test, expect } from '@playwright/test'
 import { mockApi } from './helpers/mockApi'
 
-const BATCH_ID = 'aaaaaaaa-0001-0001-0001-000000000001'
+const EXPERIMENT_ID = 'aaaaaaaa-0001-0001-0001-000000000001'
 const RUN_A = 'run-001-aaa'
 const RUN_B = 'run-002-bbb'
 
 test.beforeEach(async ({ page }) => {
   await mockApi(page)
-  await page.goto(`/batches/${BATCH_ID}/compare?a=${RUN_A}&b=${RUN_B}`)
+  await page.goto(`/experiments/${EXPERIMENT_ID}/compare?a=${RUN_A}&b=${RUN_B}`)
 })
 
 test('shows run A card with model', async ({ page }) => {

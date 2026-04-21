@@ -84,7 +84,7 @@ function CostBadge({ costUsd, durationSeconds }: { costUsd?: number; durationSec
 type RunFull = Run & { findings: Finding[]; tool_calls: ToolCall[]; messages: Message[]; prompt_snapshot?: PromptSnapshot }
 
 export default function RunDetail() {
-  const { batchId, runId } = useParams<{ batchId: string; runId: string }>()
+  const { experimentId, runId } = useParams<{ experimentId: string; runId: string }>()
   const [searchParams, setSearchParams] = useSearchParams()
   const [run, setRun] = useState<RunFull | null>(null)
   const [loading, setLoading] = useState(true)
@@ -113,12 +113,12 @@ export default function RunDetail() {
   }
 
   useEffect(() => {
-    if (!batchId || !runId) return
-    getRun(batchId, runId)
+    if (!experimentId || !runId) return
+    getRun(experimentId, runId)
       .then(setRun)
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false))
-  }, [batchId, runId])
+  }, [experimentId, runId])
 
   if (loading) return <PageLoadingSpinner />
 
@@ -146,8 +146,8 @@ export default function RunDetail() {
       <Breadcrumbs
         items={[
           { label: 'Dashboard', to: '/' },
-          { label: batchId ?? '', to: `/batches/${batchId}` },
-          { label: run.experiment_id },
+          { label: experimentId ?? '', to: `/experiments/${experimentId}` },
+          { label: run.run_id },
         ]}
       />
 
@@ -160,14 +160,14 @@ export default function RunDetail() {
       <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
         <div className="flex items-start justify-between mb-4">
           <div>
-            <h1 className="text-xl font-bold font-mono">{run.experiment_id}</h1>
-            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Run ID: {run.run_id}</p>
+            <h1 className="text-xl font-bold font-mono">{run.run_id}</h1>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Experiment ID: {run.experiment_id}</p>
           </div>
           <div className="flex items-center gap-3">
             <span className={`px-3 py-1 rounded-full text-sm font-medium ${MATCH_STATUS_COLORS[run.status] ?? 'bg-gray-100 text-gray-600'}`}>
               {run.status}
             </span>
-            {batchId && <DownloadButton batchId={batchId} label="Download Run" />}
+            {experimentId && <DownloadButton experimentId={experimentId} label="Download Run" />}
           </div>
         </div>
 
@@ -208,7 +208,7 @@ export default function RunDetail() {
           <PromptInjectionViewer promptSnapshot={run.prompt_snapshot} />
         ) : (
           <p className="text-sm text-gray-400 dark:text-gray-500">
-            Prompt snapshot not available in this run object. Check batch configuration.
+            Prompt snapshot not available in this run object. Check experiment configuration.
           </p>
         )}
       </Collapsible>
@@ -323,11 +323,11 @@ export default function RunDetail() {
                                   <CodeViewer content={sourceContent[f.finding_id]} maxHeight="200px" />
                                 </div>
                               )}
-                              {f.match_status === 'fp' && batchId && (
+                              {f.match_status === 'fp' && experimentId && (
                                 <button
                                   onClick={async (e) => {
                                     e.stopPropagation()
-                                    await reclassifyFinding(batchId, run.run_id, f.finding_id, 'unlabeled_real', '')
+                                    await reclassifyFinding(experimentId, run.run_id, f.finding_id, 'unlabeled_real', '')
                                   }}
                                   className="text-xs px-3 py-1 rounded bg-orange-100 dark:bg-orange-900 text-orange-800 dark:text-orange-200 hover:bg-orange-200 transition-colors focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:outline-none"
                                 >

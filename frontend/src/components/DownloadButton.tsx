@@ -1,16 +1,16 @@
 import { downloadReports } from '../api/client'
 
 export interface DownloadButtonProps {
-  batchId: string
+  experimentId: string
   label?: string
 }
 
-export default function DownloadButton({ batchId, label = 'Download Reports' }: DownloadButtonProps) {
+export default function DownloadButton({ experimentId, label = 'Download Reports' }: DownloadButtonProps) {
   const handleDownload = () => {
-    const url = downloadReports(batchId)
+    const url = downloadReports(experimentId)
     const a = document.createElement('a')
     a.href = url
-    a.download = `batch-${batchId}-reports.zip`
+    a.download = `experiment-${experimentId}-reports.zip`
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)

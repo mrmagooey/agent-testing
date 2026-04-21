@@ -6,11 +6,11 @@ import FindingsSearch from './FindingsSearch'
 import { SEVERITY_COLORS, MATCH_STATUS_COLORS } from '../constants/colors'
 
 export interface FindingsExplorerProps {
-  batchId: string
+  experimentId: string
   findings: Finding[]
 }
 
-export default function FindingsExplorer({ batchId, findings: initialFindings }: FindingsExplorerProps) {
+export default function FindingsExplorer({ experimentId, findings: initialFindings }: FindingsExplorerProps) {
   const [searchResults, setSearchResults] = useState<Finding[] | null>(null)
   const [matchFilter, setMatchFilter] = useState('all')
   const [vulnFilter, setVulnFilter] = useState('all')
@@ -39,7 +39,7 @@ export default function FindingsExplorer({ batchId, findings: initialFindings }:
     setReclassifyLoading(true)
     try {
       await reclassifyFinding(
-        batchId,
+        experimentId,
         reclassifyModal.runId,
         reclassifyModal.findingId,
         'unlabeled_real',
@@ -53,7 +53,7 @@ export default function FindingsExplorer({ batchId, findings: initialFindings }:
 
   return (
     <div className="space-y-4">
-      <FindingsSearch batchId={batchId} onResults={(r) => setSearchResults(r.length > 0 ? r : null)} />
+      <FindingsSearch experimentId={experimentId} onResults={(r) => setSearchResults(r.length > 0 ? r : null)} />
 
       {/* Filters */}
       <div className="flex flex-wrap gap-3">

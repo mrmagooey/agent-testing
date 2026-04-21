@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 class Database:
-    """Async SQLite database for batch and run tracking."""
+    """Async SQLite database for experiment and run tracking."""
 
     def __init__(self, db_path: Path):
         self.db_path = db_path
@@ -15,7 +15,7 @@ class Database:
     async def init(self) -> None:
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("""
-                CREATE TABLE IF NOT EXISTS batches (
+                CREATE TABLE IF NOT EXISTS experiments (
                     id TEXT PRIMARY KEY,
                     config_json TEXT,
                     status TEXT DEFAULT 'pending',
@@ -29,7 +29,7 @@ class Database:
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS runs (
                     id TEXT PRIMARY KEY,
-                    batch_id TEXT REFERENCES batches(id),
+                    experiment_id TEXT REFERENCES experiments(id),
                     config_json TEXT,
                     status TEXT DEFAULT 'pending',
                     model_id TEXT,
@@ -46,7 +46,7 @@ class Database:
                 )
             """)
             await db.execute(
-                "CREATE INDEX IF NOT EXISTS idx_runs_batch_id ON runs(batch_id)"
+                "CREATE INDEX IF NOT EXISTS idx_runs_experiment_id ON runs(experiment_id)"
             )
             await db.execute(
                 "CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status)"
@@ -64,9 +64,9 @@ class Database:
                 pass  # Column already exists — safe to ignore
             await db.commit()
 
-    async def create_batch(
+    async def create_experiment(
         self,
-        batch_id: str,
+        experiment_id: str,
         config_json: str,
         total_runs: int,
         max_cost_usd: float | None,
@@ -74,48 +74,48 @@ class Database:
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 """
-                INSERT INTO batches (id, config_json, status, total_runs, max_cost_usd, spent_usd, created_at)
+                INSERT INTO experiments (id, config_json, status, total_runs, max_cost_usd, spent_usd, created_at)
                 VALUES (?, ?, 'pending', ?, ?, 0, ?)
                 """,
-                (batch_id, config_json, total_runs, max_cost_usd, datetime.utcnow().isoformat()),
+                (experiment_id, config_json, total_runs, max_cost_usd, datetime.utcnow().isoformat()),
             )
             await db.commit()
 
-    async def get_batch(self, batch_id: str) -> dict | None:
+    async def get_experiment(self, experiment_id: str) -> dict | None:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
-                "SELECT * FROM batches WHERE id = ?", (batch_id,)
+                "SELECT * FROM experiments WHERE id = ?", (experiment_id,)
             ) as cursor:
                 row = await cursor.fetchone()
                 return dict(row) if row else None
 
-    async def list_batches(self) -> list[dict]:
+    async def list_experiments(self) -> list[dict]:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
-                "SELECT * FROM batches ORDER BY created_at DESC"
+                "SELECT * FROM experiments ORDER BY created_at DESC"
             ) as cursor:
                 rows = await cursor.fetchall()
                 return [dict(row) for row in rows]
 
-    async def update_batch_status(
+    async def update_experiment_status(
         self,
-        batch_id: str,
+        experiment_id: str,
         status: str,
         completed_at: str | None = None,
     ) -> None:
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
-                "UPDATE batches SET status = ?, completed_at = ? WHERE id = ?",
-                (status, completed_at, batch_id),
+                "UPDATE experiments SET status = ?, completed_at = ? WHERE id = ?",
+                (status, completed_at, experiment_id),
             )
             await db.commit()
 
     async def create_run(
         self,
         run_id: str,
-        batch_id: str,
+        experiment_id: str,
         config_json: str,
         model_id: str,
         strategy: str,
@@ -133,13 +133,13 @@ class Database:
             await db.execute(
                 """
                 INSERT INTO runs (
-                    id, batch_id, config_json, status, model_id, strategy,
+                    id, experiment_id, config_json, status, model_id, strategy,
                     tool_variant, review_profile, verification_variant,
                     estimated_cost_usd, created_at, tool_extensions
                 ) VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    run_id, batch_id, config_json, model_id, strategy,
+                    run_id, experiment_id, config_json, model_id, strategy,
                     tool_variant, review_profile, verification_variant,
                     estimated_cost_usd, datetime.utcnow().isoformat(), ext_str,
                 ),
@@ -192,37 +192,37 @@ class Database:
                 row = await cursor.fetchone()
                 return dict(row) if row else None
 
-    async def list_runs(self, batch_id: str) -> list[dict]:
+    async def list_runs(self, experiment_id: str) -> list[dict]:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
-                "SELECT * FROM runs WHERE batch_id = ? ORDER BY created_at",
-                (batch_id,),
+                "SELECT * FROM runs WHERE experiment_id = ? ORDER BY created_at",
+                (experiment_id,),
             ) as cursor:
                 rows = await cursor.fetchall()
                 return [dict(row) for row in rows]
 
-    async def count_runs_by_status(self, batch_id: str) -> dict[str, int]:
+    async def count_runs_by_status(self, experiment_id: str) -> dict[str, int]:
         async with aiosqlite.connect(self.db_path) as db:
             async with db.execute(
-                "SELECT status, COUNT(*) FROM runs WHERE batch_id = ? GROUP BY status",
-                (batch_id,),
+                "SELECT status, COUNT(*) FROM runs WHERE experiment_id = ? GROUP BY status",
+                (experiment_id,),
             ) as cursor:
                 rows = await cursor.fetchall()
                 return {row[0]: row[1] for row in rows}
 
-    async def add_batch_spend(self, batch_id: str, amount_usd: float) -> None:
+    async def add_experiment_spend(self, experiment_id: str, amount_usd: float) -> None:
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
-                "UPDATE batches SET spent_usd = spent_usd + ? WHERE id = ?",
-                (amount_usd, batch_id),
+                "UPDATE experiments SET spent_usd = spent_usd + ? WHERE id = ?",
+                (amount_usd, experiment_id),
             )
             await db.commit()
 
-    async def get_batch_spend(self, batch_id: str) -> float:
+    async def get_experiment_spend(self, experiment_id: str) -> float:
         async with aiosqlite.connect(self.db_path) as db:
             async with db.execute(
-                "SELECT spent_usd FROM batches WHERE id = ?", (batch_id,)
+                "SELECT spent_usd FROM experiments WHERE id = ?", (experiment_id,)
             ) as cursor:
                 row = await cursor.fetchone()
                 return row[0] if row else 0.0

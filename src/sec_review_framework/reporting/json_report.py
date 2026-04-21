@@ -84,8 +84,8 @@ class JSONReportGenerator(ReportGenerator):
         findings_data = [f.model_dump() for f in result.findings]
 
         return {
-            "experiment_id": exp.id,
-            "batch_id": exp.batch_id,
+            "run_id": exp.id,
+            "experiment_id": exp.experiment_id,
             "model_id": exp.model_id,
             "strategy": exp.strategy.value,
             "tool_variant": exp.tool_variant.value,
@@ -115,7 +115,7 @@ class JSONReportGenerator(ReportGenerator):
     # ------------------------------------------------------------------
 
     def render_matrix(self, results: list[RunResult], output_dir: Path) -> None:
-        """Write matrix_report.json summarising all runs in the batch."""
+        """Write matrix_report.json summarising all runs in the experiment."""
         output_dir.mkdir(parents=True, exist_ok=True)
         data = self._build_matrix_data(results)
         path = output_dir / "matrix_report.json"
@@ -125,7 +125,7 @@ class JSONReportGenerator(ReportGenerator):
         if not results:
             return {"runs": [], "findings": [], "dimension_analysis": {}, "cost_analysis": {}}
 
-        batch_id = results[0].experiment.batch_id
+        experiment_id = results[0].experiment.experiment_id
         dataset_name = results[0].experiment.dataset_name
         dataset_version = results[0].experiment.dataset_version
 
@@ -158,7 +158,7 @@ class JSONReportGenerator(ReportGenerator):
                 findings_data.append(record)
 
         return {
-            "batch_id": batch_id,
+            "experiment_id": experiment_id,
             "dataset": {
                 "name": dataset_name,
                 "version": dataset_version,
@@ -220,12 +220,12 @@ class JSONReportGenerator(ReportGenerator):
         return dict(by_model)
 
     def _build_cost_analysis(self, results: list[RunResult]) -> dict:
-        """Build cost_analysis section: per-model aggregates and batch total."""
+        """Build cost_analysis section: per-model aggregates and experiment total."""
         by_model: dict[str, list[RunResult]] = defaultdict(list)
         for r in results:
             by_model[r.experiment.model_id].append(r)
 
-        total_batch_cost = sum(r.estimated_cost_usd for r in results)
+        total_experiment_cost = sum(r.estimated_cost_usd for r in results)
         by_model_data: dict[str, dict] = {}
         cost_per_tp: dict[str, float | None] = {}
 
@@ -248,6 +248,6 @@ class JSONReportGenerator(ReportGenerator):
 
         return {
             "by_model": by_model_data,
-            "total_batch_cost": total_batch_cost,
+            "total_experiment_cost": total_experiment_cost,
             "cost_per_true_positive": cost_per_tp,
         }

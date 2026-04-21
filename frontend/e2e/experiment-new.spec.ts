@@ -3,11 +3,11 @@ import { mockApi } from './helpers/mockApi'
 
 test.beforeEach(async ({ page }) => {
   await mockApi(page)
-  await page.goto('/batches/new')
+  await page.goto('/experiments/new')
 })
 
 test('shows page heading', async ({ page }) => {
-  await expect(page.getByRole('heading', { name: 'New Batch' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'New Experiment' })).toBeVisible()
 })
 
 test('shows dataset selector', async ({ page }) => {
@@ -54,45 +54,45 @@ test('shows repetitions input', async ({ page }) => {
   await expect(repetitionsInput).toHaveValue('1')
 })
 
-test('shows submit batch button', async ({ page }) => {
-  await expect(page.getByRole('button', { name: 'Submit Batch' })).toBeVisible()
+test('shows submit experiment button', async ({ page }) => {
+  await expect(page.getByRole('button', { name: 'Submit Experiment' })).toBeVisible()
 })
 
 test('validates dataset required', async ({ page }) => {
-  await page.getByRole('button', { name: 'Submit Batch' }).click()
+  await page.getByRole('button', { name: 'Submit Experiment' }).click()
   await expect(page.getByText('Please select a dataset')).toBeVisible()
 })
 
 test('validates at least one model required', async ({ page }) => {
   await page.locator('select').first().selectOption('cve-2024-python')
-  await page.getByRole('button', { name: 'Submit Batch' }).click()
+  await page.getByRole('button', { name: 'Submit Experiment' }).click()
   await expect(page.getByText('Select at least one model')).toBeVisible()
 })
 
 test('validates at least one strategy required', async ({ page }) => {
   await page.locator('select').first().selectOption('cve-2024-python')
   await page.locator('label').filter({ hasText: 'gpt-4o' }).first().locator('input[type="checkbox"]').check()
-  await page.getByRole('button', { name: 'Submit Batch' }).click()
+  await page.getByRole('button', { name: 'Submit Experiment' }).click()
   await expect(page.getByText('Select at least one strategy')).toBeVisible()
 })
 
-test('successful form submission navigates to batch detail', async ({ page }) => {
+test('successful form submission navigates to experiment detail', async ({ page }) => {
   await page.locator('select').first().selectOption('cve-2024-python')
   await page.locator('label').filter({ hasText: 'gpt-4o' }).first().locator('input[type="checkbox"]').check()
   await page.locator('label').filter({ hasText: 'zero_shot' }).locator('input[type="checkbox"]').check()
-  await page.getByRole('button', { name: 'Submit Batch' }).click()
-  await expect(page).toHaveURL(/\/batches\/newbatch-1111/)
+  await page.getByRole('button', { name: 'Submit Experiment' }).click()
+  await expect(page).toHaveURL(/\/experiments\/newexperiment-1111/)
 })
 
 test('submitted POST body contains non-empty required arrays', async ({ page }) => {
   const postPromise = page.waitForRequest(
-    (req) => req.url().includes('/api/batches') && req.method() === 'POST'
+    (req) => req.url().includes('/api/experiments') && req.method() === 'POST'
   )
 
   await page.locator('select').first().selectOption('cve-2024-python')
   await page.locator('label').filter({ hasText: 'gpt-4o' }).first().locator('input[type="checkbox"]').check()
   await page.locator('label').filter({ hasText: 'zero_shot' }).locator('input[type="checkbox"]').check()
-  await page.getByRole('button', { name: 'Submit Batch' }).click()
+  await page.getByRole('button', { name: 'Submit Experiment' }).click()
 
   const req = await postPromise
   const body = req.postDataJSON()
@@ -113,9 +113,9 @@ test('validates at least one tool variant required', async ({ page }) => {
   await page.locator('label').filter({ hasText: 'zero_shot' }).locator('input[type="checkbox"]').check()
   await page.locator('label').filter({ hasText: /^with_tools$/ }).locator('input[type="checkbox"]').uncheck()
   await page.locator('label').filter({ hasText: /^without_tools$/ }).locator('input[type="checkbox"]').uncheck()
-  await page.getByRole('button', { name: 'Submit Batch' }).click()
+  await page.getByRole('button', { name: 'Submit Experiment' }).click()
   await expect(page.getByText('Select at least one tool variant')).toBeVisible()
-  await expect(page).not.toHaveURL(/\/batches\/newbatch/)
+  await expect(page).not.toHaveURL(/\/experiments\/newexperiment/)
 })
 
 test('validates at least one verification option required', async ({ page }) => {
@@ -123,9 +123,9 @@ test('validates at least one verification option required', async ({ page }) => 
   await page.locator('label').filter({ hasText: 'gpt-4o' }).first().locator('input[type="checkbox"]').check()
   await page.locator('label').filter({ hasText: 'zero_shot' }).locator('input[type="checkbox"]').check()
   await page.locator('label').filter({ hasText: /^none$/ }).locator('input[type="checkbox"]').uncheck()
-  await page.getByRole('button', { name: 'Submit Batch' }).click()
+  await page.getByRole('button', { name: 'Submit Experiment' }).click()
   await expect(page.getByText('Select at least one verification option')).toBeVisible()
-  await expect(page).not.toHaveURL(/\/batches\/newbatch/)
+  await expect(page).not.toHaveURL(/\/experiments\/newexperiment/)
 })
 
 test('can select multiple models and strategies', async ({ page }) => {
@@ -177,6 +177,6 @@ test('successful submission includes tool_extension_sets when extensions selecte
   await page.locator('label').filter({ hasText: 'LSP' }).locator('input[type="checkbox"]').check()
 
   // Submit
-  await page.getByRole('button', { name: 'Submit Batch' }).click()
-  await expect(page).toHaveURL(/\/batches\/newbatch-1111/)
+  await page.getByRole('button', { name: 'Submit Experiment' }).click()
+  await expect(page).toHaveURL(/\/experiments\/newexperiment-1111/)
 })

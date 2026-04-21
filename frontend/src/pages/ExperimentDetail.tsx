@@ -1,12 +1,12 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
-  getBatchResults,
-  cancelBatch,
+  getExperimentResults,
+  cancelExperiment,
   type Run,
   type Finding,
 } from '../api/client'
-import { useBatch } from '../hooks/useBatch'
+import { useExperiment } from '../hooks/useExperiment'
 import Breadcrumbs from '../components/Breadcrumbs'
 import ProgressBar from '../components/ProgressBar'
 import MatrixTable from '../components/MatrixTable'
@@ -51,7 +51,7 @@ function CancelConfirmModal({
       <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl max-w-sm w-full p-6">
         <h3 className="font-semibold text-gray-900 dark:text-gray-100 mb-2">Stop all pending runs?</h3>
         <p className="text-sm text-gray-600 dark:text-gray-400 mb-6">
-          This will cancel all pending and running jobs in this batch. Completed runs will not be affected.
+          This will cancel all pending and running jobs in this experiment. Completed runs will not be affected.
         </p>
         <div className="flex justify-end gap-3">
           <button
@@ -66,7 +66,7 @@ function CancelConfirmModal({
             disabled={confirming}
             className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-medium transition-colors disabled:opacity-50"
           >
-            {confirming ? 'Cancelling…' : 'Stop batch'}
+            {confirming ? 'Cancelling…' : 'Stop experiment'}
           </button>
         </div>
       </div>
@@ -82,7 +82,7 @@ function TokenMeter({ runs }: { runs: Run[] }) {
   return (
     <div className="flex flex-wrap items-center gap-4 text-sm mt-4 pt-4 border-t border-gray-100 dark:border-gray-700">
       <div className="flex items-center gap-2">
-        <span className="text-gray-500 dark:text-gray-300">Batch total</span>
+        <span className="text-gray-500 dark:text-gray-300">Experiment total</span>
         <span className="font-semibold font-mono text-gray-900 dark:text-gray-100">
           ${totalCost.toFixed(2)}
         </span>
@@ -101,36 +101,36 @@ function TokenMeter({ runs }: { runs: Run[] }) {
   )
 }
 
-export default function BatchDetail() {
-  const { id: batchId } = useParams<{ id: string }>()
+export default function ExperimentDetail() {
+  const { id: experimentId } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const { batch, loading, error } = useBatch(batchId)
+  const { experiment, loading, error } = useExperiment(experimentId)
   const [results, setResults] = useState<{ runs: Run[]; findings: Finding[] } | null>(null)
   const [resultsLoading, setResultsLoading] = useState(false)
   const [selectedRuns, setSelectedRuns] = useState<string[]>([])
   const [cancelling, setCancelling] = useState(false)
   const [showCancelModal, setShowCancelModal] = useState(false)
 
-  const isTerminal = batch && ['completed', 'failed', 'cancelled'].includes(batch.status)
+  const isTerminal = experiment && ['completed', 'failed', 'cancelled'].includes(experiment.status)
 
   useEffect(() => {
-    if (!batchId || !isTerminal) return
+    if (!experimentId || !isTerminal) return
     setResultsLoading(true)
-    getBatchResults(batchId)
+    getExperimentResults(experimentId)
       .then(setResults)
       .catch(() => null)
       .finally(() => setResultsLoading(false))
-  }, [batchId, isTerminal])
+  }, [experimentId, isTerminal])
 
   const handleCancelRequest = () => {
     setShowCancelModal(true)
   }
 
   const handleCancelConfirm = async () => {
-    if (!batchId || cancelling) return
+    if (!experimentId || cancelling) return
     setCancelling(true)
     try {
-      await cancelBatch(batchId)
+      await cancelExperiment(experimentId)
     } finally {
       setCancelling(false)
       setShowCancelModal(false)
@@ -139,12 +139,12 @@ export default function BatchDetail() {
 
   const handleCompare = () => {
     if (selectedRuns.length === 2) {
-      navigate(`/batches/${batchId}/compare?a=${selectedRuns[0]}&b=${selectedRuns[1]}`)
+      navigate(`/experiments/${experimentId}/compare?a=${selectedRuns[0]}&b=${selectedRuns[1]}`)
     }
   }
 
-  if (loading && !batch) {
-    return <div className="flex items-center justify-center h-64 text-gray-400">Loading batch...</div>
+  if (loading && !experiment) {
+    return <div className="flex items-center justify-center h-64 text-gray-400">Loading experiment...</div>
   }
 
   if (error) {
@@ -155,7 +155,7 @@ export default function BatchDetail() {
     )
   }
 
-  if (!batch) return null
+  if (!experiment) return null
 
   return (
     <div className="space-y-6">
@@ -167,10 +167,10 @@ export default function BatchDetail() {
         />
       )}
 
-      <Breadcrumbs items={[{ label: 'Dashboard', to: '/' }, { label: batch.batch_id }]} />
+      <Breadcrumbs items={[{ label: 'Dashboard', to: '/' }, { label: experiment.experiment_id }]} />
 
       <PageDescription>
-        Live progress, cost, and per-cell results for a single batch, plus cancel and download controls.
+        Live progress, cost, and per-cell results for a single experiment, plus cancel and download controls.
         Click any matrix row to inspect a run in detail, or select two runs to diff their findings side-by-side.
       </PageDescription>
 
@@ -178,12 +178,12 @@ export default function BatchDetail() {
       <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
         <div className="flex items-start justify-between mb-4">
           <div>
-            <h1 className="text-xl font-bold font-mono">{batch.batch_id}</h1>
-            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Dataset: {batch.dataset}</p>
+            <h1 className="text-xl font-bold font-mono">{experiment.experiment_id}</h1>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Dataset: {experiment.dataset}</p>
           </div>
           <div className="flex items-center gap-3">
-            <span className={`px-3 py-1 rounded-full text-sm font-medium ${STATUS_BADGE[batch.status] ?? ''}`}>
-              {batch.status}
+            <span className={`px-3 py-1 rounded-full text-sm font-medium ${STATUS_BADGE[experiment.status] ?? ''}`}>
+              {experiment.status}
             </span>
             {!isTerminal && (
               <button
@@ -194,28 +194,28 @@ export default function BatchDetail() {
                 Cancel
               </button>
             )}
-            {isTerminal && batchId && <DownloadButton batchId={batchId} />}
+            {isTerminal && experimentId && <DownloadButton experimentId={experimentId} />}
           </div>
         </div>
 
         {/* Progress */}
         <ProgressBar
-          completed={batch.completed_runs}
-          running={batch.running_runs}
-          pending={batch.pending_runs}
-          failed={batch.failed_runs}
-          total={batch.total_runs}
+          completed={experiment.completed_runs}
+          running={experiment.running_runs}
+          pending={experiment.pending_runs}
+          failed={experiment.failed_runs}
+          total={experiment.total_runs}
         />
 
         {/* Cost vs cap */}
         <div className="mt-4 flex items-center gap-4 text-sm">
           <span className="text-gray-600 dark:text-gray-400">
-            Cost: <strong>${batch.total_cost_usd.toFixed(2)}</strong>
+            Cost: <strong>${experiment.total_cost_usd.toFixed(2)}</strong>
           </span>
-          {batch.spend_cap_usd && (
+          {experiment.spend_cap_usd && (
             <span className="text-gray-600 dark:text-gray-400">
-              Cap: <strong>${batch.spend_cap_usd.toFixed(2)}</strong>
-              {batch.total_cost_usd / batch.spend_cap_usd > 0.8 && (
+              Cap: <strong>${experiment.spend_cap_usd.toFixed(2)}</strong>
+              {experiment.total_cost_usd / experiment.spend_cap_usd > 0.8 && (
                 <span className="ml-2 text-orange-600 dark:text-orange-400 font-medium">
                   ⚠ Near cap
                 </span>
@@ -232,9 +232,9 @@ export default function BatchDetail() {
 
       {results && (
         <>
-          {/* Comparative Matrix */}
+          {/* Experiment Matrix */}
           <section className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
-            <h2 className="text-lg font-semibold mb-4">Comparative Matrix</h2>
+            <h2 className="text-lg font-semibold mb-4">Experiment Matrix</h2>
             <MatrixTable
               runs={results.runs}
               onSelect={setSelectedRuns}
@@ -310,10 +310,10 @@ export default function BatchDetail() {
           </section>
 
           {/* Findings Explorer */}
-          {batchId && (
+          {experimentId && (
             <section className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
               <h2 className="text-lg font-semibold mb-4">Findings</h2>
-              <FindingsExplorer batchId={batchId} findings={results.findings} />
+              <FindingsExplorer experimentId={experimentId} findings={results.findings} />
             </section>
           )}
         </>
@@ -335,7 +335,7 @@ export default function BatchDetail() {
                   Compare Selected
                 </button>
               )}
-              {batchId && <DownloadButton batchId={batchId} label="Download Batch" />}
+              {experimentId && <DownloadButton experimentId={experimentId} label="Download Results" />}
               <button
                 onClick={() => setSelectedRuns([])}
                 className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:outline-none"

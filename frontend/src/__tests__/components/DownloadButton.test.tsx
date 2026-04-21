@@ -5,7 +5,7 @@ import DownloadButton from '../../components/DownloadButton'
 // ─── Mock the API client ─────────────────────────────────────────────────────
 
 vi.mock('../../api/client', () => ({
-  downloadReports: vi.fn((batchId: string) => `/api/batches/${batchId}/results/download`),
+  downloadReports: vi.fn((experimentId: string) => `/api/experiments/${experimentId}/results/download`),
 }))
 
 // ─── Setup ───────────────────────────────────────────────────────────────────
@@ -22,12 +22,12 @@ afterEach(() => {
 
 describe('DownloadButton', () => {
   it('renders the default label text', () => {
-    render(<DownloadButton batchId="b1" />)
+    render(<DownloadButton experimentId="e1" />)
     expect(screen.getByRole('button', { name: /download reports/i })).toBeInTheDocument()
   })
 
   it('renders a custom label when provided', () => {
-    render(<DownloadButton batchId="b1" label="Export ZIP" />)
+    render(<DownloadButton experimentId="e1" label="Export ZIP" />)
     expect(screen.getByRole('button', { name: /export zip/i })).toBeInTheDocument()
   })
 
@@ -35,7 +35,7 @@ describe('DownloadButton', () => {
     // Intercept anchor creation by tracking click calls via prototype spy
     const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
 
-    render(<DownloadButton batchId="batch-42" />)
+    render(<DownloadButton experimentId="experiment-42" />)
     fireEvent.click(screen.getByRole('button'))
 
     expect(clickSpy).toHaveBeenCalledOnce()
@@ -48,10 +48,10 @@ describe('DownloadButton', () => {
       capturedHref = this.href
     })
 
-    render(<DownloadButton batchId="my-batch-123" />)
+    render(<DownloadButton experimentId="my-experiment-123" />)
     fireEvent.click(screen.getByRole('button'))
 
-    expect(capturedHref).toContain('my-batch-123')
+    expect(capturedHref).toContain('my-experiment-123')
     clickSpy.mockRestore()
   })
 
@@ -61,15 +61,15 @@ describe('DownloadButton', () => {
       capturedDownload = this.download
     })
 
-    render(<DownloadButton batchId="my-batch-123" />)
+    render(<DownloadButton experimentId="my-experiment-123" />)
     fireEvent.click(screen.getByRole('button'))
 
-    expect(capturedDownload).toBe('batch-my-batch-123-reports.zip')
+    expect(capturedDownload).toBe('experiment-my-experiment-123-reports.zip')
     clickSpy.mockRestore()
   })
 
   it('renders without crashing when no label prop is given', () => {
-    render(<DownloadButton batchId="b1" />)
+    render(<DownloadButton experimentId="e1" />)
     expect(screen.getByRole('button')).toBeInTheDocument()
   })
 })

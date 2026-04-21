@@ -35,22 +35,22 @@
 │  Serves: React SPA at / + REST API at /api/*                               │
 │  Single image, single port — web UI and API in one deployment              │
 │                                                                             │
-│  Batches:                                                                   │
-│    POST /batches                      — submit new batch (config as body)   │
-│    GET  /batches                      — list all batches                    │
-│    GET  /batches/{id}                 — status + progress                   │
-│    GET  /batches/{id}/results         — matrix report (JSON)               │
-│    GET  /batches/{id}/results/markdown — matrix report (Markdown)          │
-│    GET  /batches/{id}/runs            — list all runs                      │
-│    GET  /batches/{id}/runs/{run_id}   — single run result + findings       │
-│    POST /batches/{id}/cancel          — cancel remaining jobs              │
-│    GET  /batches/{id}/results/download — download reports as .zip          │
-│    GET  /batches/{id}/compare-runs    — side-by-side run comparison        │
+│  Experiments:                                                               │
+│    POST /experiments                      — submit new experiment (config as body)   │
+│    GET  /experiments                      — list all experiments                    │
+│    GET  /experiments/{id}                 — status + progress                   │
+│    GET  /experiments/{id}/results         — matrix report (JSON)               │
+│    GET  /experiments/{id}/results/markdown — matrix report (Markdown)          │
+│    GET  /experiments/{id}/runs            — list all runs                      │
+│    GET  /experiments/{id}/runs/{run_id}   — single run result + findings       │
+│    POST /experiments/{id}/cancel          — cancel remaining jobs              │
+│    GET  /experiments/{id}/results/download — download reports as .zip          │
+│    GET  /experiments/{id}/compare-runs    — side-by-side run comparison        │
 │                                                                             │
 │  Findings:                                                                  │
-│    POST /batches/{id}/runs/{run_id}/reclassify — reclassify a finding      │
-│    GET  /batches/{id}/runs/{run_id}/tool-audit — tool call audit report    │
-│    GET  /batches/{id}/findings/search — free-text search across findings   │
+│    POST /experiments/{id}/runs/{run_id}/reclassify — reclassify a finding      │
+│    GET  /experiments/{id}/runs/{run_id}/tool-audit — tool call audit report    │
+│    GET  /experiments/{id}/findings/search — free-text search across findings   │
 │                                                                             │
 │  Datasets:                                                                  │
 │    GET  /datasets                     — list available datasets            │
@@ -64,8 +64,8 @@
 │    GET  /datasets/{name}/file         — read file content (syntax-ready)  │
 │                                                                             │
 │  Feedback:                                                                  │
-│    POST /feedback/compare             — compare two batches                │
-│    GET  /feedback/patterns/{batch_id} — FP patterns from a batch           │
+│    POST /feedback/compare             — compare two experiments                │
+│    GET  /feedback/patterns/{experiment_id} — FP patterns from an experiment           │
 │                                                                             │
 │  Reference:                                                                 │
 │    GET  /models                       — list available model providers      │
@@ -109,7 +109,7 @@
 │  │                                                                       │  │
 │  │  Mounts:                                                              │  │
 │  │    - /data/datasets (ReadOnlyMany PV — target repos + labels)        │  │
-│  │    - /data/outputs/{batch_id}/{experiment_id} (ReadWriteOnce PV)     │  │
+│  │    - /data/outputs/{experiment_id}/{run_id} (ReadWriteOnce PV)     │  │
 │  │  Env:                                                                 │  │
 │  │    - API keys from K8s Secrets                                        │  │
 │  │  Resources:                                                           │  │
@@ -129,8 +129,8 @@
 │  │   └── targets/{name}/repo, labels.jsonl, diff_spec.yaml                 │
 │  ├── config/                    (ReadOnlyMany — experiments, models, etc.)  │
 │  └── outputs/                   (ReadWriteMany — workers write, coord reads)│
-│      └── {batch_id}/                                                        │
-│          ├── {experiment_id}/   (one dir per job)                           │
+│      └── {experiment_id}/                                                        │
+│          ├── {run_id}/   (one dir per job)                           │
 │          │   ├── run_result.json                                            │
 │          │   ├── findings.jsonl                                             │
 │          │   ├── tool_calls.jsonl                                           │
@@ -152,7 +152,7 @@
 
 **Verification is distinct from evaluation.** Verification is a pipeline stage that filters candidate findings before they become final — it improves precision. Evaluation scores the final output against ground truth — it measures precision. Verification is part of the system under test; evaluation is the test harness.
 
-**Dimensions are opt-in.** Not every batch needs to vary every dimension. The matrix expands only the dimensions listed in the config. A batch testing review profiles might fix the model and strategy and only vary profiles. This keeps run counts manageable.
+**Dimensions are opt-in.** Not every experiment needs to vary every dimension. The matrix expands only the dimensions listed in the config. An experiment testing review profiles might fix the model and strategy and only vary profiles. This keeps run counts manageable.
 
 ---
 
@@ -383,7 +383,7 @@ class ReportGenerator(ABC):
 
     @abstractmethod
     def render_matrix(self, results: list["RunResult"], output_dir: Path) -> None:
-        """Write the comparative matrix across all runs in a batch."""
+        """Write the comparative matrix across all runs in an experiment."""
         ...
 ```
 
@@ -438,10 +438,10 @@ agent-testing-framework/
 │   ├── package.json
 │   ├── vite.config.ts
 │   ├── src/
-│   │   ├── pages/                # Dashboard, BatchNew, BatchDetail, CVEDiscovery, etc.
+│   │   ├── pages/                # Dashboard, ExperimentNew, ExperimentDetail, CVEDiscovery, etc.
 │   │   ├── components/           # MatrixTable, FindingsExplorer, CostEstimate, etc.
 │   │   ├── api/                  # auto-generated typed client from OpenAPI spec
-│   │   └── hooks/                # useBatch (polling), useEstimate (debounced)
+│   │   └── hooks/                # useExperiment (polling), useEstimate (debounced)
 │   └── dist/                     # built output, bundled into coordinator image
 │
 ├── k8s/                          # Kubernetes manifests
@@ -483,12 +483,12 @@ agent-testing-framework/
 │   └── cve_imports/              # raw CVE metadata before normalization
 │
 ├── outputs/                      # on shared PV in production
-│   └── {batch_id}/
+│   └── {experiment_id}/
 │       ├── matrix_report.md
 │       ├── matrix_report.json
-│       ├── feedback/             # cross-batch feedback analysis
-│       │   └── batch_comparison.json
-│       └── {experiment_id}/
+│       ├── feedback/             # cross-experiment feedback analysis
+│       │   └── experiment_comparison.json
+│       └── {run_id}/
 │           ├── findings.jsonl
 │           ├── findings_pre_verification.jsonl
 │           ├── verification_log.jsonl
@@ -502,7 +502,7 @@ agent-testing-framework/
 │       │
 │       ├── __init__.py
 │       ├── worker.py             # ExperimentWorker — K8s Job entry point
-│       ├── coordinator.py        # BatchCoordinator + FastAPI app (HTTP API)
+│       ├── coordinator.py        # ExperimentCoordinator + FastAPI app (HTTP API)
 │       ├── config.py             # Pydantic config loaders
 │       │
 │       ├── models/               # ModelProvider implementations
@@ -561,7 +561,7 @@ agent-testing-framework/
 │       │
 │       ├── feedback/
 │       │   ├── __init__.py
-│       │   └── tracker.py        # FeedbackTracker, cross-batch analysis
+│       │   └── tracker.py        # FeedbackTracker, cross-experiment analysis
 │       │
 │       ├── profiles/
 │       │   ├── __init__.py
@@ -596,7 +596,7 @@ agent-testing-framework/
 
 ### 4.1 PromptSnapshot
 
-Every experiment run captures the exact prompts used, so batch comparisons can distinguish "prompt changed" from "model behaved differently."
+Every experiment run captures the exact prompts used, so experiment comparisons can distinguish "prompt changed" from "model behaved differently."
 
 ```python
 import hashlib
@@ -618,11 +618,11 @@ class PromptSnapshot(BaseModel):
         return cls(snapshot_id=snap_id, captured_at=datetime.utcnow(), **kwargs)
 ```
 
-Strategies call `PromptSnapshot.capture()` at the start of `run()` and attach it to the `RunResult`. The `PromptRegistry` persists snapshots to `config/prompts/{name}/{snapshot_id}.yaml` for version tracking across batches.
+Strategies call `PromptSnapshot.capture()` at the start of `run()` and attach it to the `RunResult`. The `PromptRegistry` persists snapshots to `config/prompts/{name}/{snapshot_id}.yaml` for version tracking across experiments.
 
 ### 4.2 FindingIdentity
 
-Defines what makes "the same finding" across runs for cross-batch comparison and stability measurement.
+Defines what makes "the same finding" across runs for cross-experiment comparison and stability measurement.
 
 ```python
 from typing import NamedTuple
@@ -653,7 +653,7 @@ class FindingIdentity(NamedTuple):
         return f"{self.file_path}:{self.vuln_class}:L{lo}-{lo + LINE_BUCKET_SIZE - 1}"
 ```
 
-Used by `FeedbackTracker` to match findings across batches: two findings from different runs refer to the same underlying issue if their `FindingIdentity` matches.
+Used by `FeedbackTracker` to match findings across experiments: two findings from different runs refer to the same underlying issue if their `FindingIdentity` matches.
 
 ### 4.3 Finding
 
@@ -800,7 +800,7 @@ class StrategyName(str, Enum):
 class ExperimentRun(BaseModel):
     """One cell in the experiment matrix."""
     id: str
-    batch_id: str
+    experiment_id: str
     model_id: str
     strategy: StrategyName
     tool_variant: ToolVariant
@@ -900,7 +900,7 @@ Note on `unlabeled_real`: these are findings where a human reviewer determines p
 
 ```python
 class ExperimentMatrix(BaseModel):
-    batch_id: str
+    experiment_id: str
     dataset_name: str
     dataset_version: str
 
@@ -920,7 +920,7 @@ class ExperimentMatrix(BaseModel):
     num_repetitions: int = 1
 
     # Spend control — coordinator cancels remaining jobs when exceeded
-    max_batch_cost_usd: float | None = None
+    max_experiment_cost_usd: float | None = None
 
     # Cross-model verification — optional, defaults to same model
     verifier_model_id: str | None = None
@@ -943,12 +943,12 @@ class ExperimentMatrix(BaseModel):
                                 for rep in range(self.num_repetitions):
                                     rep_suffix = f"_rep{rep}" if self.num_repetitions > 1 else ""
                                     run_id = (
-                                        f"{self.batch_id}_{model_id}_{strategy}"
+                                        f"{self.experiment_id}_{model_id}_{strategy}"
                                         f"_{tool_variant}_{profile}_{verif}{rep_suffix}"
                                     )
                                     runs.append(ExperimentRun(
                                         id=run_id,
-                                        batch_id=self.batch_id,
+                                        experiment_id=self.experiment_id,
                                         model_id=model_id,
                                         strategy=strategy,
                                         tool_variant=tool_variant,
@@ -965,15 +965,15 @@ class ExperimentMatrix(BaseModel):
         return runs
 ```
 
-### 5.2 Coordinator Service (BatchCoordinator)
+### 5.2 Coordinator Service (ExperimentCoordinator)
 
-The coordinator is a FastAPI service running as a single-replica K8s Deployment. It is the sole management interface for the framework — all operations (submitting batches, managing datasets, viewing results, reclassifying findings) happen through its HTTP API. There is no CLI; users interact via `curl`, a browser, or any HTTP client.
+The coordinator is a FastAPI service running as a single-replica K8s Deployment. It is the sole management interface for the framework — all operations (submitting experiments, managing datasets, viewing results, reclassifying findings) happen through its HTTP API. There is no CLI; users interact via `curl`, a browser, or any HTTP client.
 
 ```python
-class BatchCoordinator:
+class ExperimentCoordinator:
     """
-    Manages the lifecycle of an experiment batch:
-    1. Receives a batch submission (ExperimentMatrix + config)
+    Manages the lifecycle of an experiment:
+    1. Receives an experiment submission (ExperimentMatrix + config)
     2. Expands the matrix into ExperimentRuns
     3. Creates K8s Jobs, respecting per-model concurrency caps
     4. Monitors job completion, collects results from shared storage
@@ -992,20 +992,20 @@ class BatchCoordinator:
     ):
         ...
 
-    def submit_batch(self, matrix: ExperimentMatrix) -> str:
+    def submit_experiment(self, matrix: ExperimentMatrix) -> str:
         """
-        Expand matrix, persist batch metadata, start scheduling jobs.
-        Returns batch_id for tracking.
+        Expand matrix, persist experiment metadata, start scheduling jobs.
+        Returns experiment_id for tracking.
         """
         runs = matrix.expand()
-        batch_id = matrix.batch_id
-        self._persist_batch_metadata(batch_id, runs)
+        experiment_id = matrix.experiment_id
+        self._persist_experiment_metadata(experiment_id, runs)
 
         # Start the scheduling loop (runs in background)
-        self._schedule_jobs(batch_id, runs)
-        return batch_id
+        self._schedule_jobs(experiment_id, runs)
+        return experiment_id
 
-    def _schedule_jobs(self, batch_id: str, runs: list[ExperimentRun]) -> None:
+    def _schedule_jobs(self, experiment_id: str, runs: list[ExperimentRun]) -> None:
         """
         Schedules K8s Jobs respecting per-model concurrency caps.
 
@@ -1018,14 +1018,14 @@ class BatchCoordinator:
         """
         pending = list(runs)
         while pending:
-            running_by_model = self._count_running_by_model(batch_id)
+            running_by_model = self._count_running_by_model(experiment_id)
 
             scheduled_this_round = []
             for run in pending:
                 cap = self.concurrency_caps.get(run.model_id, self.default_cap)
                 current = running_by_model.get(run.model_id, 0)
                 if current < cap:
-                    self._create_k8s_job(batch_id, run)
+                    self._create_k8s_job(experiment_id, run)
                     running_by_model[run.model_id] = current + 1
                     scheduled_this_round.append(run)
 
@@ -1035,7 +1035,7 @@ class BatchCoordinator:
             if pending:
                 time.sleep(10)  # poll interval
 
-    def _create_k8s_job(self, batch_id: str, run: ExperimentRun) -> None:
+    def _create_k8s_job(self, experiment_id: str, run: ExperimentRun) -> None:
         """
         Creates a K8s Job that runs a single experiment.
         The job spec is a single container running:
@@ -1047,7 +1047,7 @@ class BatchCoordinator:
                 namespace=self.namespace,
                 labels={
                     "app": "sec-review-worker",
-                    "batch": batch_id,
+                    "experiment": experiment_id,
                     "model": run.model_id,
                     "strategy": run.strategy,
                 },
@@ -1064,7 +1064,7 @@ class BatchCoordinator:
                             command=[
                                 "python", "-m", "sec_review_framework.worker",
                                 "--run-config", f"/data/config/runs/{run.id}.json",
-                                "--output-dir", f"/data/outputs/{batch_id}/{run.id}",
+                                "--output-dir", f"/data/outputs/{experiment_id}/{run.id}",
                                 "--datasets-dir", "/data/datasets",
                             ],
                             resources=self.worker_resources.to_k8s(),
@@ -1095,12 +1095,12 @@ class BatchCoordinator:
         )
         self.k8s_client.create_namespaced_job(self.namespace, job)
 
-    def get_batch_status(self, batch_id: str) -> "BatchStatus":
+    def get_experiment_status(self, experiment_id: str) -> "ExperimentStatus":
         """
         Polls K8s for job statuses and reads completed RunResults from storage.
         """
         jobs = self.k8s_client.list_namespaced_job(
-            self.namespace, label_selector=f"batch={batch_id}"
+            self.namespace, label_selector=f"experiment={experiment_id}"
         )
         completed = 0
         failed = 0
@@ -1117,8 +1117,8 @@ class BatchCoordinator:
                 pending += 1
 
         total = completed + failed + running + pending
-        return BatchStatus(
-            batch_id=batch_id,
+        return ExperimentStatus(
+            experiment_id=experiment_id,
             total=total,
             completed=completed,
             failed=failed,
@@ -1126,25 +1126,25 @@ class BatchCoordinator:
             pending=pending,
         )
 
-    def collect_results(self, batch_id: str) -> list[RunResult]:
+    def collect_results(self, experiment_id: str) -> list[RunResult]:
         """
-        Reads all run_result.json files from shared storage for this batch.
+        Reads all run_result.json files from shared storage for this experiment.
         Called when all jobs are complete.
         """
         results = []
-        batch_dir = self.storage_root / "outputs" / batch_id
-        for run_dir in batch_dir.iterdir():
+        experiment_dir = self.storage_root / "outputs" / experiment_id
+        for run_dir in experiment_dir.iterdir():
             result_file = run_dir / "run_result.json"
             if result_file.exists():
                 results.append(RunResult.model_validate_json(result_file.read_text()))
         return results
 
-    def finalize_batch(self, batch_id: str) -> None:
+    def finalize_experiment(self, experiment_id: str) -> None:
         """
         Called when all jobs complete. Collects results and generates matrix report.
         """
-        results = self.collect_results(batch_id)
-        output_dir = self.storage_root / "outputs" / batch_id
+        results = self.collect_results(experiment_id)
+        output_dir = self.storage_root / "outputs" / experiment_id
         self.reporter.render_matrix(results, output_dir)
 ```
 
@@ -1157,66 +1157,66 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 app = FastAPI(title="Security Review Framework", version="1.0.0")
-coordinator: BatchCoordinator = None  # initialized at startup
+coordinator: ExperimentCoordinator = None  # initialized at startup
 
-# --- Batches ---
+# --- Experiments ---
 
-@app.post("/batches", status_code=201)
-def submit_batch(matrix: ExperimentMatrix) -> dict:
-    """Submit a new experiment batch. Returns batch_id."""
-    batch_id = coordinator.submit_batch(matrix)
-    return {"batch_id": batch_id, "total_runs": len(matrix.expand())}
+@app.post("/experiments", status_code=201)
+def submit_experiment(matrix: ExperimentMatrix) -> dict:
+    """Submit a new experiment. Returns experiment_id."""
+    experiment_id = coordinator.submit_experiment(matrix)
+    return {"experiment_id": experiment_id, "total_runs": len(matrix.expand())}
 
-@app.get("/batches")
-def list_batches() -> list[dict]:
-    """List all batches with summary status."""
-    return coordinator.list_batches()
+@app.get("/experiments")
+def list_experiments() -> list[dict]:
+    """List all experiments with summary status."""
+    return coordinator.list_experiments()
 
-@app.get("/batches/{batch_id}")
-def get_batch(batch_id: str) -> dict:
-    """Batch status: total/completed/failed/running/pending counts, cost so far."""
-    return coordinator.get_batch_status(batch_id).model_dump()
+@app.get("/experiments/{experiment_id}")
+def get_experiment(experiment_id: str) -> dict:
+    """Experiment status: total/completed/failed/running/pending counts, cost so far."""
+    return coordinator.get_experiment_status(experiment_id).model_dump()
 
-@app.get("/batches/{batch_id}/results")
-def get_results_json(batch_id: str) -> dict:
-    """Matrix report as JSON. Available after batch completes."""
-    return coordinator.get_matrix_report_json(batch_id)
+@app.get("/experiments/{experiment_id}/results")
+def get_results_json(experiment_id: str) -> dict:
+    """Matrix report as JSON. Available after experiment completes."""
+    return coordinator.get_matrix_report_json(experiment_id)
 
-@app.get("/batches/{batch_id}/results/markdown")
-def get_results_markdown(batch_id: str) -> str:
-    """Matrix report as Markdown. Available after batch completes."""
-    return coordinator.get_matrix_report_markdown(batch_id)
+@app.get("/experiments/{experiment_id}/results/markdown")
+def get_results_markdown(experiment_id: str) -> str:
+    """Matrix report as Markdown. Available after experiment completes."""
+    return coordinator.get_matrix_report_markdown(experiment_id)
 
-@app.get("/batches/{batch_id}/runs")
-def list_runs(batch_id: str) -> list[dict]:
-    """List all runs in a batch with status and summary metrics."""
-    return coordinator.list_runs(batch_id)
+@app.get("/experiments/{experiment_id}/runs")
+def list_runs(experiment_id: str) -> list[dict]:
+    """List all runs in an experiment with status and summary metrics."""
+    return coordinator.list_runs(experiment_id)
 
-@app.get("/batches/{batch_id}/runs/{run_id}")
-def get_run(batch_id: str, run_id: str) -> dict:
+@app.get("/experiments/{experiment_id}/runs/{run_id}")
+def get_run(experiment_id: str, run_id: str) -> dict:
     """Full RunResult including findings, evaluation, and verification details."""
-    return coordinator.get_run_result(batch_id, run_id)
+    return coordinator.get_run_result(experiment_id, run_id)
 
-@app.post("/batches/{batch_id}/cancel")
-def cancel_batch(batch_id: str) -> dict:
+@app.post("/experiments/{experiment_id}/cancel")
+def cancel_experiment(experiment_id: str) -> dict:
     """Cancel pending jobs. Running jobs complete but no new ones are scheduled."""
-    cancelled = coordinator.cancel_batch(batch_id)
+    cancelled = coordinator.cancel_experiment(experiment_id)
     return {"cancelled_jobs": cancelled}
 
-@app.get("/batches/{batch_id}/results/download")
-def download_reports(batch_id: str) -> FileResponse:
+@app.get("/experiments/{experiment_id}/results/download")
+def download_reports(experiment_id: str) -> FileResponse:
     """Download matrix_report.md, matrix_report.json, and all run reports as a .zip."""
-    zip_path = coordinator.package_reports(batch_id)
+    zip_path = coordinator.package_reports(experiment_id)
     return FileResponse(zip_path, media_type="application/zip",
-                        filename=f"{batch_id}_reports.zip")
+                        filename=f"{experiment_id}_reports.zip")
 
-@app.get("/batches/{batch_id}/compare-runs")
-def compare_runs(batch_id: str, run_a: str, run_b: str) -> dict:
+@app.get("/experiments/{experiment_id}/compare-runs")
+def compare_runs(experiment_id: str, run_a: str, run_b: str) -> dict:
     """
     Side-by-side comparison of two runs. Returns findings matched
     by FindingIdentity: which were found by both, only by A, only by B.
     """
-    return coordinator.compare_runs(batch_id, run_a, run_b)
+    return coordinator.compare_runs(experiment_id, run_a, run_b)
     # Returns:
     # {
     #   "run_a": {"id": "...", "model": "...", "strategy": "...", "metrics": {...}},
@@ -1229,29 +1229,29 @@ def compare_runs(batch_id: str, run_a: str, run_b: str) -> dict:
 
 # --- Findings ---
 
-@app.get("/batches/{batch_id}/findings/search")
-def search_findings(batch_id: str, q: str, run_id: str | None = None) -> list[dict]:
+@app.get("/experiments/{experiment_id}/findings/search")
+def search_findings(experiment_id: str, q: str, run_id: str | None = None) -> list[dict]:
     """
-    Free-text search across all finding descriptions in a batch.
+    Free-text search across all finding descriptions in an experiment.
     Searches: title, description, recommendation, raw_llm_output.
     Optional run_id filter to scope to a single run.
     """
-    return coordinator.search_findings(batch_id, q, run_id)
+    return coordinator.search_findings(experiment_id, q, run_id)
 
 class ReclassifyRequest(BaseModel):
     finding_id: str
     status: str  # "unlabeled_real"
     note: str | None = None
 
-@app.post("/batches/{batch_id}/runs/{run_id}/reclassify")
-def reclassify_finding(batch_id: str, run_id: str, req: ReclassifyRequest) -> dict:
+@app.post("/experiments/{experiment_id}/runs/{run_id}/reclassify")
+def reclassify_finding(experiment_id: str, run_id: str, req: ReclassifyRequest) -> dict:
     """Reclassify a false positive as unlabeled_real. Recomputes metrics."""
-    return coordinator.reclassify_finding(batch_id, run_id, req)
+    return coordinator.reclassify_finding(experiment_id, run_id, req)
 
-@app.get("/batches/{batch_id}/runs/{run_id}/tool-audit")
-def tool_audit(batch_id: str, run_id: str) -> dict:
+@app.get("/experiments/{experiment_id}/runs/{run_id}/tool-audit")
+def tool_audit(experiment_id: str, run_id: str) -> dict:
     """Tool call audit: counts by tool, any calls with URL-like strings in inputs."""
-    return coordinator.audit_tool_calls(batch_id, run_id)
+    return coordinator.audit_tool_calls(experiment_id, run_id)
 
 # --- Datasets ---
 
@@ -1328,18 +1328,18 @@ def get_file_content(dataset_name: str, path: str) -> dict:
 # --- Feedback ---
 
 class CompareRequest(BaseModel):
-    batch_a_id: str
-    batch_b_id: str
+    experiment_a_id: str
+    experiment_b_id: str
 
 @app.post("/feedback/compare")
-def compare_batches(req: CompareRequest) -> dict:
-    """Compare two batches: metric deltas, persistent FP patterns, regressions."""
-    return coordinator.compare_batches(req.batch_a_id, req.batch_b_id)
+def compare_experiments(req: CompareRequest) -> dict:
+    """Compare two experiments: metric deltas, persistent FP patterns, regressions."""
+    return coordinator.compare_experiments(req.experiment_a_id, req.experiment_b_id)
 
-@app.get("/feedback/patterns/{batch_id}")
-def get_fp_patterns(batch_id: str) -> list[dict]:
-    """Extract recurring false positive patterns from a batch."""
-    return coordinator.get_fp_patterns(batch_id)
+@app.get("/feedback/patterns/{experiment_id}")
+def get_fp_patterns(experiment_id: str) -> list[dict]:
+    """Extract recurring false positive patterns from an experiment."""
+    return coordinator.get_fp_patterns(experiment_id)
 
 # --- Reference ---
 
@@ -1377,8 +1377,8 @@ class EstimateRequest(BaseModel):
 
 AVG_TOKENS_PER_KLOC = 1400       # prompt + completion, calibrated empirically
 
-@app.post("/batches/estimate")
-def estimate_batch(req: EstimateRequest) -> dict:
+@app.post("/experiments/estimate")
+def estimate_experiment(req: EstimateRequest) -> dict:
     """Pre-flight cost estimate. Call before submit to avoid expensive mistakes."""
     runs = req.matrix.expand()
     estimates_by_model = {}
@@ -1397,29 +1397,29 @@ def estimate_batch(req: EstimateRequest) -> dict:
 
 # --- Retention ---
 
-@app.delete("/batches/{batch_id}", status_code=204)
-def delete_batch(batch_id: str):
-    """Delete a batch and all its outputs from shared storage."""
-    coordinator.delete_batch(batch_id)
+@app.delete("/experiments/{experiment_id}", status_code=204)
+def delete_experiment(experiment_id: str):
+    """Delete an experiment and all its outputs from shared storage."""
+    coordinator.delete_experiment(experiment_id)
 ```
 
 #### Spend Cap Enforcement
 
-The coordinator tracks running cost per batch and auto-cancels remaining jobs when the cap is reached.
+The coordinator tracks running cost per experiment and auto-cancels remaining jobs when the cap is reached.
 
 ```python
-class BatchCostTracker:
-    """Tracks running spend per batch. Thread-safe."""
+class ExperimentCostTracker:
+    """Tracks running spend per experiment. Thread-safe."""
 
-    def __init__(self, batch_id: str, cap_usd: float | None):
-        self.batch_id = batch_id
+    def __init__(self, experiment_id: str, cap_usd: float | None):
+        self.experiment_id = experiment_id
         self.cap_usd = cap_usd
         self._spent = 0.0
         self._lock = threading.Lock()
         self._cancelled = False
 
     def record_job_cost(self, cost_usd: float) -> bool:
-        """Returns True if cap exceeded and batch should halt."""
+        """Returns True if cap exceeded and experiment should halt."""
         with self._lock:
             self._spent += cost_usd
             if self.cap_usd and not self._cancelled and self._spent >= self.cap_usd:
@@ -1432,20 +1432,20 @@ class BatchCostTracker:
         return self._spent
 ```
 
-When a worker completes, the coordinator reads `estimated_cost_usd` from its `run_result.json` and calls `record_job_cost()`. If the cap is hit, all pending Jobs for that batch are deleted.
+When a worker completes, the coordinator reads `estimated_cost_usd` from its `run_result.json` and calls `record_job_cost()`. If the cap is hit, all pending Jobs for that experiment are deleted.
 
 #### Reconciliation on Startup
 
 ```python
 def reconcile(self) -> None:
     """
-    Called once at coordinator startup. Scans for batches in non-terminal
+    Called once at coordinator startup. Scans for experiments in non-terminal
     states, identifies runs that were never dispatched as K8s Jobs, and
     creates their Jobs. Idempotent — safe to call multiple times.
     """
-    active_batches = self._get_active_batches()
-    for batch in active_batches:
-        label_selector = f"batch={batch.id}"
+    active_experiments = self._get_active_experiments()
+    for experiment in active_experiments:
+        label_selector = f"experiment={experiment.id}"
         existing_jobs = self.k8s_client.list_namespaced_job(
             self.namespace, label_selector=label_selector
         )
@@ -1454,24 +1454,24 @@ def reconcile(self) -> None:
             for job in existing_jobs.items
             if job.metadata.labels
         }
-        pending_runs = self._get_pending_runs(batch.id)
+        pending_runs = self._get_pending_runs(experiment.id)
         orphaned = [r for r in pending_runs if r.id not in dispatched_run_ids]
         if orphaned:
-            logger.warning(f"Batch {batch.id}: {len(orphaned)} orphaned runs — dispatching")
+            logger.warning(f"Experiment {experiment.id}: {len(orphaned)} orphaned runs — dispatching")
             for run in orphaned:
                 try:
-                    self._create_k8s_job(batch.id, run)
+                    self._create_k8s_job(experiment.id, run)
                 except kubernetes.client.ApiException as e:
                     if e.status == 409:
                         pass  # Job already exists — race condition, safe to ignore
                     else:
                         logger.error(f"Failed to dispatch orphaned run {run.id}: {e}")
 
-    # Also check for completed batches that never got their matrix report
-    for batch in active_batches:
-        status = self.get_batch_status(batch.id)
+    # Also check for completed experiments that never got their matrix report
+    for experiment in active_experiments:
+        status = self.get_experiment_status(experiment.id)
         if status.running == 0 and status.pending == 0:
-            self.finalize_batch(batch.id)
+            self.finalize_experiment(experiment.id)
 ```
 
 Wired into FastAPI startup:
@@ -1488,17 +1488,17 @@ async def startup():
 async def retention_cleanup_loop(
     storage_root: Path, retention_days: int, interval_s: int = 3600
 ):
-    """Background task: deletes batch directories older than retention_days."""
+    """Background task: deletes experiment directories older than retention_days."""
     while True:
         await asyncio.sleep(interval_s)
         cutoff = datetime.utcnow() - timedelta(days=retention_days)
-        for batch_dir in (storage_root / "outputs").iterdir():
-            if not batch_dir.is_dir():
+        for experiment_dir in (storage_root / "outputs").iterdir():
+            if not experiment_dir.is_dir():
                 continue
-            mtime = datetime.utcfromtimestamp(batch_dir.stat().st_mtime)
+            mtime = datetime.utcfromtimestamp(experiment_dir.stat().st_mtime)
             if mtime < cutoff:
-                shutil.rmtree(batch_dir, ignore_errors=True)
-                logger.info(f"Retention cleanup: deleted {batch_dir.name}")
+                shutil.rmtree(experiment_dir, ignore_errors=True)
+                logger.info(f"Retention cleanup: deleted {experiment_dir.name}")
 ```
 
 ### 5.3 Experiment Worker
@@ -1635,7 +1635,7 @@ The global `max_parallel_runs` in `experiments.yaml` sets an overall cap across 
 ### 5.5 Output Directory Layout Per Run
 
 ```
-/data/outputs/{batch_id}/{experiment_id}/
+/data/outputs/{experiment_id}/{run_id}/
     findings.jsonl                    — final findings (post-verification)
     findings_pre_verification.jsonl   — candidates before verification (if verification enabled)
     verification_log.jsonl            — verify/reject decisions with evidence
@@ -2835,7 +2835,7 @@ if run.verification_variant == VerificationVariant.WITH_VERIFICATION:
     )
 ```
 
-Cross-model verification is set at the matrix level (`verifier_model_id` in `ExperimentMatrix`) and applies to all runs where `verification_variant=WITH_VERIFICATION`. To test multiple verifier models, run separate batches.
+Cross-model verification is set at the matrix level (`verifier_model_id` in `ExperimentMatrix`) and applies to all runs where `verification_variant=WITH_VERIFICATION`. To test multiple verifier models, run separate experiments.
 
 ---
 
@@ -3020,7 +3020,7 @@ Answer ONLY with a JSON object:
 
 class LLMEvidenceAssessor:
     """Uses an LLM to judge evidence quality. More accurate than heuristics,
-    but adds cost — use for final evaluation, not exploratory batches."""
+    but adds cost — use for final evaluation, not exploratory runs."""
 
     def __init__(self, model: ModelProvider, target: TargetCodebase):
         self.model = model
@@ -3198,7 +3198,7 @@ When `num_repetitions > 1`, the matrix report includes confidence intervals on a
 After an experiment run, team members can reclassify false positives to `UNLABELED_REAL` via the coordinator API:
 
 ```
-POST /batches/{batch_id}/runs/{run_id}/reclassify
+POST /experiments/{experiment_id}/runs/{run_id}/reclassify
 {
   "finding_id": "abc123",
   "status": "unlabeled_real",
@@ -3227,7 +3227,7 @@ This updates `run_result.json` in shared storage and recomputes metrics.
 ### 10.2 Matrix Report Structure
 
 ```markdown
-# Security Review Framework — Batch {batch_id} Results
+# Security Review Framework — Experiment {experiment_id} Results
 
 ## Comparative Matrix
 
@@ -3266,8 +3266,8 @@ This updates `run_result.json` in shared storage and recomputes metrics.
 
 ## Cost Analysis
 
-| Model | Avg Cost/Run | Total Batch Cost | Cost per True Positive |
-|-------|-------------|------------------|----------------------|
+| Model | Avg Cost/Run | Total Experiment Cost | Cost per True Positive |
+|-------|-------------|----------------------|----------------------|
 | gpt-4o | $18.40 | $184.00 | $1.42 |
 | ...   | ...         | ...              | ...                  |
 
@@ -3287,7 +3287,7 @@ This updates `run_result.json` in shared storage and recomputes metrics.
 
 ```json
 {
-  "batch_id": "...",
+  "experiment_id": "...",
   "dataset": { "name": "...", "version": "..." },
   "generated_at": "...",
   "runs": [
@@ -3337,7 +3337,7 @@ This updates `run_result.json` in shared storage and recomputes metrics.
   },
   "cost_analysis": {
     "by_model": {},
-    "total_batch_cost": 0.0,
+    "total_experiment_cost": 0.0,
     "cost_per_true_positive": {}
   }
 }
@@ -3408,27 +3408,27 @@ A model that's 5% less precise but 80% cheaper may be the right production choic
 
 ## 12. Feedback Loop
 
-The feedback loop enables learning across experiment batches. It does not automatically retrain or modify prompts — it surfaces patterns that the team uses to manually refine strategies and profiles.
+The feedback loop enables learning across experiments. It does not automatically retrain or modify prompts — it surfaces patterns that the team uses to manually refine strategies and profiles.
 
 ### 12.1 FeedbackTracker
 
 ```python
 class FeedbackTracker:
     """
-    Compares results across batches to surface patterns in model behavior.
+    Compares results across experiments to surface patterns in model behavior.
     Produces a structured comparison that the team reviews to refine
     prompts, profiles, and strategies.
     """
 
-    def compare_batches(
+    def compare_experiments(
         self,
-        batch_a_results: list[RunResult],
-        batch_b_results: list[RunResult],
-    ) -> "BatchComparison":
+        experiment_a_results: list[RunResult],
+        experiment_b_results: list[RunResult],
+    ) -> "ExperimentComparison":
         """
         For runs that share (model, strategy, tool_variant):
         - Did metrics improve or regress?
-        - Which false positive patterns are persistent across batches?
+        - Which false positive patterns are persistent across experiments?
         - Which vulnerabilities are consistently missed by a given model?
         """
         ...
@@ -3438,7 +3438,7 @@ class FeedbackTracker:
         results: list[RunResult],
     ) -> list["FalsePositivePattern"]:
         """
-        Across all runs in a batch, find recurring false positive patterns:
+        Across all runs in an experiment, find recurring false positive patterns:
         - Model X consistently flags ORM code as SQL injection
         - Model Y reports hardcoded secrets in test fixtures
         - Strategy Z produces duplicates for imported modules
@@ -3458,17 +3458,17 @@ class FalsePositivePattern:
     suggested_action: str             # e.g. "add ORM exemption to SQLI specialist prompt"
 
 @dataclass
-class BatchComparison:
-    batch_a_id: str
-    batch_b_id: str
-    metric_deltas: dict[str, dict]    # experiment_id → {precision: +0.05, recall: -0.02, ...}
+class ExperimentComparison:
+    experiment_a_id: str
+    experiment_b_id: str
+    metric_deltas: dict[str, dict]    # run_id → {precision: +0.05, recall: -0.02, ...}
     persistent_false_positives: list[FalsePositivePattern]
-    persistent_misses: list[dict]     # labels missed in both batches
+    persistent_misses: list[dict]     # labels missed in both experiments
     improvements: list[dict]          # findings that went from FP→TP or FN→TP
     regressions: list[dict]           # findings that went from TP→FP or TP→FN
 
-    # Cross-batch finding matching uses FindingIdentity
-    # Two findings from different batches are "the same" if their
+    # Cross-experiment finding matching uses FindingIdentity
+    # Two findings from different experiments are "the same" if their
     # FindingIdentity matches (same file, same vuln_class, same 10-line bucket)
     finding_stability: dict[str, float]  # FindingIdentity → fraction of runs it appeared in
 ```
@@ -3476,16 +3476,16 @@ class BatchComparison:
 ### 12.2 Workflow
 
 ```
-# Compare two batches:
+# Compare two experiments:
 POST /feedback/compare
 {
-  "batch_a_id": "batch_2026_04_16_v1",
-  "batch_b_id": "batch_2026_04_20_v2"
+  "experiment_a_id": "experiment_2026_04_16_v1",
+  "experiment_b_id": "experiment_2026_04_20_v2"
 }
 # Returns: metric deltas, persistent FP patterns, regressions
 
-# Extract FP patterns from a single batch:
-GET /feedback/patterns/batch_2026_04_16_v1
+# Extract FP patterns from a single experiment:
+GET /feedback/patterns/experiment_2026_04_16_v1
 # Returns: recurring false positive patterns with suggested actions
 ```
 
@@ -3550,7 +3550,7 @@ class ToolCallRecord:
 **Layer 4: Output Review Workflow**
 
 ```
-GET /batches/{batch_id}/runs/{run_id}/tool-audit
+GET /experiments/{experiment_id}/runs/{run_id}/tool-audit
 # Returns: tool call counts by type, any calls with URL-like strings in inputs
 ```
 
@@ -3570,7 +3570,7 @@ GET /batches/{batch_id}/runs/{run_id}/tool-audit
 ```yaml
 # config/experiments.yaml
 
-batch_id: "batch_2026_04_16_v1"
+experiment_id: "experiment_2026_04_16_v1"
 dataset:
   name: "django-cms-cve-2021-mixed"
   version: "1.3.0"
@@ -3638,7 +3638,7 @@ num_repetitions: 1                # increase to 3-5 for significance testing
 # verifier_model_id: "claude-opus-4"  # uncomment to use a different model for verification
 
 # Spend control — coordinator auto-cancels remaining jobs when exceeded
-max_batch_cost_usd: 500.00
+max_experiment_cost_usd: 500.00
 
 # Global cap on concurrent experiment runs across all models.
 # Per-model caps in concurrency.yaml further constrain this.
@@ -3702,7 +3702,7 @@ providers:
 # In config/coordinator.yaml
 
 retention:
-  retention_days: 30              # batches older than this are auto-deleted
+  retention_days: 30              # experiments older than this are auto-deleted
   cleanup_interval_hours: 1       # how often the cleanup loop runs
 
 jobs:
@@ -3868,11 +3868,11 @@ This multiplies the matrix: 5 models × 5 strategies × 2 tool variants × 3 pro
 
 The framework deploys to a K8s cluster within the VPC. Three components:
 
-1. **Coordinator Service** — single-replica Deployment (FastAPI). Manages batch lifecycle, schedules K8s Jobs, enforces concurrency caps, aggregates results, exposes Prometheus metrics.
+1. **Coordinator Service** — single-replica Deployment (FastAPI). Manages experiment lifecycle, schedules K8s Jobs, enforces concurrency caps, aggregates results, exposes Prometheus metrics.
 2. **Worker Pods** — one K8s Job per experiment run. Each runs a standalone container that executes one experiment and writes results to shared storage.
 3. **Shared Storage** — NFS or EFS PersistentVolume. Holds datasets (read-only to workers), config, and outputs (read-write by workers, read by coordinator).
 
-All interaction happens through the coordinator's HTTP API — there is no CLI. Users submit batches, manage datasets, view results, and reclassify findings via HTTP requests.
+All interaction happens through the coordinator's HTTP API — there is no CLI. Users submit experiments, manage datasets, view results, and reclassify findings via HTTP requests.
 
 ### 15.2 Container Images
 
@@ -4115,11 +4115,11 @@ roleRef:
 ```python
 from prometheus_client import Counter, Gauge, Histogram, Info
 
-# Batch metrics
-batches_submitted = Counter("sec_review_batches_submitted_total", "Total batches submitted")
-batches_completed = Counter("sec_review_batches_completed_total", "Total batches completed")
-batch_runs_total = Gauge("sec_review_batch_runs_total", "Total runs in current batch",
-                         ["batch_id"])
+# Experiment metrics
+experiments_submitted = Counter("sec_review_experiments_submitted_total", "Total experiments submitted")
+experiments_completed = Counter("sec_review_experiments_completed_total", "Total experiments completed")
+experiment_runs_total = Gauge("sec_review_experiment_runs_total", "Total runs in current experiment",
+                         ["experiment_id"])
 
 # Per-run metrics
 runs_completed = Counter("sec_review_runs_completed_total", "Completed experiment runs",
@@ -4135,11 +4135,11 @@ run_tokens = Counter("sec_review_tokens_total", "Total tokens consumed",
 
 # Quality metrics (updated when evaluation completes)
 run_precision = Gauge("sec_review_precision", "Precision per run",
-                      ["batch_id", "experiment_id"])
+                      ["experiment_id", "run_id"])
 run_recall = Gauge("sec_review_recall", "Recall per run",
-                   ["batch_id", "experiment_id"])
+                   ["experiment_id", "run_id"])
 run_f1 = Gauge("sec_review_f1", "F1 per run",
-               ["batch_id", "experiment_id"])
+               ["experiment_id", "run_id"])
 
 # Concurrency
 active_jobs_by_model = Gauge("sec_review_active_jobs", "Currently running jobs",
@@ -4168,10 +4168,10 @@ spec:
 
 **Grafana Dashboard** — pre-built dashboard (`k8s/grafana-dashboard.json`) with panels for:
 
-- Batch progress (runs completed / total over time)
+- Experiment progress (runs completed / total over time)
 - Active jobs by model (stacked area)
 - Run duration distribution (heatmap by model × strategy)
-- Cost accumulation (running total per batch)
+- Cost accumulation (running total per experiment)
 - Precision/recall scatter (per experiment, colored by model)
 - Token usage by model (bar chart)
 - Failed runs (table with error messages)
@@ -4186,25 +4186,25 @@ kubectl port-forward -n sec-review svc/coordinator 8080:8080
 COORD=http://localhost:8080
 ```
 
-**Submit a batch:**
+**Submit an experiment:**
 
 ```bash
-curl -X POST $COORD/batches \
+curl -X POST $COORD/experiments \
   -H "Content-Type: application/json" \
   -d @config/experiments.yaml.json
 
 # Response:
-# {"batch_id": "batch_2026_04_16_v1", "total_runs": 100}
+# {"experiment_id": "experiment_2026_04_16_v1", "total_runs": 100}
 ```
 
 **Check progress:**
 
 ```bash
-curl $COORD/batches/batch_2026_04_16_v1
+curl $COORD/experiments/experiment_2026_04_16_v1
 
 # Response:
 # {
-#   "batch_id": "batch_2026_04_16_v1",
+#   "experiment_id": "experiment_2026_04_16_v1",
 #   "total": 100,
 #   "completed": 37,
 #   "failed": 1,
@@ -4218,13 +4218,13 @@ curl $COORD/batches/batch_2026_04_16_v1
 
 ```bash
 # JSON matrix report
-curl $COORD/batches/batch_2026_04_16_v1/results
+curl $COORD/experiments/experiment_2026_04_16_v1/results
 
 # Markdown matrix report
-curl $COORD/batches/batch_2026_04_16_v1/results/markdown
+curl $COORD/experiments/experiment_2026_04_16_v1/results/markdown
 
 # Single run detail
-curl $COORD/batches/batch_2026_04_16_v1/runs/gpt-4o_single_agent_with_tools_default_none
+curl $COORD/experiments/experiment_2026_04_16_v1/runs/gpt-4o_single_agent_with_tools_default_none
 ```
 
 **Manage datasets:**
@@ -4254,17 +4254,17 @@ curl $COORD/datasets/example-cve-2023/labels
 **Reclassify a finding:**
 
 ```bash
-curl -X POST $COORD/batches/batch_2026_04_16_v1/runs/gpt-4o_single_agent_with_tools_default_none/reclassify \
+curl -X POST $COORD/experiments/experiment_2026_04_16_v1/runs/gpt-4o_single_agent_with_tools_default_none/reclassify \
   -H "Content-Type: application/json" \
   -d '{"finding_id": "abc123", "status": "unlabeled_real", "note": "Real path traversal"}'
 ```
 
-**Compare batches:**
+**Compare experiments:**
 
 ```bash
 curl -X POST $COORD/feedback/compare \
   -H "Content-Type: application/json" \
-  -d '{"batch_a_id": "batch_2026_04_16_v1", "batch_b_id": "batch_2026_04_20_v2"}'
+  -d '{"experiment_a_id": "experiment_2026_04_16_v1", "experiment_b_id": "experiment_2026_04_20_v2"}'
 ```
 
 **Browse reference data:**
@@ -4276,7 +4276,7 @@ curl $COORD/profiles    # review profiles with descriptions
 curl $COORD/templates   # vuln injection templates
 ```
 
-All state lives in K8s (job status) and shared storage (results). The coordinator is stateless — it can be restarted without losing batch progress.
+All state lives in K8s (job status) and shared storage (results). The coordinator is stateless — it can be restarted without losing experiment progress.
 
 ### 15.6 Scaling Considerations
 
@@ -4285,10 +4285,10 @@ All state lives in K8s (job status) and shared storage (results). The coordinato
 | LLM rate limits | Provider-specific RPM/TPM limits | Per-model concurrency caps in `concurrency.yaml` |
 | Node resources | Each worker needs ~1-2GB RAM for conversation history | Set pod resource limits, use cluster autoscaler |
 | Shared storage IOPS | Many workers writing simultaneously | Use EFS with bursting or provisioned throughput |
-| Job scheduling | K8s Job creation overhead at scale | Coordinator batches Job creation, 10s poll interval |
-| Provider outages | One provider down shouldn't block the whole batch | Coordinator continues scheduling other models; failed jobs recorded, retryable |
+| Job scheduling | K8s Job creation overhead at scale | Coordinator groups Job creation, 10s poll interval |
+| Provider outages | One provider down shouldn't block the whole experiment | Coordinator continues scheduling other models; failed jobs recorded, retryable |
 
-For a 100-run batch with `max_parallel_runs: 10` and average run duration of 10 minutes, expected wall-clock time is ~100 minutes (10 waves of 10). With concurrency caps, some models may take longer if their cap is lower than the global cap.
+For a 100-run experiment with `max_parallel_runs: 10` and average run duration of 10 minutes, expected wall-clock time is ~100 minutes (10 waves of 10). With concurrency caps, some models may take longer if their cap is lower than the global cap.
 
 ### 15.7 Log Aggregation
 
@@ -4296,7 +4296,7 @@ Worker pods are ephemeral — once a Job completes and the pod is garbage-collec
 
 **Layer 1: Conversation transcripts to shared storage.** Each worker writes `conversation.jsonl` incrementally during the run — one JSON line per message exchange. Survives OOM kills and evictions (partial transcripts are still useful). Written to the same output directory as `run_result.json`.
 
-**Layer 2: Structured stdout to Loki via Fluentd DaemonSet.** Workers emit structured JSON to stdout with `batch_id` and `run_id` fields. A Fluentd DaemonSet on each node tails `/var/log/pods/sec-review_*/*/*.log`, filters for `app=sec-review-worker`, and forwards to Loki.
+**Layer 2: Structured stdout to Loki via Fluentd DaemonSet.** Workers emit structured JSON to stdout with `experiment_id` and `run_id` fields. A Fluentd DaemonSet on each node tails `/var/log/pods/sec-review_*/*/*.log`, filters for `app=sec-review-worker`, and forwards to Loki.
 
 ```yaml
 # Fluentd ConfigMap (excerpt)
@@ -4331,13 +4331,13 @@ data:
       flush_interval 5s
       <label>
         app $.kubernetes.labels.app
-        batch_id $.kubernetes.labels.batch_id
+        experiment_id $.kubernetes.labels.experiment_id
         run_id $.kubernetes.labels.run_id
       </label>
     </match>
 ```
 
-Worker pods must carry `batch_id` and `run_id` as pod labels (already set by the coordinator's Job template).
+Worker pods must carry `experiment_id` and `run_id` as pod labels (already set by the coordinator's Job template).
 
 ### 15.8 Dataset-Builder Jobs
 
@@ -4475,13 +4475,13 @@ app.mount("/", StaticFiles(directory="frontend/dist", html=True), name="frontend
 
 Overview of framework state. First thing a user sees.
 
-- **Active batches** — table: batch_id, progress bar (completed/total), running cost, elapsed time, status. Click through to batch detail.
-- **Recent batches** — last 10 completed batches with headline metrics (best model, best strategy).
+- **Active experiments** — table: experiment_id, progress bar (completed/total), running cost, elapsed time, status. Click through to experiment detail.
+- **Recent experiments** — last 10 completed experiments with headline metrics (best model, best strategy).
 - **System health** — coordinator status, active jobs by model (bar chart from Prometheus metrics), storage usage.
 
-#### Batch Submission (`/batches/new`)
+#### Experiment Submission (`/experiments/new`)
 
-Form-driven batch creation. Replaces the `curl -X POST /batches` workflow.
+Form-driven experiment creation. Replaces the `curl -X POST /experiments` workflow.
 
 - **Dataset selector** — dropdown of available datasets with label count and size.
 - **Model picker** — checkboxes for available models. Shows pricing per model.
@@ -4490,13 +4490,13 @@ Form-driven batch creation. Replaces the `curl -X POST /batches` workflow.
 - **Dimension toggles** — tool_variants (with/without), verification (none/with), parallel modes.
 - **Repetitions** — number input, defaults to 1.
 - **Cross-model verification** — optional model selector for verifier.
-- **Cost estimate** — live-updating estimate as the user changes selections. Calls `POST /batches/estimate` on every change (debounced). Shows total runs, estimated cost, breakdown by model.
+- **Cost estimate** — live-updating estimate as the user changes selections. Calls `POST /experiments/estimate` on every change (debounced). Shows total runs, estimated cost, breakdown by model.
 - **Spend cap** — number input, pre-filled from estimate + 20% buffer.
-- **Submit** — creates the batch. Redirects to batch detail page.
+- **Submit** — creates the experiment. Redirects to experiment detail page.
 
-#### Batch Detail (`/batches/:id`)
+#### Experiment Detail (`/experiments/:id`)
 
-Real-time progress and results for a single batch.
+Real-time progress and results for a single experiment.
 
 **While running:**
 - Progress bar with counts: completed / running / pending / failed.
@@ -4507,19 +4507,19 @@ Real-time progress and results for a single batch.
 **After completion:**
 - **Comparative matrix** — the full matrix table from the report. Sortable by any column. Heatmap coloring on precision/recall/F1 cells (green = good, red = bad).
 - **Dimension analysis charts** — bar charts for model comparison, strategy comparison, tool access impact, profile impact, verification impact. Generated client-side from the JSON report data.
-- **Cost analysis** — table: model, avg cost/run, total batch cost, cost per true positive.
+- **Cost analysis** — table: model, avg cost/run, total experiment cost, cost per true positive.
 - **Evidence quality breakdown** — stacked bar chart per model: strong/adequate/weak.
 - **Statistical significance** (when `num_repetitions > 1`) — confidence intervals on metrics, significance markers on pairwise comparisons.
-- **Findings explorer** — expandable table of all findings across all runs. Filter by: model, strategy, match_status (TP/FP/FN/unlabeled_real), vuln_class, severity. **Free-text search bar** at the top searches across title, description, recommendation, and raw LLM output (calls `GET /batches/:id/findings/search?q=...`). Click to expand and see full LLM description, verification evidence, matched label. Expansion renders the LLM description in a CodeMirror instance (read-only, markdown mode) so code blocks and file references are syntax-highlighted.
-- **Reclassify button** on each FP finding — opens modal to reclassify as `unlabeled_real` with a note. Calls `POST /batches/:id/runs/:run_id/reclassify`.
-- **Run comparison** — "Compare" button in the comparative matrix. Select any two rows (click first, shift-click second), then "Compare Selected". Opens a side-by-side view (`/batches/:id/compare?a=run_a&b=run_b`) showing:
+- **Findings explorer** — expandable table of all findings across all runs. Filter by: model, strategy, match_status (TP/FP/FN/unlabeled_real), vuln_class, severity. **Free-text search bar** at the top searches across title, description, recommendation, and raw LLM output (calls `GET /experiments/:id/findings/search?q=...`). Click to expand and see full LLM description, verification evidence, matched label. Expansion renders the LLM description in a CodeMirror instance (read-only, markdown mode) so code blocks and file references are syntax-highlighted.
+- **Reclassify button** on each FP finding — opens modal to reclassify as `unlabeled_real` with a note. Calls `POST /experiments/:id/runs/:run_id/reclassify`.
+- **Run comparison** — "Compare" button in the comparative matrix. Select any two rows (click first, shift-click second), then "Compare Selected". Opens a side-by-side view (`/experiments/:id/compare?a=run_a&b=run_b`) showing:
   - Header: both runs' config (model, strategy, tools, profile) and metrics side by side with deltas highlighted.
   - Three-column findings table grouped by `FindingIdentity`:
     - **Found by both** — shows both descriptions side by side in CodeMirror. Useful for comparing explanation quality between models.
     - **Only in Run A** — findings that A found but B missed. Each shows the LLM description and the matching ground truth label (if TP) or "not in ground truth" (if FP).
     - **Only in Run B** — same, reversed.
   - Summary: "Run A found 3 vulns that B missed. Run B found 1 vuln that A missed. 12 vulns found by both."
-- **Download reports** — button in the batch header. Calls `GET /batches/:id/results/download`. Returns a .zip containing `matrix_report.md`, `matrix_report.json`, and per-run `report.md` / `report.json` files.
+- **Download reports** — button in the experiment header. Calls `GET /experiments/:id/results/download`. Returns a .zip containing `matrix_report.md`, `matrix_report.json`, and per-run `report.md` / `report.json` files.
 
 #### CVE Discovery (`/datasets/discover`)
 
@@ -4557,18 +4557,18 @@ The workflow that most benefits from a UI. Reviewing ranked CVE candidates in JS
 
 #### Feedback (`/feedback`)
 
-- **Batch comparison** — two dropdowns to select batches A and B. "Compare" button. Results show:
-  - Metric deltas table (experiment_id, precision delta, recall delta, highlighted regressions in red).
+- **Experiment comparison** — two dropdowns to select experiments A and B. "Compare" button. Results show:
+  - Metric deltas table (run_id, precision delta, recall delta, highlighted regressions in red).
   - Persistent FP patterns — table with model, vuln_class, pattern description, count, suggested action.
-  - Stability analysis — findings that appeared/disappeared between batches, grouped by `FindingIdentity`.
-- **FP pattern browser** — select a batch, see recurring false positive patterns. Link to the specific findings.
+  - Stability analysis — findings that appeared/disappeared between experiments, grouped by `FindingIdentity`.
+- **FP pattern browser** — select an experiment, see recurring false positive patterns. Link to the specific findings.
 
-#### Run Detail (`/batches/:batch_id/runs/:run_id`)
+#### Run Detail (`/experiments/:experiment_id/runs/:run_id`)
 
 Deep dive into a single experiment run.
 
 - **Header** — model, strategy, tool_variant, profile, verification, status, duration, cost. Download button for this run's reports.
-- **Prompt snapshot** — collapsible section showing exact system prompt, user message template, profile modifier, finding format used. Rendered in CodeMirror (read-only) with diff highlighting if the prompts differ from the batch default.
+- **Prompt snapshot** — collapsible section showing exact system prompt, user message template, profile modifier, finding format used. Rendered in CodeMirror (read-only) with diff highlighting if the prompts differ from the experiment default.
 - **Metrics** — precision, recall, F1, FPR, evidence quality breakdown.
 - **Findings table** — all findings with match status, free-text search bar. Expandable to show:
   - LLM description and verification evidence (CodeMirror, markdown mode).
@@ -4592,8 +4592,8 @@ frontend/
 │   │   └── client.ts            # typed API client (generated from OpenAPI spec)
 │   ├── pages/
 │   │   ├── Dashboard.tsx
-│   │   ├── BatchNew.tsx
-│   │   ├── BatchDetail.tsx
+│   │   ├── ExperimentNew.tsx
+│   │   ├── ExperimentDetail.tsx
 │   │   ├── RunDetail.tsx
 │   │   ├── RunCompare.tsx        # side-by-side run comparison
 │   │   ├── CVEDiscovery.tsx
@@ -4615,7 +4615,7 @@ frontend/
 │   │   ├── ThemeToggle.tsx       # dark/light mode toggle
 │   │   └── DownloadButton.tsx    # report download (.zip)
 │   └── hooks/
-│       ├── useBatch.ts           # polling hook for batch progress
+│       ├── useExperiment.ts      # polling hook for experiment progress
 │       ├── useEstimate.ts        # debounced cost estimate
 │       ├── useTheme.ts           # dark mode state + localStorage persistence
 │       └── useSearch.ts          # debounced free-text search
@@ -4775,7 +4775,7 @@ The coordinator derives `TOOL_EXT_TREE_SITTER_AVAILABLE`, `TOOL_EXT_LSP_AVAILABL
 ### Run ID and Experiment Key Format
 
 - **Run ID**: When `tool_extensions` is empty, run IDs are byte-identical to legacy pre-extension runs. Non-empty extension sets append `_ext-<sorted+joined>` (e.g., `_ext-devdocs+lsp`).
-- **Experiment key** (for feedback tracking): The 4-element tuple is `(model_id, strategy, tool_variant, tuple(sorted(tool_extensions)))`. Runs differing only in extensions are tracked separately and do not merge across batches.
+- **Experiment key** (for feedback tracking): The 4-element tuple is `(model_id, strategy, tool_variant, tuple(sorted(tool_extensions)))`. Runs differing only in extensions are tracked separately and do not merge across experiments.
 
 ### Persistence
 
@@ -4832,7 +4832,7 @@ When the team is ready to explore this, it can be added as a new experiment mode
 ## Appendix: Key Dependency Flow
 
 ```
-HTTP POST /batches → BatchCoordinator
+HTTP POST /experiments → ExperimentCoordinator
     → ExperimentMatrix.expand()
         → list[ExperimentRun]
         → For each run: create K8s Job (respecting per-model concurrency caps)
@@ -4860,9 +4860,9 @@ HTTP POST /batches → BatchCoordinator
             → RunResult(experiment, findings, evaluation, cost, ...)
             → Write RunResult + artifacts to shared storage
             → ReportGenerator.render_run(result, output_dir)
-    → BatchCoordinator detects all jobs complete
+    → ExperimentCoordinator detects all jobs complete
         → collect_results() from shared storage
         → ReportGenerator.render_matrix(results, output_root)
         → Update Prometheus metrics
-    → [optional] FeedbackTracker.compare_batches(batch_a, batch_b)
+    → [optional] FeedbackTracker.compare_experiments(experiment_a, experiment_b)
 ```

@@ -35,7 +35,7 @@ class ReportGenerator(ABC):
         Parameters
         ----------
         results:
-            All RunResult objects from a batch, typically one per matrix cell.
+            All RunResult objects from an experiment, typically one per matrix cell.
         output_dir:
             Directory where output files should be written.
             Callers guarantee it exists before calling this method.

@@ -10,7 +10,7 @@ from sec_review_framework.data.experiment import PromptSnapshot, StrategyName
 class PromptRegistry:
     """
     Persists PromptSnapshot objects to config/prompts/{strategy}/{snapshot_id}.yaml
-    for version tracking across batches.
+    for version tracking across experiments.
     """
 
     def __init__(self, config_root: Path = Path("config")):

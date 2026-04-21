@@ -5,10 +5,10 @@ import { mockApi } from './helpers/mockApi'
 // ToggleChip integration tests
 // ---------------------------------------------------------------------------
 
-test.describe('ToggleChip on /batches/new', () => {
+test.describe('ToggleChip on /experiments/new', () => {
   test.beforeEach(async ({ page }) => {
     await mockApi(page)
-    await page.goto('/batches/new')
+    await page.goto('/experiments/new')
   })
 
   test('checking a model chip marks the checkbox as checked', async ({ page }) => {

@@ -165,8 +165,8 @@ def test_matrix_accuracy_returns_dict(coordinator_client):
     assert isinstance(data, dict)
 
 
-def test_matrix_accuracy_empty_with_no_completed_batches(coordinator_client):
-    """With no completed batches, matrix returns empty or minimal structure."""
+def test_matrix_accuracy_empty_with_no_completed_experiments(coordinator_client):
+    """With no completed experiments, matrix returns empty or minimal structure."""
     client, *_ = coordinator_client
     data = client.get("/matrix/accuracy").json()
     # Should be a dict (possibly with empty cells/models/strategies)
@@ -175,12 +175,12 @@ def test_matrix_accuracy_empty_with_no_completed_batches(coordinator_client):
     # We just verify it doesn't crash and returns parseable JSON
 
 
-def test_matrix_accuracy_does_not_include_pending_batches(coordinator_client):
-    """Accuracy matrix only reflects completed batches — pending don't appear."""
+def test_matrix_accuracy_does_not_include_pending_experiments(coordinator_client):
+    """Accuracy matrix only reflects completed experiments — pending don't appear."""
     client, *_ = coordinator_client
-    # Submit a batch but don't complete it
-    client.post("/batches", json={
-        "batch_id": "pending-batch",
+    # Submit an experiment but don't complete it
+    client.post("/experiments", json={
+        "experiment_id": "pending-experiment",
         "dataset_name": "ds",
         "dataset_version": "1.0",
         "model_ids": ["gpt-4o"],
@@ -191,5 +191,5 @@ def test_matrix_accuracy_does_not_include_pending_batches(coordinator_client):
         "parallel_modes": [False],
     })
     data = client.get("/matrix/accuracy").json()
-    # Pending batch shouldn't corrupt the matrix
+    # Pending experiment shouldn't corrupt the matrix
     assert isinstance(data, dict)

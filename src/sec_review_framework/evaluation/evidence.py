@@ -98,7 +98,7 @@ class LLMEvidenceAssessor:
     Uses an LLM to judge evidence quality.
 
     More accurate than heuristics, but adds cost — use for final
-    evaluation, not exploratory batches.
+    evaluation, not exploratory experiments.
     """
 
     def __init__(self, model, target) -> None:

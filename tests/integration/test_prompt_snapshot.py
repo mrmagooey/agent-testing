@@ -11,7 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import sec_review_framework.coordinator as coord_module
-from sec_review_framework.coordinator import BatchCoordinator, app
+from sec_review_framework.coordinator import ExperimentCoordinator, app
 from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
 from sec_review_framework.data.evaluation import EvaluationResult
 from sec_review_framework.data.experiment import (
@@ -33,11 +33,11 @@ from sec_review_framework.reporting.markdown import MarkdownReportGenerator
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_coordinator(tmp_path: Path, db: Database) -> BatchCoordinator:
+def _make_coordinator(tmp_path: Path, db: Database) -> ExperimentCoordinator:
     cost_calc = CostCalculator(
         pricing={"gpt-4o": ModelPricing(input_per_million=5.0, output_per_million=15.0)}
     )
-    return BatchCoordinator(
+    return ExperimentCoordinator(
         k8s_client=None,
         storage_root=tmp_path / "storage",
         concurrency_caps={},
@@ -52,14 +52,14 @@ def _make_coordinator(tmp_path: Path, db: Database) -> BatchCoordinator:
 
 def _write_run_with_prompt(
     storage_root: Path,
-    batch_id: str,
+    experiment_id: str,
     run_id: str,
     system_prompt: str,
     user_message_template: str,
 ) -> None:
     run = ExperimentRun(
         id=run_id,
-        batch_id=batch_id,
+        experiment_id=experiment_id,
         model_id="gpt-4o",
         strategy=StrategyName.SINGLE_AGENT,
         tool_variant=ToolVariant.WITH_TOOLS,
@@ -94,7 +94,7 @@ def _write_run_with_prompt(
         duration_seconds=5.0,
         completed_at=datetime(2026, 4, 1, 1, 0, 0, tzinfo=timezone.utc),
     )
-    out_dir = storage_root / "outputs" / batch_id / run_id
+    out_dir = storage_root / "outputs" / experiment_id / run_id
     out_dir.mkdir(parents=True)
     (out_dir / "run_result.json").write_text(result.model_dump_json(indent=2))
     db_path = storage_root / "coordinator.db"
@@ -183,7 +183,7 @@ def test_run_detail_includes_prompt_snapshot(coordinator_client):
     # Register run in the DB via direct insert (coordinator_client uses its own DB)
     # The get_run_result endpoint falls back to scanning the filesystem, so just check
     # that the result file is served and contains prompt_snapshot
-    resp = client.get("/batches/b1/runs/r1")
+    resp = client.get("/experiments/b1/runs/r1")
     # May 404 if DB doesn't know about the run — use coordinator directly
     # Instead test the coordinator method directly
 
@@ -197,9 +197,9 @@ async def test_coordinator_get_run_result_includes_prompt_snapshot(coordinator_c
         system_prompt="You are a security reviewer.",
         user_message_template="Review this codebase.",
     )
-    await coordinator.db.create_batch("b1", config_json="{}", total_runs=1, max_cost_usd=None)
+    await coordinator.db.create_experiment("b1", config_json="{}", total_runs=1, max_cost_usd=None)
     await coordinator.db.create_run(
-        run_id="r1", batch_id="b1", config_json="{}",
+        run_id="r1", experiment_id="b1", config_json="{}",
         model_id="gpt-4o", strategy="single_agent",
         tool_variant="with_tools", review_profile="default",
         verification_variant="none",
@@ -221,9 +221,9 @@ async def test_coordinator_get_run_result_prompt_snapshot_is_dict(coordinator_cl
         system_prompt="sys",
         user_message_template="user",
     )
-    await coordinator.db.create_batch("b1", config_json="{}", total_runs=1, max_cost_usd=None)
+    await coordinator.db.create_experiment("b1", config_json="{}", total_runs=1, max_cost_usd=None)
     await coordinator.db.create_run(
-        run_id="r2", batch_id="b1", config_json="{}",
+        run_id="r2", experiment_id="b1", config_json="{}",
         model_id="gpt-4o", strategy="single_agent",
         tool_variant="with_tools", review_profile="default",
         verification_variant="none",
@@ -288,7 +288,7 @@ async def test_run_result_with_injection_includes_fields(coordinator_client):
 
     run = ExperimentRun(
         id="r-inj",
-        batch_id="b-inj",
+        experiment_id="e-inj",
         model_id="gpt-4o",
         strategy=StrategyName.SINGLE_AGENT,
         tool_variant=ToolVariant.WITH_TOOLS,
@@ -322,19 +322,19 @@ async def test_run_result_with_injection_includes_fields(coordinator_client):
         duration_seconds=1.0,
         completed_at=datetime(2026, 4, 1, tzinfo=timezone.utc),
     )
-    out_dir = storage / "outputs" / "b-inj" / "r-inj"
+    out_dir = storage / "outputs" / "e-inj" / "r-inj"
     out_dir.mkdir(parents=True)
     (out_dir / "run_result.json").write_text(result.model_dump_json(indent=2))
 
-    await coordinator.db.create_batch("b-inj", config_json="{}", total_runs=1, max_cost_usd=None)
+    await coordinator.db.create_experiment("e-inj", config_json="{}", total_runs=1, max_cost_usd=None)
     await coordinator.db.create_run(
-        run_id="r-inj", batch_id="b-inj", config_json="{}",
+        run_id="r-inj", experiment_id="e-inj", config_json="{}",
         model_id="gpt-4o", strategy="single_agent",
         tool_variant="with_tools", review_profile="default",
         verification_variant="none",
     )
 
-    api_result = await coordinator.get_run_result("b-inj", "r-inj")
+    api_result = await coordinator.get_run_result("e-inj", "r-inj")
     ps = api_result["prompt_snapshot"]
     assert ps["clean_prompt"] == "base prompt"
     assert ps["injected_prompt"] == "base prompt\ninjected line"
@@ -346,16 +346,16 @@ async def test_run_result_without_injection_has_null_injected_prompt(coordinator
     client, coordinator, tmp_path = coordinator_client
     storage = tmp_path / "storage"
 
-    _write_run_with_prompt(storage, "b-noinj", "r-noinj", "sys", "user")
+    _write_run_with_prompt(storage, "e-noinj", "r-noinj", "sys", "user")
 
-    await coordinator.db.create_batch("b-noinj", config_json="{}", total_runs=1, max_cost_usd=None)
+    await coordinator.db.create_experiment("e-noinj", config_json="{}", total_runs=1, max_cost_usd=None)
     await coordinator.db.create_run(
-        run_id="r-noinj", batch_id="b-noinj", config_json="{}",
+        run_id="r-noinj", experiment_id="e-noinj", config_json="{}",
         model_id="gpt-4o", strategy="single_agent",
         tool_variant="with_tools", review_profile="default",
         verification_variant="none",
     )
 
-    api_result = await coordinator.get_run_result("b-noinj", "r-noinj")
+    api_result = await coordinator.get_run_result("e-noinj", "r-noinj")
     ps = api_result["prompt_snapshot"]
     assert ps.get("injected_prompt") is None

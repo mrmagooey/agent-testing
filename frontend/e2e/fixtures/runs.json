@@ -1,8 +1,7 @@
 [
   {
     "run_id": "run-001-aaa",
-    "batch_id": "aaaaaaaa-0001-0001-0001-000000000001",
-    "experiment_id": "gpt-4o__zero_shot__with_tools__default__none",
+    "experiment_id": "aaaaaaaa-0001-0001-0001-000000000001",
     "model": "gpt-4o",
     "strategy": "zero_shot",
     "tool_variant": "with_tools",
@@ -23,8 +22,7 @@
   },
   {
     "run_id": "run-002-bbb",
-    "batch_id": "aaaaaaaa-0001-0001-0001-000000000001",
-    "experiment_id": "gpt-4o__zero_shot__without_tools__default__none",
+    "experiment_id": "aaaaaaaa-0001-0001-0001-000000000001",
     "model": "gpt-4o",
     "strategy": "zero_shot",
     "tool_variant": "without_tools",
@@ -45,8 +43,7 @@
   },
   {
     "run_id": "run-003-ccc",
-    "batch_id": "aaaaaaaa-0001-0001-0001-000000000001",
-    "experiment_id": "claude-3-5-sonnet__chain_of_thought__with_tools__default__none",
+    "experiment_id": "aaaaaaaa-0001-0001-0001-000000000001",
     "model": "claude-3-5-sonnet-20241022",
     "strategy": "chain_of_thought",
     "tool_variant": "with_tools",

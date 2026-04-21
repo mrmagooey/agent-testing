@@ -21,7 +21,7 @@ export default function CostEstimate({ estimate, loading }: CostEstimateProps) {
       )}
 
       {!loading && !estimate && (
-        <p className="text-sm text-gray-400 dark:text-gray-500">Configure batch to see estimate.</p>
+        <p className="text-sm text-gray-400 dark:text-gray-500">Configure experiment to see estimate.</p>
       )}
 
       {!loading && estimate && (

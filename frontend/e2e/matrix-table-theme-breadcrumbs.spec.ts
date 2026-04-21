@@ -5,7 +5,7 @@
 import { test, expect } from '@playwright/test'
 import { mockApi } from './helpers/mockApi'
 
-const BATCH_ID = 'aaaaaaaa-0001-0001-0001-000000000001'
+const EXPERIMENT_ID = 'aaaaaaaa-0001-0001-0001-000000000001'
 const RUN_ID = 'run-001-aaa'
 
 // ---------------------------------------------------------------------------
@@ -15,7 +15,7 @@ const RUN_ID = 'run-001-aaa'
 test.describe('MatrixTable interactions', () => {
   test.beforeEach(async ({ page }) => {
     await mockApi(page)
-    await page.goto(`/batches/${BATCH_ID}`)
+    await page.goto(`/experiments/${EXPERIMENT_ID}`)
   })
 
   test('MatrixTable shows Model column header', async ({ page }) => {
@@ -93,7 +93,7 @@ test.describe('MatrixTable interactions', () => {
   })
 
   test('MatrixTable checkbox selects a run and shows selection indicator', async ({ page }) => {
-    const matrixSection = page.locator('section').filter({ hasText: 'Comparative Matrix' })
+    const matrixSection = page.locator('section').filter({ hasText: 'Experiment Matrix' })
     const checkbox = matrixSection.locator('input[type="checkbox"]').first()
     await checkbox.check()
     await expect(page.getByText(/1 run.*selected/i).first()).toBeVisible()
@@ -101,10 +101,10 @@ test.describe('MatrixTable interactions', () => {
 
   test('MatrixTable row click navigates to run detail', async ({ page }) => {
     // Click a non-checkbox/expand-btn part of the first row
-    const matrixSection = page.locator('section').filter({ hasText: 'Comparative Matrix' })
+    const matrixSection = page.locator('section').filter({ hasText: 'Experiment Matrix' })
     const firstRunCell = matrixSection.locator('td.font-mono').filter({ hasText: 'gpt-4o' }).first()
     await firstRunCell.click()
-    await expect(page).toHaveURL(/\/batches\/.*\/runs\//)
+    await expect(page).toHaveURL(/\/experiments\/.*\/runs\//)
   })
 })
 
@@ -182,43 +182,43 @@ test.describe('ThemeToggle persistence', () => {
 // ---------------------------------------------------------------------------
 
 test.describe('Breadcrumbs rendering and navigation', () => {
-  test('RunDetail breadcrumbs show Dashboard / batchId / experimentId', async ({ page }) => {
+  test('RunDetail breadcrumbs show Dashboard / experimentId / runId', async ({ page }) => {
     await mockApi(page)
-    await page.goto(`/batches/${BATCH_ID}/runs/${RUN_ID}`)
+    await page.goto(`/experiments/${EXPERIMENT_ID}/runs/${RUN_ID}`)
     const nav = page.getByRole('navigation', { name: 'Breadcrumb' })
     await expect(nav).toBeVisible()
     await expect(nav.getByRole('link', { name: 'Dashboard' })).toBeVisible()
-    await expect(nav.getByRole('link', { name: BATCH_ID })).toBeVisible()
-    // The last crumb (experiment_id) is plain text, not a link
+    await expect(nav.getByRole('link', { name: EXPERIMENT_ID })).toBeVisible()
+    // The last crumb (run_id) is plain text, not a link
     await expect(nav.getByText('gpt-4o__zero_shot__with_tools__default__none')).toBeVisible()
   })
 
   test('RunDetail breadcrumb Dashboard link navigates to /', async ({ page }) => {
     await mockApi(page)
-    await page.goto(`/batches/${BATCH_ID}/runs/${RUN_ID}`)
+    await page.goto(`/experiments/${EXPERIMENT_ID}/runs/${RUN_ID}`)
     await page.getByRole('navigation', { name: 'Breadcrumb' }).getByRole('link', { name: 'Dashboard' }).click()
     await expect(page).toHaveURL('/')
   })
 
-  test('RunDetail breadcrumb batch link navigates to batch detail', async ({ page }) => {
+  test('RunDetail breadcrumb experiment link navigates to experiment detail', async ({ page }) => {
     await mockApi(page)
-    await page.goto(`/batches/${BATCH_ID}/runs/${RUN_ID}`)
-    await page.getByRole('navigation', { name: 'Breadcrumb' }).getByRole('link', { name: BATCH_ID }).click()
-    await expect(page).toHaveURL(`/batches/${BATCH_ID}`)
+    await page.goto(`/experiments/${EXPERIMENT_ID}/runs/${RUN_ID}`)
+    await page.getByRole('navigation', { name: 'Breadcrumb' }).getByRole('link', { name: EXPERIMENT_ID }).click()
+    await expect(page).toHaveURL(`/experiments/${EXPERIMENT_ID}`)
   })
 
-  test('RunCompare breadcrumbs show Dashboard / batchId / Compare', async ({ page }) => {
+  test('RunCompare breadcrumbs show Dashboard / experimentId / Compare', async ({ page }) => {
     await mockApi(page)
-    await page.goto(`/batches/${BATCH_ID}/compare?a=run-001-aaa&b=run-002-bbb`)
+    await page.goto(`/experiments/${EXPERIMENT_ID}/compare?a=run-001-aaa&b=run-002-bbb`)
     const nav = page.getByRole('navigation', { name: 'Breadcrumb' })
     await expect(nav.getByRole('link', { name: 'Dashboard' })).toBeVisible()
-    await expect(nav.getByRole('link', { name: BATCH_ID })).toBeVisible()
+    await expect(nav.getByRole('link', { name: EXPERIMENT_ID })).toBeVisible()
     await expect(nav.getByText('Compare')).toBeVisible()
   })
 
   test('Breadcrumbs use slash separator between items', async ({ page }) => {
     await mockApi(page)
-    await page.goto(`/batches/${BATCH_ID}/runs/${RUN_ID}`)
+    await page.goto(`/experiments/${EXPERIMENT_ID}/runs/${RUN_ID}`)
     const nav = page.getByRole('navigation', { name: 'Breadcrumb' })
     // Separators are "/" spans
     const separators = nav.locator('span').filter({ hasText: '/' })
@@ -227,7 +227,7 @@ test.describe('Breadcrumbs rendering and navigation', () => {
 
   test('last breadcrumb item has bold/prominent styling (not a link)', async ({ page }) => {
     await mockApi(page)
-    await page.goto(`/batches/${BATCH_ID}/runs/${RUN_ID}`)
+    await page.goto(`/experiments/${EXPERIMENT_ID}/runs/${RUN_ID}`)
     const nav = page.getByRole('navigation', { name: 'Breadcrumb' })
     // Last crumb is a span with font-medium class, not an <a>
     const lastCrumb = nav.locator('span.font-medium').last()

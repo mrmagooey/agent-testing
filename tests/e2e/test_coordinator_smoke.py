@@ -1,11 +1,11 @@
 """Smoke Test Layer 3: Coordinator Smoke
 
-Integration tests that exercise the full batch lifecycle using FastAPI
+Integration tests that exercise the full experiment lifecycle using FastAPI
 TestClient. No Kubernetes required — worker execution is driven directly
 via ExperimentWorker.run() with FakeModelProvider injected.
 
 Lifecycle under test:
-    POST /batches → collect_results() → finalize_batch() → GET /batches/{id}/results
+    POST /experiments → collect_results() → finalize_experiment() → GET /experiments/{id}/results
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-from sec_review_framework.coordinator import BatchCoordinator, app
+from sec_review_framework.coordinator import ExperimentCoordinator, app
 from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
 from sec_review_framework.data.evaluation import (
     GroundTruthLabel,
@@ -158,7 +158,7 @@ def _make_fake_provider() -> FakeModelProvider:
 # Coordinator fixture
 # ---------------------------------------------------------------------------
 
-BATCH_ID = "smoke-batch-001"
+EXPERIMENT_ID = "smoke-experiment-001"
 DATASET_NAME = "smoke-dataset"
 DATASET_VERSION = "1.0.0"
 MODEL_ID = "fake-model"
@@ -167,7 +167,7 @@ MODEL_ID = "fake-model"
 def _minimal_matrix() -> ExperimentMatrix:
     """1 model × 1 strategy × with_tools only × no verification = 1 run."""
     return ExperimentMatrix(
-        batch_id=BATCH_ID,
+        experiment_id=EXPERIMENT_ID,
         dataset_name=DATASET_NAME,
         dataset_version=DATASET_VERSION,
         model_ids=[MODEL_ID],
@@ -213,11 +213,11 @@ def _run_async(coro):
 
 @pytest.fixture()
 def coordinator_instance(tmp_path: Path, storage_root: Path, cost_calculator: CostCalculator):
-    """Build and initialise a real BatchCoordinator with a temp SQLite DB."""
+    """Build and initialise a real ExperimentCoordinator with a temp SQLite DB."""
     db = Database(tmp_path / "test.db")
     _run_async(db.init())
 
-    coord = BatchCoordinator(
+    coord = ExperimentCoordinator(
         k8s_client=None,               # K8s disabled — no job creation
         storage_root=storage_root,
         concurrency_caps={},
@@ -232,7 +232,7 @@ def coordinator_instance(tmp_path: Path, storage_root: Path, cost_calculator: Co
 
 
 @pytest.fixture()
-def test_client(coordinator_instance: BatchCoordinator, datasets_dir: Path):
+def test_client(coordinator_instance: ExperimentCoordinator, datasets_dir: Path):
     """
     TestClient with the coordinator global patched.
 
@@ -253,11 +253,11 @@ def test_client(coordinator_instance: BatchCoordinator, datasets_dir: Path):
 
 
 # ---------------------------------------------------------------------------
-# Helper: run all workers for a submitted batch
+# Helper: run all workers for a submitted experiment
 # ---------------------------------------------------------------------------
 
-def _run_workers_for_batch(
-    coordinator_inst: BatchCoordinator,
+def _run_workers_for_experiment(
+    coordinator_inst: ExperimentCoordinator,
     datasets_dir: Path,
 ) -> None:
     """
@@ -273,7 +273,7 @@ def _run_workers_for_batch(
 
     for config_file in config_dir.glob("*.json"):
         run = ExperimentRun.model_validate_json(config_file.read_text())
-        output_dir = coordinator_inst.storage_root / "outputs" / run.batch_id / run.id
+        output_dir = coordinator_inst.storage_root / "outputs" / run.experiment_id / run.id
 
         fake_provider = _make_fake_provider()
 
@@ -290,34 +290,34 @@ def _run_workers_for_batch(
 # Tests
 # ===========================================================================
 
-class TestSmokeSubmitBatch:
-    """POST /batches returns 201 with batch_id and correct total_runs."""
+class TestSmokeSubmitExperiment:
+    """POST /experiments returns 201 with experiment_id and correct total_runs."""
 
-    def test_smoke_submit_batch(self, test_client: TestClient):
+    def test_smoke_submit_experiment(self, test_client: TestClient):
         matrix = _minimal_matrix()
         expected_runs = len(matrix.expand())  # 1
 
-        resp = test_client.post("/batches", json=matrix.model_dump())
+        resp = test_client.post("/experiments", json=matrix.model_dump())
         assert resp.status_code == 201, resp.text
 
         data = resp.json()
-        assert data["batch_id"] == BATCH_ID
+        assert data["experiment_id"] == EXPERIMENT_ID
         assert data["total_runs"] == expected_runs
 
 
-class TestSmokeBatchStatusAfterSubmit:
-    """After submitting, GET /batches/{id} reflects the correct total and all runs pending."""
+class TestSmokeExperimentStatusAfterSubmit:
+    """After submitting, GET /experiments/{id} reflects the correct total and all runs pending."""
 
-    def test_smoke_batch_status_after_submit(self, test_client: TestClient):
+    def test_smoke_experiment_status_after_submit(self, test_client: TestClient):
         matrix = _minimal_matrix()
-        post_resp = test_client.post("/batches", json=matrix.model_dump())
+        post_resp = test_client.post("/experiments", json=matrix.model_dump())
         assert post_resp.status_code == 201
 
-        get_resp = test_client.get(f"/batches/{BATCH_ID}")
+        get_resp = test_client.get(f"/experiments/{EXPERIMENT_ID}")
         assert get_resp.status_code == 200, get_resp.text
 
         status = get_resp.json()
-        assert status["batch_id"] == BATCH_ID
+        assert status["experiment_id"] == EXPERIMENT_ID
         assert status["total_runs"] == 1
         assert status["completed_runs"] == 0
         assert status["failed_runs"] == 0
@@ -332,70 +332,70 @@ class TestSmokeRunWorkerAndCollect:
     def test_smoke_run_worker_and_collect(
         self,
         test_client: TestClient,
-        coordinator_instance: BatchCoordinator,
+        coordinator_instance: ExperimentCoordinator,
         datasets_dir: Path,
     ):
         matrix = _minimal_matrix()
-        resp = test_client.post("/batches", json=matrix.model_dump())
+        resp = test_client.post("/experiments", json=matrix.model_dump())
         assert resp.status_code == 201
 
-        _run_workers_for_batch(coordinator_instance, datasets_dir)
+        _run_workers_for_experiment(coordinator_instance, datasets_dir)
 
-        results = coordinator_instance.collect_results(BATCH_ID)
+        results = coordinator_instance.collect_results(EXPERIMENT_ID)
         assert len(results) == 1, f"Expected 1 result, got {len(results)}"
         result = results[0]
-        assert result.experiment.batch_id == BATCH_ID
+        assert result.experiment.experiment_id == EXPERIMENT_ID
         assert result.experiment.model_id == MODEL_ID
 
 
 class TestSmokeFinalizeGeneratesReports:
-    """After collecting results, finalize_batch() writes both matrix report files."""
+    """After collecting results, finalize_experiment() writes both matrix report files."""
 
     def test_smoke_finalize_generates_reports(
         self,
         test_client: TestClient,
-        coordinator_instance: BatchCoordinator,
+        coordinator_instance: ExperimentCoordinator,
         datasets_dir: Path,
     ):
         matrix = _minimal_matrix()
-        resp = test_client.post("/batches", json=matrix.model_dump())
+        resp = test_client.post("/experiments", json=matrix.model_dump())
         assert resp.status_code == 201
 
-        _run_workers_for_batch(coordinator_instance, datasets_dir)
+        _run_workers_for_experiment(coordinator_instance, datasets_dir)
 
-        _run_async(coordinator_instance.finalize_batch(BATCH_ID))
+        _run_async(coordinator_instance.finalize_experiment(EXPERIMENT_ID))
 
-        output_dir = coordinator_instance.storage_root / "outputs" / BATCH_ID
+        output_dir = coordinator_instance.storage_root / "outputs" / EXPERIMENT_ID
         assert (output_dir / "matrix_report.md").exists(), "matrix_report.md not found"
         assert (output_dir / "matrix_report.json").exists(), "matrix_report.json not found"
 
         # Basic content checks
         md_content = (output_dir / "matrix_report.md").read_text()
-        assert BATCH_ID in md_content
+        assert EXPERIMENT_ID in md_content
 
         json_content = json.loads((output_dir / "matrix_report.json").read_text())
-        assert json_content["batch_id"] == BATCH_ID
+        assert json_content["experiment_id"] == EXPERIMENT_ID
         assert "runs" in json_content
         assert len(json_content["runs"]) == 1
 
 
 class TestSmokeResultsEndpoint:
-    """After finalization, GET /batches/{id}/results returns JSON with a runs array."""
+    """After finalization, GET /experiments/{id}/results returns JSON with a runs array."""
 
     def test_smoke_results_endpoint(
         self,
         test_client: TestClient,
-        coordinator_instance: BatchCoordinator,
+        coordinator_instance: ExperimentCoordinator,
         datasets_dir: Path,
     ):
         matrix = _minimal_matrix()
-        resp = test_client.post("/batches", json=matrix.model_dump())
+        resp = test_client.post("/experiments", json=matrix.model_dump())
         assert resp.status_code == 201
 
-        _run_workers_for_batch(coordinator_instance, datasets_dir)
-        _run_async(coordinator_instance.finalize_batch(BATCH_ID))
+        _run_workers_for_experiment(coordinator_instance, datasets_dir)
+        _run_async(coordinator_instance.finalize_experiment(EXPERIMENT_ID))
 
-        results_resp = test_client.get(f"/batches/{BATCH_ID}/results")
+        results_resp = test_client.get(f"/experiments/{EXPERIMENT_ID}/results")
         assert results_resp.status_code == 200, results_resp.text
 
         data = results_resp.json()
@@ -413,36 +413,36 @@ class TestSmokeFullLifecycle:
     def test_smoke_full_lifecycle(
         self,
         test_client: TestClient,
-        coordinator_instance: BatchCoordinator,
+        coordinator_instance: ExperimentCoordinator,
         datasets_dir: Path,
     ):
         # --- 1. Submit ---
         matrix = _minimal_matrix()
-        post_resp = test_client.post("/batches", json=matrix.model_dump())
+        post_resp = test_client.post("/experiments", json=matrix.model_dump())
         assert post_resp.status_code == 201
-        batch_id = post_resp.json()["batch_id"]
+        experiment_id = post_resp.json()["experiment_id"]
         total_runs = post_resp.json()["total_runs"]
-        assert batch_id == BATCH_ID
+        assert experiment_id == EXPERIMENT_ID
         assert total_runs == 1
 
         # --- 2. Run workers (K8s substituted by direct worker invocation) ---
-        _run_workers_for_batch(coordinator_instance, datasets_dir)
+        _run_workers_for_experiment(coordinator_instance, datasets_dir)
 
         # Verify result files exist on disk before finalizing
-        results = coordinator_instance.collect_results(batch_id)
+        results = coordinator_instance.collect_results(experiment_id)
         assert len(results) == 1
 
         # --- 3. Finalize ---
-        _run_async(coordinator_instance.finalize_batch(batch_id))
+        _run_async(coordinator_instance.finalize_experiment(experiment_id))
 
-        # --- 4. GET /batches/{id}/results ---
-        results_resp = test_client.get(f"/batches/{batch_id}/results")
+        # --- 4. GET /experiments/{id}/results ---
+        results_resp = test_client.get(f"/experiments/{experiment_id}/results")
         assert results_resp.status_code == 200, results_resp.text
 
         data = results_resp.json()
 
         # Top-level structure
-        assert data["batch_id"] == batch_id
+        assert data["experiment_id"] == experiment_id
         assert "runs" in data
         assert isinstance(data["runs"], list)
         assert len(data["runs"]) == total_runs
@@ -463,8 +463,8 @@ class TestSmokeFullLifecycle:
             assert "recall" in metrics
             assert "f1" in metrics
 
-        # --- 5. GET /batches/{id}/runs lists individual runs ---
-        runs_resp = test_client.get(f"/batches/{batch_id}/runs")
+        # --- 5. GET /experiments/{id}/runs lists individual runs ---
+        runs_resp = test_client.get(f"/experiments/{experiment_id}/runs")
         assert runs_resp.status_code == 200
         runs_list = runs_resp.json()
         assert isinstance(runs_list, list)

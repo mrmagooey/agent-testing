@@ -12,7 +12,7 @@ async function waitForDatasetOptions(page: import('@playwright/test').Page) {
 
 test.beforeEach(async ({ page }) => {
   await mockApi(page)
-  await page.goto('/batches/new')
+  await page.goto('/experiments/new')
   await waitForDatasetOptions(page)
 })
 
@@ -37,7 +37,7 @@ test('selecting a dataset triggers an estimate refetch', async ({ page }) => {
 
   // Register the promise BEFORE the triggering action so we don't miss the request.
   const estimateRequestPromise = page.waitForRequest(
-    (req) => req.url().includes('/api/batches/estimate') && req.method() === 'POST',
+    (req) => req.url().includes('/api/experiments/estimate') && req.method() === 'POST',
     { timeout: 5000 }
   )
 
@@ -63,7 +63,7 @@ const MODELS = [
 for (const model of MODELS) {
   test(`model checkbox "${model}" can be toggled and triggers estimate refetch`, async ({ page }) => {
     const estimateRequestPromise = page.waitForRequest(
-      (req) => req.url().includes('/api/batches/estimate') && req.method() === 'POST'
+      (req) => req.url().includes('/api/experiments/estimate') && req.method() === 'POST'
     )
 
     const checkbox = page
@@ -91,7 +91,7 @@ const STRATEGIES = ['zero_shot', 'chain_of_thought', 'few_shot', 'agent']
 for (const strategy of STRATEGIES) {
   test(`strategy checkbox "${strategy}" can be toggled and triggers estimate refetch`, async ({ page }) => {
     const estimateRequestPromise = page.waitForRequest(
-      (req) => req.url().includes('/api/batches/estimate') && req.method() === 'POST'
+      (req) => req.url().includes('/api/experiments/estimate') && req.method() === 'POST'
     )
 
     const checkbox = page
@@ -244,7 +244,7 @@ test('selecting LSP tool extension triggers estimate refetch', async ({ page }) 
 
   // Register the promise BEFORE the triggering action so we don't miss the request.
   const estimateRequestPromise = page.waitForRequest(
-    (req) => req.url().includes('/api/batches/estimate') && req.method() === 'POST',
+    (req) => req.url().includes('/api/experiments/estimate') && req.method() === 'POST',
     { timeout: 5000 }
   )
 
@@ -278,9 +278,9 @@ test('spend cap input accepts value "20"', async ({ page }) => {
 })
 
 // ---------------------------------------------------------------------------
-// 8. Submit: fully valid form → navigates to /batches/<new-id>
+// 8. Submit: fully valid form → navigates to /experiments/<new-id>
 // ---------------------------------------------------------------------------
-test('complete valid form submission navigates to the new batch detail page', async ({ page }) => {
+test('complete valid form submission navigates to the new experiment detail page', async ({ page }) => {
   // Dataset
   await page.locator('select').first().selectOption('cve-2024-python')
 
@@ -304,15 +304,15 @@ test('complete valid form submission navigates to the new batch detail page', as
   await page.locator('input[type="number"][step="0.01"]').fill('20')
 
   // Click submit
-  await page.getByRole('button', { name: 'Submit Batch' }).click()
+  await page.getByRole('button', { name: 'Submit Experiment' }).click()
 
-  // Should navigate to the mocked batch id returned by POST /api/batches
-  await expect(page).toHaveURL(/\/batches\/newbatch-1111-1111-1111-111111111111/)
+  // Should navigate to the mocked experiment id returned by POST /api/experiments
+  await expect(page).toHaveURL(/\/experiments\/newexperiment-1111-1111-1111-111111111111/)
 })
 
-test('POST /api/batches is called with correct payload on valid submission', async ({ page }) => {
+test('POST /api/experiments is called with correct payload on valid submission', async ({ page }) => {
   const postPromise = page.waitForRequest(
-    (req) => req.url().includes('/api/batches') && req.method() === 'POST'
+    (req) => req.url().includes('/api/experiments') && req.method() === 'POST'
   )
 
   await page.locator('select').first().selectOption('cve-2024-python')
@@ -328,7 +328,7 @@ test('POST /api/batches is called with correct payload on valid submission', asy
     .locator('input[type="checkbox"]')
     .check()
 
-  await page.getByRole('button', { name: 'Submit Batch' }).click()
+  await page.getByRole('button', { name: 'Submit Experiment' }).click()
 
   const req = await postPromise
   const body = req.postDataJSON()
@@ -343,29 +343,29 @@ test('POST /api/batches is called with correct payload on valid submission', asy
 })
 
 // ---------------------------------------------------------------------------
-// 9. Submit with incomplete form: stays on /batches/new with error message
+// 9. Submit with incomplete form: stays on /experiments/new with error message
 // ---------------------------------------------------------------------------
-test('clicking submit with no dataset shows required-fields message and stays on /batches/new', async ({ page }) => {
+test('clicking submit with no dataset shows required-fields message and stays on /experiments/new', async ({ page }) => {
   // Do NOT select a dataset; click submit immediately
-  await page.getByRole('button', { name: 'Submit Batch' }).click()
+  await page.getByRole('button', { name: 'Submit Experiment' }).click()
 
   // Error message should appear
   await expect(page.getByText('Fill in all required fields above')).toBeVisible()
 
-  // URL should still be /batches/new
-  await expect(page).toHaveURL(/\/batches\/new$/)
+  // URL should still be /experiments/new
+  await expect(page).toHaveURL(/\/experiments\/new$/)
 })
 
 test('submit button is initially enabled before any interaction', async ({ page }) => {
-  const submitBtn = page.getByRole('button', { name: 'Submit Batch' })
+  const submitBtn = page.getByRole('button', { name: 'Submit Experiment' })
   await expect(submitBtn).toBeEnabled()
 })
 
 test('submit button becomes disabled after failed submit attempt with invalid form', async ({ page }) => {
   // Trigger a failed submit (no dataset selected)
-  await page.getByRole('button', { name: 'Submit Batch' }).click()
+  await page.getByRole('button', { name: 'Submit Experiment' }).click()
 
   // After submitAttempted=true and isValid=false, button should be disabled
-  const submitBtn = page.getByRole('button', { name: 'Submit Batch' })
+  const submitBtn = page.getByRole('button', { name: 'Submit Experiment' })
   await expect(submitBtn).toBeDisabled()
 })

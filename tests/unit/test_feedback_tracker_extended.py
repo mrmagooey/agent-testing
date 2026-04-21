@@ -1,4 +1,4 @@
-"""Extended unit tests for FeedbackTracker — empty batches, degenerate metrics, finding-identity stability."""
+"""Extended unit tests for FeedbackTracker — empty experiments, degenerate metrics, finding-identity stability."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from sec_review_framework.data.experiment import (
     VerificationVariant,
 )
 from sec_review_framework.data.findings import Finding, Severity, VulnClass
-from sec_review_framework.feedback.tracker import BatchComparison, FeedbackTracker, _experiment_key
+from sec_review_framework.feedback.tracker import ExperimentComparison, FeedbackTracker, _experiment_key
 
 
 # ---------------------------------------------------------------------------
@@ -26,7 +26,7 @@ from sec_review_framework.feedback.tracker import BatchComparison, FeedbackTrack
 
 
 def _make_run(
-    batch_id: str = "batch-a",
+    experiment_id: str = "experiment-a",
     model_id: str = "gpt-4o",
     strategy: StrategyName = StrategyName.SINGLE_AGENT,
     findings: list | None = None,
@@ -37,8 +37,8 @@ def _make_run(
 ) -> MagicMock:
     run = MagicMock()
     run.experiment = ExperimentRun(
-        id=f"{batch_id}_{model_id}_{strategy.value}_with_tools_default_none",
-        batch_id=batch_id,
+        id=f"{experiment_id}_{model_id}_{strategy.value}_with_tools_default_none",
+        experiment_id=experiment_id,
         model_id=model_id,
         strategy=strategy,
         tool_variant=ToolVariant.WITH_TOOLS,
@@ -83,48 +83,48 @@ def _make_finding(
 
 
 # ---------------------------------------------------------------------------
-# Empty batch tests
+# Empty experiment tests
 # ---------------------------------------------------------------------------
 
 
-class TestEmptyBatches:
-    def test_both_batches_empty_returns_valid_comparison(self):
+class TestEmptyExperiments:
+    def test_both_experiments_empty_returns_valid_comparison(self):
         tracker = FeedbackTracker()
-        comparison = tracker.compare_batches([], [])
-        assert isinstance(comparison, BatchComparison)
+        comparison = tracker.compare_experiments([], [])
+        assert isinstance(comparison, ExperimentComparison)
         assert comparison.metric_deltas == {}
         assert comparison.improvements == []
         assert comparison.regressions == []
         assert comparison.persistent_false_positives == []
         assert isinstance(comparison.finding_stability, dict)
 
-    def test_batch_a_empty_batch_b_has_results(self):
+    def test_experiment_a_empty_experiment_b_has_results(self):
         tracker = FeedbackTracker()
-        r_b = _make_run("batch-b")
-        comparison = tracker.compare_batches([], [r_b])
+        r_b = _make_run("experiment-b")
+        comparison = tracker.compare_experiments([], [r_b])
         # No shared keys → no deltas
         assert comparison.metric_deltas == {}
-        assert comparison.batch_b_id == "batch-b"
+        assert comparison.experiment_b_id == "experiment-b"
 
-    def test_batch_b_empty_batch_a_has_results(self):
+    def test_experiment_b_empty_experiment_a_has_results(self):
         tracker = FeedbackTracker()
-        r_a = _make_run("batch-a")
-        comparison = tracker.compare_batches([r_a], [])
+        r_a = _make_run("experiment-a")
+        comparison = tracker.compare_experiments([r_a], [])
         assert comparison.metric_deltas == {}
-        assert comparison.batch_a_id == "batch-a"
+        assert comparison.experiment_a_id == "experiment-a"
 
     def test_extract_fp_patterns_empty_returns_empty(self):
         tracker = FeedbackTracker()
         patterns = tracker.extract_fp_patterns([])
         assert patterns == []
 
-    def test_compare_batches_no_findings_no_crash(self):
+    def test_compare_experiments_no_findings_no_crash(self):
         """Runs with no findings at all should not crash."""
-        r_a = _make_run("batch-a", findings=[])
-        r_b = _make_run("batch-b", findings=[])
+        r_a = _make_run("experiment-a", findings=[])
+        r_b = _make_run("experiment-b", findings=[])
         tracker = FeedbackTracker()
-        comparison = tracker.compare_batches([r_a], [r_b])
-        assert isinstance(comparison, BatchComparison)
+        comparison = tracker.compare_experiments([r_a], [r_b])
+        assert isinstance(comparison, ExperimentComparison)
 
 
 # ---------------------------------------------------------------------------
@@ -135,46 +135,46 @@ class TestEmptyBatches:
 class TestDegenerateMetrics:
     def test_none_precision_handled_gracefully(self):
         """Runs where evaluation.precision is None should not raise."""
-        r_a = _make_run("batch-a", precision=None, recall=None, f1=None)
-        r_b = _make_run("batch-b", precision=None, recall=None, f1=None)
+        r_a = _make_run("experiment-a", precision=None, recall=None, f1=None)
+        r_b = _make_run("experiment-b", precision=None, recall=None, f1=None)
         tracker = FeedbackTracker()
-        comparison = tracker.compare_batches([r_a], [r_b])
+        comparison = tracker.compare_experiments([r_a], [r_b])
         # Should have a delta entry but with 0.0 deltas (None → 0.0 fallback)
         assert isinstance(comparison.metric_deltas, dict)
 
     def test_zero_metrics_no_improvement_or_regression(self):
-        r_a = _make_run("batch-a", precision=0.0, recall=0.0, f1=0.0)
-        r_b = _make_run("batch-b", precision=0.0, recall=0.0, f1=0.0)
+        r_a = _make_run("experiment-a", precision=0.0, recall=0.0, f1=0.0)
+        r_b = _make_run("experiment-b", precision=0.0, recall=0.0, f1=0.0)
         tracker = FeedbackTracker()
-        comparison = tracker.compare_batches([r_a], [r_b])
+        comparison = tracker.compare_experiments([r_a], [r_b])
         assert comparison.improvements == []
         assert comparison.regressions == []
 
     def test_regression_detected(self):
-        r_a = _make_run("batch-a", f1=0.9)
-        r_b = _make_run("batch-b", f1=0.5)
+        r_a = _make_run("experiment-a", f1=0.9)
+        r_b = _make_run("experiment-b", f1=0.5)
         tracker = FeedbackTracker()
-        comparison = tracker.compare_batches([r_a], [r_b])
+        comparison = tracker.compare_experiments([r_a], [r_b])
         assert len(comparison.regressions) > 0
         assert comparison.regressions[0]["f1_delta"] < 0
 
     def test_improvement_detected(self):
-        r_a = _make_run("batch-a", f1=0.3)
-        r_b = _make_run("batch-b", f1=0.9)
+        r_a = _make_run("experiment-a", f1=0.3)
+        r_b = _make_run("experiment-b", f1=0.9)
         tracker = FeedbackTracker()
-        comparison = tracker.compare_batches([r_a], [r_b])
+        comparison = tracker.compare_experiments([r_a], [r_b])
         assert len(comparison.improvements) > 0
         assert comparison.improvements[0]["f1_delta"] > 0
 
     def test_none_evaluation_no_delta_computed(self):
         """When run.evaluation is None, no metric delta should be computed for that run."""
-        r_a = _make_run("batch-a")
+        r_a = _make_run("experiment-a")
         r_a.evaluation = None
-        r_b = _make_run("batch-b")
+        r_b = _make_run("experiment-b")
         r_b.evaluation = None
 
         tracker = FeedbackTracker()
-        comparison = tracker.compare_batches([r_a], [r_b])
+        comparison = tracker.compare_experiments([r_a], [r_b])
         # No evaluation → no metric_deltas entry
         assert comparison.metric_deltas == {}
 
@@ -188,28 +188,28 @@ class TestFindingIdentityStability:
     def test_stability_of_1_when_finding_appears_in_all_b_runs(self):
         """If same identity appears in every B run, stability should be 1.0."""
         finding = _make_finding("f-1")
-        r_b1 = _make_run("batch-b", findings=[finding])
-        r_b2 = _make_run("batch-b", model_id="claude-opus-4", findings=[finding])
+        r_b1 = _make_run("experiment-b", findings=[finding])
+        r_b2 = _make_run("experiment-b", model_id="claude-opus-4", findings=[finding])
 
         tracker = FeedbackTracker()
-        comparison = tracker.compare_batches([], [r_b1, r_b2])
+        comparison = tracker.compare_experiments([], [r_b1, r_b2])
 
         # Finding appears in 2/2 B runs — stability should be 1.0
         for stability_val in comparison.finding_stability.values():
             assert 0.0 <= stability_val <= 1.0
 
-    def test_stability_empty_batch_b_is_empty_dict(self):
+    def test_stability_empty_experiment_b_is_empty_dict(self):
         tracker = FeedbackTracker()
-        comparison = tracker.compare_batches([], [])
+        comparison = tracker.compare_experiments([], [])
         assert comparison.finding_stability == {}
 
     def test_stability_values_are_fractions_0_to_1(self):
         """All stability values must be in [0.0, 1.0]."""
         findings = [_make_finding(f"f-{i}", line_start=i * 10) for i in range(5)]
-        runs = [_make_run("batch-b", model_id=f"model-{i}", findings=[findings[i]]) for i in range(5)]
+        runs = [_make_run("experiment-b", model_id=f"model-{i}", findings=[findings[i]]) for i in range(5)]
 
         tracker = FeedbackTracker()
-        comparison = tracker.compare_batches([], runs)
+        comparison = tracker.compare_experiments([], runs)
 
         for val in comparison.finding_stability.values():
             assert 0.0 <= val <= 1.0
@@ -219,11 +219,11 @@ class TestFindingIdentityStability:
         finding = _make_finding("f-a", file_path="app.py", line_start=100)
         finding_copy = _make_finding("f-b", file_path="app.py", line_start=100)
 
-        r_b1 = _make_run("batch-b", model_id="gpt-4o", findings=[finding])
-        r_b2 = _make_run("batch-b", model_id="gpt-4o", findings=[finding_copy])
+        r_b1 = _make_run("experiment-b", model_id="gpt-4o", findings=[finding])
+        r_b2 = _make_run("experiment-b", model_id="gpt-4o", findings=[finding_copy])
 
         tracker = FeedbackTracker()
-        comparison = tracker.compare_batches([], [r_b1, r_b2])
+        comparison = tracker.compare_experiments([], [r_b1, r_b2])
 
         assert len(comparison.finding_stability) >= 1
         max_stability = max(comparison.finding_stability.values())
@@ -239,7 +239,7 @@ class TestExtractFPPatterns:
     def test_single_finding_per_run_no_pattern(self):
         """A finding appearing once in one run is not a recurring pattern."""
         finding = _make_finding("f-1")
-        r = _make_run("batch-a", findings=[finding])
+        r = _make_run("experiment-a", findings=[finding])
         tracker = FeedbackTracker()
         patterns = tracker.extract_fp_patterns([r])
         # Only one occurrence — no pattern (requires >= 2)
@@ -250,8 +250,8 @@ class TestExtractFPPatterns:
         f1 = _make_finding("f-a", file_path="app.py", line_start=42)
         f2 = _make_finding("f-b", file_path="app.py", line_start=42)  # same identity
 
-        r1 = _make_run("batch-x", model_id="gpt-4o", findings=[f1])
-        r2 = _make_run("batch-x", model_id="gpt-4o", findings=[f2])
+        r1 = _make_run("experiment-x", model_id="gpt-4o", findings=[f1])
+        r2 = _make_run("experiment-x", model_id="gpt-4o", findings=[f2])
 
         tracker = FeedbackTracker()
         patterns = tracker.extract_fp_patterns([r1, r2])
@@ -263,8 +263,8 @@ class TestExtractFPPatterns:
         f = _make_finding("f-a", file_path="app.py", line_start=42)
         f2 = _make_finding("f-b", file_path="app.py", line_start=42)
 
-        r1 = _make_run("batch-x", model_id="gpt-4o", findings=[f])
-        r2 = _make_run("batch-x", model_id="gpt-4o", findings=[f2])
+        r1 = _make_run("experiment-x", model_id="gpt-4o", findings=[f])
+        r2 = _make_run("experiment-x", model_id="gpt-4o", findings=[f2])
 
         tracker = FeedbackTracker()
         patterns = tracker.extract_fp_patterns([r1, r2])
@@ -277,10 +277,10 @@ class TestExtractFPPatterns:
         f1 = _make_finding("f-a", file_path="app.py", line_start=10)
         f2 = _make_finding("f-b", file_path="app.py", line_start=10)
 
-        r_gpt_1 = _make_run("batch-x", model_id="gpt-4o", findings=[f1])
-        r_gpt_2 = _make_run("batch-x", model_id="gpt-4o", findings=[f2])
-        r_claude_1 = _make_run("batch-x", model_id="claude-opus-4", findings=[f1])
-        r_claude_2 = _make_run("batch-x", model_id="claude-opus-4", findings=[f2])
+        r_gpt_1 = _make_run("experiment-x", model_id="gpt-4o", findings=[f1])
+        r_gpt_2 = _make_run("experiment-x", model_id="gpt-4o", findings=[f2])
+        r_claude_1 = _make_run("experiment-x", model_id="claude-opus-4", findings=[f1])
+        r_claude_2 = _make_run("experiment-x", model_id="claude-opus-4", findings=[f2])
 
         tracker = FeedbackTracker()
         patterns = tracker.extract_fp_patterns([r_gpt_1, r_gpt_2, r_claude_1, r_claude_2])
@@ -290,7 +290,7 @@ class TestExtractFPPatterns:
         assert "claude-opus-4" in model_ids
 
     def test_multiple_runs_no_findings_no_pattern(self):
-        runs = [_make_run("batch-x", model_id=f"model-{i}", findings=[]) for i in range(10)]
+        runs = [_make_run("experiment-x", model_id=f"model-{i}", findings=[]) for i in range(10)]
         tracker = FeedbackTracker()
         patterns = tracker.extract_fp_patterns(runs)
         assert patterns == []
@@ -338,18 +338,18 @@ class TestExperimentKeyExtensions:
         # But the full keys differ
         assert key_no_ext != key_with_ext
 
-    def test_compare_batches_different_extensions_do_not_merge(self):
-        """Runs with different extensions are not compared across batches."""
-        r_a = _make_run("batch-a", tool_extensions=frozenset({ToolExtension.LSP}))
-        r_b = _make_run("batch-b", tool_extensions=frozenset({ToolExtension.DEVDOCS}))
+    def test_compare_experiments_different_extensions_do_not_merge(self):
+        """Runs with different extensions are not compared across experiments."""
+        r_a = _make_run("experiment-a", tool_extensions=frozenset({ToolExtension.LSP}))
+        r_b = _make_run("experiment-b", tool_extensions=frozenset({ToolExtension.DEVDOCS}))
         tracker = FeedbackTracker()
-        comparison = tracker.compare_batches([r_a], [r_b])
+        comparison = tracker.compare_experiments([r_a], [r_b])
         assert comparison.metric_deltas == {}
 
-    def test_compare_batches_same_extensions_merge(self):
-        """Runs with identical extensions are matched across batches."""
-        r_a = _make_run("batch-a", tool_extensions=frozenset({ToolExtension.LSP}))
-        r_b = _make_run("batch-b", tool_extensions=frozenset({ToolExtension.LSP}))
+    def test_compare_experiments_same_extensions_merge(self):
+        """Runs with identical extensions are matched across experiments."""
+        r_a = _make_run("experiment-a", tool_extensions=frozenset({ToolExtension.LSP}))
+        r_b = _make_run("experiment-b", tool_extensions=frozenset({ToolExtension.LSP}))
         tracker = FeedbackTracker()
-        comparison = tracker.compare_batches([r_a], [r_b])
+        comparison = tracker.compare_experiments([r_a], [r_b])
         assert len(comparison.metric_deltas) == 1

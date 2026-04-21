@@ -66,7 +66,7 @@ class ExperimentRun(BaseModel):
     """One cell in the experiment matrix."""
 
     id: str
-    batch_id: str
+    experiment_id: str
     model_id: str
     strategy: StrategyName
     tool_variant: ToolVariant
@@ -124,7 +124,7 @@ class RunResult(BaseModel):
 class ExperimentMatrix(BaseModel):
     """Defines the cartesian product of experiment dimensions."""
 
-    batch_id: str
+    experiment_id: str
     dataset_name: str
     dataset_version: str
 
@@ -166,7 +166,7 @@ class ExperimentMatrix(BaseModel):
     model_configs: dict[str, dict] = {}
 
     num_repetitions: int = 1
-    max_batch_cost_usd: float | None = None
+    max_experiment_cost_usd: float | None = None
     verifier_model_id: str | None = None
 
     @classmethod
@@ -204,14 +204,14 @@ class ExperimentMatrix(BaseModel):
                                         # contain "/" which leaks into filesystem paths.
                                         safe_model_id = model_id.replace("/", "--")
                                         run_id = (
-                                            f"{self.batch_id}_{safe_model_id}_{strategy.value}"
+                                            f"{self.experiment_id}_{safe_model_id}_{strategy.value}"
                                             f"_{tool_variant.value}_{profile.value}_{verif.value}"
                                             f"{rep_suffix}{ext_suffix}"
                                         )
                                         runs.append(
                                             ExperimentRun(
                                                 id=run_id,
-                                                batch_id=self.batch_id,
+                                                experiment_id=self.experiment_id,
                                                 model_id=model_id,
                                                 strategy=strategy,
                                                 tool_variant=tool_variant,
@@ -230,10 +230,10 @@ class ExperimentMatrix(BaseModel):
         return runs
 
 
-class BatchStatus(BaseModel):
-    """Current status of a batch."""
+class ExperimentStatus(BaseModel):
+    """Current status of an experiment."""
 
-    batch_id: str
+    experiment_id: str
     total: int
     completed: int
     failed: int

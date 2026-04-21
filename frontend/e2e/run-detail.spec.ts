@@ -1,12 +1,12 @@
 import { test, expect } from '@playwright/test'
 import { mockApi } from './helpers/mockApi'
 
-const BATCH_ID = 'aaaaaaaa-0001-0001-0001-000000000001'
+const EXPERIMENT_ID = 'aaaaaaaa-0001-0001-0001-000000000001'
 const RUN_ID = 'run-001-aaa'
 
 test.beforeEach(async ({ page }) => {
   await mockApi(page)
-  await page.goto(`/batches/${BATCH_ID}/runs/${RUN_ID}`)
+  await page.goto(`/experiments/${EXPERIMENT_ID}/runs/${RUN_ID}`)
 })
 
 test('shows experiment id in header', async ({ page }) => {

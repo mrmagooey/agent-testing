@@ -1,4 +1,4 @@
-"""Feedback tracker for cross-batch comparison and false positive pattern detection."""
+"""Feedback tracker for cross-experiment comparison and false positive pattern detection."""
 
 from dataclasses import dataclass, field
 
@@ -16,9 +16,9 @@ class FalsePositivePattern:
 
 
 @dataclass
-class BatchComparison:
-    batch_a_id: str
-    batch_b_id: str
+class ExperimentComparison:
+    experiment_a_id: str
+    experiment_b_id: str
     metric_deltas: dict[str, dict]          # experiment_key → {precision, recall, f1 deltas}
     persistent_false_positives: list[FalsePositivePattern]
     persistent_misses: list[dict]
@@ -28,7 +28,7 @@ class BatchComparison:
 
 
 def _experiment_key(result) -> tuple:
-    """Stable key for matching runs across batches."""
+    """Stable key for matching runs across experiments."""
     exp = result.experiment
     ext_tuple = tuple(sorted(e.value for e in (exp.tool_extensions or frozenset())))
     return (exp.model_id, exp.strategy.value, exp.tool_variant.value, ext_tuple)
@@ -47,26 +47,26 @@ def _finding_identities(result) -> set[str]:
 
 class FeedbackTracker:
     """
-    Compares results across batches to surface patterns in model behavior.
+    Compares results across experiments to surface patterns in model behavior.
     Produces a structured comparison that the team reviews to refine
     prompts, profiles, and strategies.
     """
 
-    def compare_batches(
+    def compare_experiments(
         self,
-        batch_a_results: list,
-        batch_b_results: list,
-    ) -> BatchComparison:
-        batch_a_id = batch_a_results[0].experiment.batch_id if batch_a_results else "batch_a"
-        batch_b_id = batch_b_results[0].experiment.batch_id if batch_b_results else "batch_b"
+        experiment_a_results: list,
+        experiment_b_results: list,
+    ) -> ExperimentComparison:
+        experiment_a_id = experiment_a_results[0].experiment.experiment_id if experiment_a_results else "experiment_a"
+        experiment_b_id = experiment_b_results[0].experiment.experiment_id if experiment_b_results else "experiment_b"
 
         # Index by experiment key
         a_by_key: dict[tuple, list] = {}
-        for r in batch_a_results:
+        for r in experiment_a_results:
             a_by_key.setdefault(_experiment_key(r), []).append(r)
 
         b_by_key: dict[tuple, list] = {}
-        for r in batch_b_results:
+        for r in experiment_b_results:
             b_by_key.setdefault(_experiment_key(r), []).append(r)
 
         metric_deltas: dict[str, dict] = {}
@@ -74,7 +74,7 @@ class FeedbackTracker:
         regressions: list[dict] = []
         persistent_misses: list[dict] = []
 
-        # FP tracking across batches: {identity_str: {model_id: count_in_a, count_in_b}}
+        # FP tracking across experiments: {identity_str: {model_id: count_in_a, count_in_b}}
         fp_in_a: dict[str, set[str]] = {}  # identity → set of model_ids
         fp_in_b: dict[str, set[str]] = {}
 
@@ -84,7 +84,7 @@ class FeedbackTracker:
             ext_part = ("+".join(key[3]) if key[3] else "none")
             exp_label = f"{key[0]}/{key[1]}/{key[2]}/ext:{ext_part}"
 
-            # Use first result for each batch (repetition 0 or just the first)
+            # Use first result for each experiment (repetition 0 or just the first)
             r_a = a_by_key[key][0]
             r_b = b_by_key[key][0]
 
@@ -119,15 +119,15 @@ class FeedbackTracker:
                     fp_in_b[identity] = set()
                 fp_in_b[identity].add(model_id)
 
-        # Persistent misses: labels missed in both batches
+        # Persistent misses: labels missed in both experiments
         a_all_ids = set()
-        for r in batch_a_results:
+        for r in experiment_a_results:
             a_all_ids |= _finding_identities(r)
         b_all_ids = set()
-        for r in batch_b_results:
+        for r in experiment_b_results:
             b_all_ids |= _finding_identities(r)
 
-        # Build persistent false positives from patterns seen in both batches
+        # Build persistent false positives from patterns seen in both experiments
         persistent_fp_identities = set(fp_in_a.keys()) & set(fp_in_b.keys())
         # Group by (model_id, vuln_class) for pattern aggregation
         pattern_groups: dict[tuple, list[str]] = {}
@@ -148,23 +148,23 @@ class FeedbackTracker:
             persistent_false_positives.append(FalsePositivePattern(
                 model_id=model_id,
                 vuln_class=vuln_class,
-                pattern_description=f"{model_id} repeatedly produces {vuln_class_str} findings across batches",
+                pattern_description=f"{model_id} repeatedly produces {vuln_class_str} findings across experiments",
                 occurrence_count=len(identities),
                 example_finding_ids=identities[:3],
                 suggested_action=f"Add {vuln_class_str} exemption rules for {model_id} or refine its system prompt",
             ))
 
-        # Finding stability in batch_b: fraction of b runs each identity appears in
-        b_total = len(batch_b_results) or 1
+        # Finding stability in experiment_b: fraction of b runs each identity appears in
+        b_total = len(experiment_b_results) or 1
         identity_counts: dict[str, int] = {}
-        for r in batch_b_results:
+        for r in experiment_b_results:
             for identity in _finding_identities(r):
                 identity_counts[identity] = identity_counts.get(identity, 0) + 1
         finding_stability = {k: round(v / b_total, 4) for k, v in identity_counts.items()}
 
-        return BatchComparison(
-            batch_a_id=batch_a_id,
-            batch_b_id=batch_b_id,
+        return ExperimentComparison(
+            experiment_a_id=experiment_a_id,
+            experiment_b_id=experiment_b_id,
             metric_deltas=metric_deltas,
             persistent_false_positives=persistent_false_positives,
             persistent_misses=persistent_misses,
@@ -175,7 +175,7 @@ class FeedbackTracker:
 
     def extract_fp_patterns(self, results: list) -> list[FalsePositivePattern]:
         """
-        Across all runs in a batch, find recurring false positive patterns.
+        Across all runs in an experiment, find recurring false positive patterns.
         Returns patterns where the same (model_id, vuln_class, FindingIdentity)
         appears in multiple runs.
         """

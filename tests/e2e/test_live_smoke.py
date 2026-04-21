@@ -130,7 +130,7 @@ def live_dirs(tmp_path: Path):
 def live_run(live_dirs) -> ExperimentRun:
     return ExperimentRun(
         id="live-smoke_openrouter_single_agent_without_tools_default_none",
-        batch_id="live-smoke",
+        experiment_id="live-smoke",
         model_id=MODEL_ID,
         strategy=StrategyName.SINGLE_AGENT,
         tool_variant=ToolVariant.WITHOUT_TOOLS,

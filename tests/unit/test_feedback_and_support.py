@@ -34,12 +34,12 @@ from sec_review_framework.prompts.registry import PromptRegistry
 
 def _make_experiment_run(
     model_id: str = "gpt-4o",
-    batch_id: str = "batch-a",
+    experiment_id: str = "experiment-a",
     strategy: StrategyName = StrategyName.SINGLE_AGENT,
 ) -> ExperimentRun:
     return ExperimentRun(
-        id=f"{batch_id}_{model_id}_{strategy.value}_with_tools_default_none",
-        batch_id=batch_id,
+        id=f"{experiment_id}_{model_id}_{strategy.value}_with_tools_default_none",
+        experiment_id=experiment_id,
         model_id=model_id,
         strategy=strategy,
         tool_variant=ToolVariant.WITH_TOOLS,
@@ -74,7 +74,7 @@ def _make_finding(
 
 
 def _make_run_result(
-    batch_id: str = "batch-a",
+    experiment_id: str = "experiment-a",
     model_id: str = "gpt-4o",
     findings: list[Finding] | None = None,
     precision: float = 0.8,
@@ -83,7 +83,7 @@ def _make_run_result(
 ):
     """Build a minimal RunResult-like object using MagicMock to avoid DB deps."""
     run_result = MagicMock()
-    run_result.experiment = _make_experiment_run(model_id=model_id, batch_id=batch_id)
+    run_result.experiment = _make_experiment_run(model_id=model_id, experiment_id=experiment_id)
     run_result.findings = findings or []
     run_result.status = RunStatus.COMPLETED
 
@@ -102,13 +102,13 @@ def _make_run_result(
 
 
 class TestFeedbackTracker:
-    def test_compare_batches_computes_metric_deltas(self):
+    def test_compare_experiments_computes_metric_deltas(self):
         """metric_deltas dict is populated for shared experiment keys."""
-        r_a = _make_run_result("batch-a", precision=0.6, recall=0.5, f1=0.55)
-        r_b = _make_run_result("batch-b", precision=0.8, recall=0.7, f1=0.75)
+        r_a = _make_run_result("experiment-a", precision=0.6, recall=0.5, f1=0.55)
+        r_b = _make_run_result("experiment-b", precision=0.8, recall=0.7, f1=0.75)
 
         tracker = FeedbackTracker()
-        comparison = tracker.compare_batches([r_a], [r_b])
+        comparison = tracker.compare_experiments([r_a], [r_b])
 
         assert len(comparison.metric_deltas) > 0
         key = list(comparison.metric_deltas.keys())[0]
@@ -116,47 +116,47 @@ class TestFeedbackTracker:
         assert "precision" in delta
         assert "recall" in delta
         assert "f1" in delta
-        # F1 improved: batch_b > batch_a
+        # F1 improved: experiment_b > experiment_a
         assert delta["f1"] == pytest.approx(0.75 - 0.55, abs=0.01)
 
-    def test_compare_batches_improvements_detected(self):
+    def test_compare_experiments_improvements_detected(self):
         """Runs with positive delta_f1 appear in improvements list."""
-        r_a = _make_run_result("batch-a", f1=0.4)
-        r_b = _make_run_result("batch-b", f1=0.8)
+        r_a = _make_run_result("experiment-a", f1=0.4)
+        r_b = _make_run_result("experiment-b", f1=0.8)
 
         tracker = FeedbackTracker()
-        comparison = tracker.compare_batches([r_a], [r_b])
+        comparison = tracker.compare_experiments([r_a], [r_b])
 
         assert len(comparison.improvements) > 0
 
-    def test_compare_batches_finding_stability_computed(self):
+    def test_compare_experiments_finding_stability_computed(self):
         """finding_stability is a dict mapping identity strings to fractions."""
         finding = _make_finding()
-        r_b = _make_run_result("batch-b", findings=[finding])
+        r_b = _make_run_result("experiment-b", findings=[finding])
 
         tracker = FeedbackTracker()
-        comparison = tracker.compare_batches([], [r_b])
+        comparison = tracker.compare_experiments([], [r_b])
 
         assert isinstance(comparison.finding_stability, dict)
 
-    def test_compare_batches_persistent_fps_detected(self):
-        """Findings that appear in both batches are captured as persistent FPs."""
+    def test_compare_experiments_persistent_fps_detected(self):
+        """Findings that appear in both experiments are captured as persistent FPs."""
         finding = _make_finding(finding_id="fp-001", file_path="app/other.py", line_start=10)
 
-        # Same experiment key, same finding identity in both batches.
-        r_a = _make_run_result("batch-a", findings=[finding])
-        r_b = _make_run_result("batch-b", findings=[])  # finding absent in B → discordant
+        # Same experiment key, same finding identity in both experiments.
+        r_a = _make_run_result("experiment-a", findings=[finding])
+        r_b = _make_run_result("experiment-b", findings=[])  # finding absent in B → discordant
 
         tracker = FeedbackTracker()
-        comparison = tracker.compare_batches([r_a], [r_b])
+        comparison = tracker.compare_experiments([r_a], [r_b])
 
         # persistent_false_positives is a list (may be empty depending on logic).
         assert isinstance(comparison.persistent_false_positives, list)
 
-    def test_compare_batches_empty_inputs_no_crash(self):
-        """Empty batch lists must not raise any exceptions."""
+    def test_compare_experiments_empty_inputs_no_crash(self):
+        """Empty experiment lists must not raise any exceptions."""
         tracker = FeedbackTracker()
-        comparison = tracker.compare_batches([], [])
+        comparison = tracker.compare_experiments([], [])
         assert comparison.metric_deltas == {}
         assert comparison.persistent_false_positives == []
 
@@ -165,8 +165,8 @@ class TestFeedbackTracker:
         finding_a = _make_finding(finding_id="fp-a")
         finding_b = _make_finding(finding_id="fp-b")  # same identity as fp-a (same file+class+line)
 
-        r1 = _make_run_result("batch-x", findings=[finding_a])
-        r2 = _make_run_result("batch-x", findings=[finding_b])
+        r1 = _make_run_result("experiment-x", findings=[finding_a])
+        r2 = _make_run_result("experiment-x", findings=[finding_b])
 
         tracker = FeedbackTracker()
         patterns = tracker.extract_fp_patterns([r1, r2])

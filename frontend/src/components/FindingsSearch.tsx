@@ -2,13 +2,13 @@ import { useState, useRef } from 'react'
 import { searchFindings, type Finding } from '../api/client'
 
 export interface FindingsSearchProps {
-  batchId: string
+  experimentId: string
   onResults: (findings: Finding[]) => void
 }
 
 const DEBOUNCE_MS = 300
 
-export default function FindingsSearch({ batchId, onResults }: FindingsSearchProps) {
+export default function FindingsSearch({ experimentId, onResults }: FindingsSearchProps) {
   const [query, setQuery] = useState('')
   const [loading, setLoading] = useState(false)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -27,7 +27,7 @@ export default function FindingsSearch({ batchId, onResults }: FindingsSearchPro
     setLoading(true)
     timerRef.current = setTimeout(async () => {
       try {
-        const results = await searchFindings(batchId, value)
+        const results = await searchFindings(experimentId, value)
         onResults(results)
       } catch {
         onResults([])

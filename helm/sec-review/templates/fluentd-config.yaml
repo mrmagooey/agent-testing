@@ -33,7 +33,7 @@ data:
       flush_interval {{ .Values.fluentd.flushIntervalSeconds }}s
       <label>
         app $.kubernetes.labels.app
-        batch_id $.kubernetes.labels.batch_id
+        experiment_id $.kubernetes.labels.experiment_id
         run_id $.kubernetes.labels.run_id
       </label>
     </match>

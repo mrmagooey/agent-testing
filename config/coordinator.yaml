@@ -1,5 +1,5 @@
 retention:
-  retention_days: 30              # batches older than this are auto-deleted
+  retention_days: 30              # experiments older than this are auto-deleted
   cleanup_interval_hours: 1       # how often the cleanup loop runs
 
 jobs:

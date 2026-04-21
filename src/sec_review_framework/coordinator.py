@@ -43,7 +43,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError
 
 from sec_review_framework.data.experiment import (
-    BatchStatus,
+    ExperimentStatus,
     ExperimentMatrix,
     ReviewProfileName,
     RunResult,
@@ -91,18 +91,18 @@ except ImportError:
 # Spend cap enforcement
 # ---------------------------------------------------------------------------
 
-class BatchCostTracker:
-    """Tracks running spend per batch. Thread-safe."""
+class ExperimentCostTracker:
+    """Tracks running spend per experiment. Thread-safe."""
 
-    def __init__(self, batch_id: str, cap_usd: float | None):
-        self.batch_id = batch_id
+    def __init__(self, experiment_id: str, cap_usd: float | None):
+        self.experiment_id = experiment_id
         self.cap_usd = cap_usd
         self._spent = 0.0
         self._lock = threading.Lock()
         self._cancelled = False
 
     def record_job_cost(self, cost_usd: float) -> bool:
-        """Returns True if cap exceeded and batch should halt."""
+        """Returns True if cap exceeded and experiment should halt."""
         with self._lock:
             self._spent += cost_usd
             if self.cap_usd and not self._cancelled and self._spent >= self.cap_usd:
@@ -116,13 +116,13 @@ class BatchCostTracker:
 
 
 # ---------------------------------------------------------------------------
-# Batch coordinator
+# Experiment coordinator
 # ---------------------------------------------------------------------------
 
-class BatchCoordinator:
+class ExperimentCoordinator:
     """
-    Manages the lifecycle of an experiment batch:
-    1. Receives a batch submission (ExperimentMatrix + config)
+    Manages the lifecycle of an experiment:
+    1. Receives an experiment submission (ExperimentMatrix + config)
     2. Expands the matrix into ExperimentRuns
     3. Creates K8s Jobs, respecting per-model concurrency caps
     4. Monitors job completion, collects results from shared storage
@@ -162,27 +162,27 @@ class BatchCoordinator:
         self.llm_secret_name = llm_secret_name
         self.config_map_name = config_map_name
         self.worker_image_pull_policy = worker_image_pull_policy
-        self._cost_trackers: dict[str, BatchCostTracker] = {}
+        self._cost_trackers: dict[str, ExperimentCostTracker] = {}
         self._feedback_tracker = FeedbackTracker()
 
     # ------------------------------------------------------------------
-    # Batch lifecycle
+    # Experiment lifecycle
     # ------------------------------------------------------------------
 
-    async def submit_batch(self, matrix: ExperimentMatrix) -> str:
+    async def submit_experiment(self, matrix: ExperimentMatrix) -> str:
         runs = matrix.expand()
-        batch_id = matrix.batch_id
+        experiment_id = matrix.experiment_id
 
-        await self.db.create_batch(
-            batch_id=batch_id,
+        await self.db.create_experiment(
+            experiment_id=experiment_id,
             config_json=matrix.model_dump_json(),
             total_runs=len(runs),
-            max_cost_usd=matrix.max_batch_cost_usd,
+            max_cost_usd=matrix.max_experiment_cost_usd,
         )
         for run in runs:
             await self.db.create_run(
                 run_id=run.id,
-                batch_id=batch_id,
+                experiment_id=experiment_id,
                 config_json=run.model_dump_json(),
                 model_id=run.model_id,
                 strategy=run.strategy.value,
@@ -198,25 +198,25 @@ class BatchCoordinator:
         for run in runs:
             (config_dir / f"{run.id}.json").write_text(run.model_dump_json(indent=2))
 
-        self._cost_trackers[batch_id] = BatchCostTracker(
-            batch_id, matrix.max_batch_cost_usd
+        self._cost_trackers[experiment_id] = ExperimentCostTracker(
+            experiment_id, matrix.max_experiment_cost_usd
         )
 
         thread = threading.Thread(
-            target=self._schedule_jobs_in_thread, args=(batch_id, runs), daemon=True
+            target=self._schedule_jobs_in_thread, args=(experiment_id, runs), daemon=True
         )
         thread.start()
-        return batch_id
+        return experiment_id
 
-    def _schedule_jobs_in_thread(self, batch_id: str, runs: list) -> None:
+    def _schedule_jobs_in_thread(self, experiment_id: str, runs: list) -> None:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            loop.run_until_complete(self._schedule_jobs(batch_id, runs))
+            loop.run_until_complete(self._schedule_jobs(experiment_id, runs))
         finally:
             loop.close()
 
-    async def _schedule_jobs(self, batch_id: str, runs: list) -> None:
+    async def _schedule_jobs(self, experiment_id: str, runs: list) -> None:
         """
         Schedules K8s Jobs respecting per-model concurrency caps.
         Uses a polling loop: check running counts, schedule where under cap, sleep, repeat.
@@ -235,7 +235,7 @@ class BatchCoordinator:
                 current = running_by_model.get(run.model_id, 0)
                 if current < cap:
                     try:
-                        self._create_k8s_job(batch_id, run)
+                        self._create_k8s_job(experiment_id, run)
                         await self.db.update_run(run.id, status="running")
                         running_by_model[run.model_id] = current + 1
                         scheduled_this_round.append(run)
@@ -277,7 +277,7 @@ class BatchCoordinator:
         sanitized = re.sub(r"^[^a-z0-9]+|[^a-z0-9]+$", "", sanitized)
         return sanitized[:max_len] or "x"
 
-    def _create_k8s_job(self, batch_id: str, run) -> None:
+    def _create_k8s_job(self, experiment_id: str, run) -> None:
         if not K8S_AVAILABLE or self.k8s_client is None:
             logger.warning(f"K8s not available — skipping job creation for run {run.id}")
             return
@@ -361,14 +361,14 @@ class BatchCoordinator:
                 namespace=self.namespace,
                 labels={
                     "app": "sec-review-worker",
-                    "batch": self._k8s_safe(batch_id),
+                    "experiment": self._k8s_safe(experiment_id),
                     "model": self._k8s_safe(run.model_id),
                     "strategy": self._k8s_safe(run.strategy.value),
                     "run-hash": run_hash,
                 },
                 annotations={
                     "sec-review.io/run-id": run.id,
-                    "sec-review.io/batch-id": batch_id,
+                    "sec-review.io/experiment-id": experiment_id,
                 },
             ),
             spec=kubernetes.client.V1JobSpec(
@@ -385,7 +385,7 @@ class BatchCoordinator:
                                 command=[
                                     "python", "-m", "sec_review_framework.worker",
                                     "--run-config", f"/data/config/runs/{run.id}.json",
-                                    "--output-dir", f"/data/outputs/{batch_id}/{run.id}",
+                                    "--output-dir", f"/data/outputs/{experiment_id}/{run.id}",
                                     "--datasets-dir", "/data/datasets",
                                 ],
                                 env=[
@@ -414,15 +414,15 @@ class BatchCoordinator:
         )
         self.k8s_client.create_namespaced_job(self.namespace, job)
 
-    async def get_batch_status(self, batch_id: str) -> BatchStatus:
-        batch = await self.db.get_batch(batch_id)
-        if not batch:
-            raise HTTPException(status_code=404, detail=f"Batch {batch_id} not found")
-        counts = await self.db.count_runs_by_status(batch_id)
-        spend = await self.db.get_batch_spend(batch_id)
-        return BatchStatus(
-            batch_id=batch_id,
-            total=batch["total_runs"] or 0,
+    async def get_experiment_status(self, experiment_id: str) -> ExperimentStatus:
+        experiment = await self.db.get_experiment(experiment_id)
+        if not experiment:
+            raise HTTPException(status_code=404, detail=f"Experiment {experiment_id} not found")
+        counts = await self.db.count_runs_by_status(experiment_id)
+        spend = await self.db.get_experiment_spend(experiment_id)
+        return ExperimentStatus(
+            experiment_id=experiment_id,
+            total=experiment["total_runs"] or 0,
             completed=counts.get("completed", 0),
             failed=counts.get("failed", 0),
             running=counts.get("running", 0),
@@ -430,12 +430,12 @@ class BatchCoordinator:
             estimated_cost_so_far=spend,
         )
 
-    def collect_results(self, batch_id: str) -> list[RunResult]:
+    def collect_results(self, experiment_id: str) -> list[RunResult]:
         results = []
-        batch_dir = self.storage_root / "outputs" / batch_id
-        if not batch_dir.exists():
+        experiment_dir = self.storage_root / "outputs" / experiment_id
+        if not experiment_dir.exists():
             return results
-        for run_dir in batch_dir.iterdir():
+        for run_dir in experiment_dir.iterdir():
             if not run_dir.is_dir():
                 continue
             result_file = run_dir / "run_result.json"
@@ -450,10 +450,10 @@ class BatchCoordinator:
         outputs_dir = self.storage_root / "outputs"
         cells: dict[tuple[str, str], list[float]] = {}
         if outputs_dir.exists():
-            for batch_dir in outputs_dir.iterdir():
-                if not batch_dir.is_dir():
+            for experiment_dir in outputs_dir.iterdir():
+                if not experiment_dir.is_dir():
                     continue
-                for run_dir in batch_dir.iterdir():
+                for run_dir in experiment_dir.iterdir():
                     if not run_dir.is_dir():
                         continue
                     result_file = run_dir / "run_result.json"
@@ -487,22 +487,22 @@ class BatchCoordinator:
             "cells": cell_list,
         }
 
-    async def finalize_batch(self, batch_id: str) -> None:
-        results = self.collect_results(batch_id)
-        output_dir = self.storage_root / "outputs" / batch_id
+    async def finalize_experiment(self, experiment_id: str) -> None:
+        results = self.collect_results(experiment_id)
+        output_dir = self.storage_root / "outputs" / experiment_id
         output_dir.mkdir(parents=True, exist_ok=True)
         if results and self.reporter:
             self.reporter.render_matrix(results, output_dir)
-        await self.db.update_batch_status(
-            batch_id, "completed", completed_at=datetime.utcnow().isoformat()
+        await self.db.update_experiment_status(
+            experiment_id, "completed", completed_at=datetime.utcnow().isoformat()
         )
 
-    async def cancel_batch(self, batch_id: str) -> int:
+    async def cancel_experiment(self, experiment_id: str) -> int:
         cancelled = 0
         if K8S_AVAILABLE and self.k8s_client:
             try:
                 jobs = self.k8s_client.list_namespaced_job(
-                    self.namespace, label_selector=f"batch={batch_id}"
+                    self.namespace, label_selector=f"experiment={experiment_id}"
                 )
                 for job in jobs.items:
                     if not job.status.succeeded and not job.status.failed:
@@ -511,24 +511,24 @@ class BatchCoordinator:
                         )
                         cancelled += 1
             except Exception as e:
-                logger.error(f"Error cancelling K8s jobs for batch {batch_id}: {e}")
+                logger.error(f"Error cancelling K8s jobs for experiment {experiment_id}: {e}")
         # Flip any non-terminal runs to "cancelled" so status counts reflect the
-        # batch state. Runs that already completed/failed on disk keep their
+        # experiment state. Runs that already completed/failed on disk keep their
         # terminal status.
-        runs = await self.db.list_runs(batch_id)
+        runs = await self.db.list_runs(experiment_id)
         for run in runs:
             if run["status"] in ("pending", "running"):
                 await self.db.update_run(run["id"], status="cancelled")
-        await self.db.update_batch_status(batch_id, "cancelled")
+        await self.db.update_experiment_status(experiment_id, "cancelled")
         return cancelled
 
-    async def delete_batch(self, batch_id: str) -> None:
-        await self.cancel_batch(batch_id)
-        batch_dir = self.storage_root / "outputs" / batch_id
-        if batch_dir.exists():
-            shutil.rmtree(batch_dir, ignore_errors=True)
+    async def delete_experiment(self, experiment_id: str) -> None:
+        await self.cancel_experiment(experiment_id)
+        experiment_dir = self.storage_root / "outputs" / experiment_id
+        if experiment_dir.exists():
+            shutil.rmtree(experiment_dir, ignore_errors=True)
         config_dir = self.storage_root / "config" / "runs"
-        runs = await self.db.list_runs(batch_id)
+        runs = await self.db.list_runs(experiment_id)
         for run in runs:
             run_config = config_dir / f"{run['id']}.json"
             if run_config.exists():
@@ -540,21 +540,21 @@ class BatchCoordinator:
 
     async def reconcile(self) -> None:
         """
-        Called once at coordinator startup. Scans for batches in non-terminal
+        Called once at coordinator startup. Scans for experiments in non-terminal
         states, identifies runs that were never dispatched as K8s Jobs, and
         creates their Jobs. Idempotent — safe to call multiple times.
         """
-        batches = await self.db.list_batches()
-        active = [b for b in batches if b["status"] not in ("completed", "cancelled", "failed")]
+        experiments = await self.db.list_experiments()
+        active = [b for b in experiments if b["status"] not in ("completed", "cancelled", "failed")]
 
-        for batch in active:
-            batch_id = batch["id"]
+        for experiment in active:
+            experiment_id = experiment["id"]
             dispatched_run_ids: set[str] = set()
 
             if K8S_AVAILABLE and self.k8s_client:
                 try:
                     existing_jobs = self.k8s_client.list_namespaced_job(
-                        self.namespace, label_selector=f"batch={batch_id}"
+                        self.namespace, label_selector=f"experiment={experiment_id}"
                     )
                     dispatched_run_ids = {
                         job.metadata.labels.get("run-id")
@@ -562,9 +562,9 @@ class BatchCoordinator:
                         if job.metadata.labels
                     }
                 except Exception as e:
-                    logger.error(f"Error listing jobs for batch {batch_id}: {e}")
+                    logger.error(f"Error listing jobs for experiment {experiment_id}: {e}")
 
-            all_runs = await self.db.list_runs(batch_id)
+            all_runs = await self.db.list_runs(experiment_id)
             orphaned = [
                 r for r in all_runs
                 if r["status"] == "pending" and r["id"] not in dispatched_run_ids
@@ -572,27 +572,27 @@ class BatchCoordinator:
 
             if orphaned:
                 logger.warning(
-                    f"Batch {batch_id}: {len(orphaned)} orphaned runs — dispatching"
+                    f"Experiment {experiment_id}: {len(orphaned)} orphaned runs — dispatching"
                 )
                 config_dir = self.storage_root / "config" / "runs"
                 for run_data in orphaned:
                     run_config_path = config_dir / f"{run_data['id']}.json"
                     if not run_config_path.exists():
                         logger.warning(
-                            "Run %s has no config file — batch likely deleted; "
+                            "Run %s has no config file — experiment likely deleted; "
                             "marking failed",
                             run_data["id"],
                         )
                         await self.db.update_run(
                             run_data["id"],
                             status="failed",
-                            error="run config missing — batch likely deleted",
+                            error="run config missing — experiment likely deleted",
                         )
                         continue
                     from sec_review_framework.data.experiment import ExperimentRun
                     run = ExperimentRun.model_validate_json(run_config_path.read_text())
                     try:
-                        self._create_k8s_job(batch_id, run)
+                        self._create_k8s_job(experiment_id, run)
                     except Exception as e:
                         if (
                             K8S_AVAILABLE
@@ -604,10 +604,10 @@ class BatchCoordinator:
                         else:
                             logger.error(f"Failed to dispatch orphaned run {run.id}: {e}")
 
-            # Finalize any batch where all jobs are done
-            status = await self.get_batch_status(batch_id)
+            # Finalize any experiment where all jobs are done
+            status = await self.get_experiment_status(experiment_id)
             if status.running == 0 and status.pending == 0 and status.total > 0:
-                await self.finalize_batch(batch_id)
+                await self.finalize_experiment(experiment_id)
 
     # ------------------------------------------------------------------
     # Periodic reconcile loop (flips running → completed / failed)
@@ -619,9 +619,9 @@ class BatchCoordinator:
 
         1. Calls existing ``reconcile()`` so any orphaned-pending runs are
            re-dispatched (idempotent).
-        2. For every active batch, reads ``run_result.json`` for each
+        2. For every active experiment, reads ``run_result.json`` for each
            ``running`` run and updates the DB accordingly.
-        3. Finalises batches where running + pending == 0.
+        3. Finalises experiments where running + pending == 0.
 
         Safe to call multiple times; will not double-finalize.
         """
@@ -633,45 +633,45 @@ class BatchCoordinator:
 
         # Step 2: scan result files for running runs
         try:
-            batches = await self.db.list_batches()
+            experiments = await self.db.list_experiments()
         except Exception as exc:
-            logger.error("Failed to list batches in _reconcile_once: %s", exc)
+            logger.error("Failed to list experiments in _reconcile_once: %s", exc)
             return
 
         active = [
-            b for b in batches
+            b for b in experiments
             if b["status"] not in ("completed", "cancelled", "failed")
         ]
 
-        for batch in active:
-            batch_id = batch["id"]
+        for experiment in active:
+            experiment_id = experiment["id"]
             try:
-                await self._reconcile_batch_once(batch, batch_id)
+                await self._reconcile_experiment_once(experiment, experiment_id)
             except Exception as exc:
                 logger.error(
-                    "Unhandled error processing batch %s in _reconcile_once — skipping: %s",
-                    batch_id, exc,
+                    "Unhandled error processing experiment %s in _reconcile_once — skipping: %s",
+                    experiment_id, exc,
                 )
 
-    async def _reconcile_batch_once(self, batch: dict, batch_id: str) -> None:
-        """Process one batch within _reconcile_once.
+    async def _reconcile_experiment_once(self, experiment: dict, experiment_id: str) -> None:
+        """Process one experiment within _reconcile_once.
 
-        Extracted so that a transient DB error on one batch does not halt
-        processing of other batches — the caller catches any exception raised
-        here and continues to the next batch.
+        Extracted so that a transient DB error on one experiment does not halt
+        processing of other experiments — the caller catches any exception raised
+        here and continues to the next experiment.
         """
         # Re-check status in case another iteration already finalised it
-        fresh_batch = await self.db.get_batch(batch_id)
-        if not fresh_batch or fresh_batch["status"] in (
+        fresh_experiment = await self.db.get_experiment(experiment_id)
+        if not fresh_experiment or fresh_experiment["status"] in (
             "completed", "cancelled", "failed"
         ):
             return
 
         try:
-            runs = await self.db.list_runs(batch_id)
+            runs = await self.db.list_runs(experiment_id)
         except Exception as exc:
             logger.error(
-                "Failed to list runs for batch %s: %s", batch_id, exc
+                "Failed to list runs for experiment %s: %s", experiment_id, exc
             )
             return
 
@@ -681,7 +681,7 @@ class BatchCoordinator:
 
             run_id = run["id"]
             result_file = (
-                self.storage_root / "outputs" / batch_id / run_id / "run_result.json"
+                self.storage_root / "outputs" / experiment_id / run_id / "run_result.json"
             )
 
             if result_file.exists():
@@ -714,24 +714,24 @@ class BatchCoordinator:
                     estimated_cost_usd=result.estimated_cost_usd,
                 )
 
-                # Record cost against the batch — only if the run had no prior
+                # Record cost against the experiment — only if the run had no prior
                 # cost recorded (estimated_cost_usd was NULL or zero in DB).
                 prior_cost = run.get("estimated_cost_usd")
                 if (prior_cost is None or prior_cost == 0.0) and result.estimated_cost_usd:
-                    tracker = self._cost_trackers.get(batch_id)
+                    tracker = self._cost_trackers.get(experiment_id)
                     if tracker is None:
-                        # Coordinator restarted mid-batch; rebuild tracker from DB
-                        max_cost = batch.get("max_cost_usd")
-                        tracker = BatchCostTracker(batch_id, max_cost)
-                        self._cost_trackers[batch_id] = tracker
+                        # Coordinator restarted mid-experiment; rebuild tracker from DB
+                        max_cost = experiment.get("max_cost_usd")
+                        tracker = ExperimentCostTracker(experiment_id, max_cost)
+                        self._cost_trackers[experiment_id] = tracker
                     cap_exceeded = tracker.record_job_cost(result.estimated_cost_usd)
-                    await self.db.add_batch_spend(batch_id, result.estimated_cost_usd)
+                    await self.db.add_experiment_spend(experiment_id, result.estimated_cost_usd)
                     if cap_exceeded:
                         logger.warning(
-                            "Batch %s exceeded cost cap — cancelling", batch_id
+                            "Experiment %s exceeded cost cap — cancelling", experiment_id
                         )
-                        await self.cancel_batch(batch_id)
-                        break  # don't process more runs; batch is now cancelled
+                        await self.cancel_experiment(experiment_id)
+                        break  # don't process more runs; experiment is now cancelled
 
             else:
                 # No result file yet — check K8s Job status
@@ -739,7 +739,7 @@ class BatchCoordinator:
                     try:
                         jobs = self.k8s_client.list_namespaced_job(
                             self.namespace,
-                            label_selector=f"batch={batch_id}",
+                            label_selector=f"experiment={experiment_id}",
                         )
                         run_jobs = [
                             j for j in jobs.items
@@ -788,23 +788,23 @@ class BatchCoordinator:
                 # No K8s available — leave status as running until result appears
 
         # Step 3: finalise if all runs are done
-        # Re-check batch status (may have been cancelled above)
-        fresh_batch2 = await self.db.get_batch(batch_id)
-        if not fresh_batch2 or fresh_batch2["status"] in (
+        # Re-check experiment status (may have been cancelled above)
+        fresh_experiment2 = await self.db.get_experiment(experiment_id)
+        if not fresh_experiment2 or fresh_experiment2["status"] in (
             "completed", "cancelled", "failed"
         ):
             return
 
-        counts = await self.db.count_runs_by_status(batch_id)
+        counts = await self.db.count_runs_by_status(experiment_id)
         running_count = counts.get("running", 0)
         pending_count = counts.get("pending", 0)
-        total = fresh_batch2.get("total_runs") or 0
+        total = fresh_experiment2.get("total_runs") or 0
         if total > 0 and running_count == 0 and pending_count == 0:
-            logger.info("Batch %s complete — finalising", batch_id)
+            logger.info("Experiment %s complete — finalising", experiment_id)
             try:
-                await self.finalize_batch(batch_id)
+                await self.finalize_experiment(experiment_id)
             except Exception as exc:
-                logger.error("finalize_batch(%s) raised: %s", batch_id, exc)
+                logger.error("finalize_experiment(%s) raised: %s", experiment_id, exc)
 
     async def _check_stalled_job(self, run_id: str, job) -> None:
         """
@@ -904,9 +904,9 @@ class BatchCoordinator:
     # Result access
     # ------------------------------------------------------------------
 
-    async def _serialize_batch_summary(self, row: dict) -> dict:
-        batch_id = row["id"]
-        counts = await self.db.count_runs_by_status(batch_id)
+    async def _serialize_experiment_summary(self, row: dict) -> dict:
+        experiment_id = row["id"]
+        counts = await self.db.count_runs_by_status(experiment_id)
         dataset = ""
         try:
             config = json.loads(row.get("config_json") or "{}")
@@ -914,7 +914,7 @@ class BatchCoordinator:
         except (json.JSONDecodeError, TypeError):
             pass
         return {
-            "batch_id": batch_id,
+            "experiment_id": experiment_id,
             "status": row.get("status") or "pending",
             "dataset": dataset,
             "created_at": row.get("created_at") or "",
@@ -930,22 +930,22 @@ class BatchCoordinator:
             ),
         }
 
-    async def list_batches(self) -> list[dict]:
-        rows = await self.db.list_batches()
-        return [await self._serialize_batch_summary(r) for r in rows]
+    async def list_experiments(self) -> list[dict]:
+        rows = await self.db.list_experiments()
+        return [await self._serialize_experiment_summary(r) for r in rows]
 
-    async def get_batch_detail(self, batch_id: str) -> dict:
-        row = await self.db.get_batch(batch_id)
+    async def get_experiment_detail(self, experiment_id: str) -> dict:
+        row = await self.db.get_experiment(experiment_id)
         if not row:
-            raise HTTPException(status_code=404, detail=f"Batch {batch_id} not found")
-        return await self._serialize_batch_summary(row)
+            raise HTTPException(status_code=404, detail=f"Experiment {experiment_id} not found")
+        return await self._serialize_experiment_summary(row)
 
-    async def list_runs(self, batch_id: str) -> list[dict]:
-        return await self.db.list_runs(batch_id)
+    async def list_runs(self, experiment_id: str) -> list[dict]:
+        return await self.db.list_runs(experiment_id)
 
-    async def get_run_result(self, batch_id: str, run_id: str) -> dict:
+    async def get_run_result(self, experiment_id: str, run_id: str) -> dict:
         run_data = await self.db.get_run(run_id)
-        if not run_data or run_data.get("batch_id") != batch_id:
+        if not run_data or run_data.get("experiment_id") != experiment_id:
             raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
 
         result_path = run_data.get("result_path")
@@ -954,7 +954,7 @@ class BatchCoordinator:
             payload = RunResult.model_validate_json(Path(result_path).read_text()).model_dump()
             run_dir = Path(result_path).parent
         else:
-            result_file = self.storage_root / "outputs" / batch_id / run_id / "run_result.json"
+            result_file = self.storage_root / "outputs" / experiment_id / run_id / "run_result.json"
             if not result_file.exists():
                 raise HTTPException(
                     status_code=404, detail=f"Result for run {run_id} not available yet"
@@ -982,14 +982,14 @@ class BatchCoordinator:
         payload["messages"] = _load_jsonl(run_dir / "conversation.jsonl")
         return payload
 
-    def get_matrix_report_json(self, batch_id: str) -> dict:
-        report_file = self.storage_root / "outputs" / batch_id / "matrix_report.json"
+    def get_matrix_report_json(self, experiment_id: str) -> dict:
+        report_file = self.storage_root / "outputs" / experiment_id / "matrix_report.json"
         if not report_file.exists():
             raise HTTPException(status_code=404, detail="Matrix report not available yet")
         return json.loads(report_file.read_text())
 
-    def get_matrix_report_markdown(self, batch_id: str) -> str:
-        report_file = self.storage_root / "outputs" / batch_id / "matrix_report.md"
+    def get_matrix_report_markdown(self, experiment_id: str) -> str:
+        report_file = self.storage_root / "outputs" / experiment_id / "matrix_report.md"
         if not report_file.exists():
             raise HTTPException(status_code=404, detail="Matrix report not available yet")
         return report_file.read_text()
@@ -999,9 +999,9 @@ class BatchCoordinator:
     # ------------------------------------------------------------------
 
     async def search_findings(
-        self, batch_id: str, q: str, run_id: str | None = None
+        self, experiment_id: str, q: str, run_id: str | None = None
     ) -> list[dict]:
-        results = self.collect_results(batch_id)
+        results = self.collect_results(experiment_id)
         q_lower = q.lower()
         matched = []
         for result in results:
@@ -1018,8 +1018,8 @@ class BatchCoordinator:
                     matched.append(finding.model_dump())
         return matched
 
-    async def reclassify_finding(self, batch_id: str, run_id: str, req) -> dict:
-        result_file = self.storage_root / "outputs" / batch_id / run_id / "run_result.json"
+    async def reclassify_finding(self, experiment_id: str, run_id: str, req) -> dict:
+        result_file = self.storage_root / "outputs" / experiment_id / run_id / "run_result.json"
         if not result_file.exists():
             raise HTTPException(status_code=404, detail="Result not found")
         result = RunResult.model_validate_json(result_file.read_text())
@@ -1036,10 +1036,10 @@ class BatchCoordinator:
         result_file.write_text(result.model_dump_json(indent=2))
         return {"status": "reclassified", "finding_id": req.finding_id}
 
-    async def audit_tool_calls(self, batch_id: str, run_id: str) -> dict:
+    async def audit_tool_calls(self, experiment_id: str, run_id: str) -> dict:
         import re
         tool_calls_file = (
-            self.storage_root / "outputs" / batch_id / run_id / "tool_calls.jsonl"
+            self.storage_root / "outputs" / experiment_id / run_id / "tool_calls.jsonl"
         )
         if not tool_calls_file.exists():
             return {"counts_by_tool": {}, "suspicious_calls": []}
@@ -1066,11 +1066,11 @@ class BatchCoordinator:
 
         return {"counts_by_tool": counts, "suspicious_calls": suspicious}
 
-    async def compare_runs(self, batch_id: str, run_a_id: str, run_b_id: str) -> dict:
+    async def compare_runs(self, experiment_id: str, run_a_id: str, run_b_id: str) -> dict:
         from sec_review_framework.data.findings import FindingIdentity, Finding
 
-        result_a_dict = await self.get_run_result(batch_id, run_a_id)
-        result_b_dict = await self.get_run_result(batch_id, run_b_id)
+        result_a_dict = await self.get_run_result(experiment_id, run_a_id)
+        result_b_dict = await self.get_run_result(experiment_id, run_b_id)
 
         def index_findings(result_dict: dict) -> dict[str, dict]:
             out = {}
@@ -1360,13 +1360,13 @@ class BatchCoordinator:
     # Feedback
     # ------------------------------------------------------------------
 
-    async def compare_batches(self, batch_a_id: str, batch_b_id: str) -> dict:
-        batch_a_results = self.collect_results(batch_a_id)
-        batch_b_results = self.collect_results(batch_b_id)
-        comparison = self._feedback_tracker.compare_batches(batch_a_results, batch_b_results)
+    async def compare_experiments(self, experiment_a_id: str, experiment_b_id: str) -> dict:
+        experiment_a_results = self.collect_results(experiment_a_id)
+        experiment_b_results = self.collect_results(experiment_b_id)
+        comparison = self._feedback_tracker.compare_experiments(experiment_a_results, experiment_b_results)
         return {
-            "batch_a_id": comparison.batch_a_id,
-            "batch_b_id": comparison.batch_b_id,
+            "experiment_a_id": comparison.experiment_a_id,
+            "experiment_b_id": comparison.experiment_b_id,
             "metric_deltas": comparison.metric_deltas,
             "persistent_false_positives": [
                 {
@@ -1383,8 +1383,8 @@ class BatchCoordinator:
             "regressions": comparison.regressions,
         }
 
-    def get_fp_patterns(self, batch_id: str) -> list[dict]:
-        results = self.collect_results(batch_id)
+    def get_fp_patterns(self, experiment_id: str) -> list[dict]:
+        results = self.collect_results(experiment_id)
         patterns = self._feedback_tracker.extract_fp_patterns(results)
         return [
             {
@@ -1402,11 +1402,11 @@ class BatchCoordinator:
     # Reference / ops
     # ------------------------------------------------------------------
 
-    def package_reports(self, batch_id: str) -> Path:
-        output_dir = self.storage_root / "outputs" / batch_id
+    def package_reports(self, experiment_id: str) -> Path:
+        output_dir = self.storage_root / "outputs" / experiment_id
         if not output_dir.exists():
-            raise HTTPException(status_code=404, detail=f"Batch {batch_id} outputs not found")
-        zip_path = output_dir / f"{batch_id}_reports.zip"
+            raise HTTPException(status_code=404, detail=f"Experiment {experiment_id} outputs not found")
+        zip_path = output_dir / f"{experiment_id}_reports.zip"
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
             for f in output_dir.rglob("*"):
                 if f.is_file() and f.suffix in (".json", ".md", ".txt") and f != zip_path:
@@ -1485,20 +1485,20 @@ class BatchCoordinator:
 async def retention_cleanup_loop(
     storage_root: Path, retention_days: int, interval_s: int = 3600
 ) -> None:
-    """Background task: deletes batch directories older than retention_days."""
+    """Background task: deletes experiment directories older than retention_days."""
     while True:
         await asyncio.sleep(interval_s)
         cutoff = datetime.utcnow() - timedelta(days=retention_days)
         outputs_dir = storage_root / "outputs"
         if not outputs_dir.exists():
             continue
-        for batch_dir in outputs_dir.iterdir():
-            if not batch_dir.is_dir():
+        for experiment_dir in outputs_dir.iterdir():
+            if not experiment_dir.is_dir():
                 continue
-            mtime = datetime.utcfromtimestamp(batch_dir.stat().st_mtime)
+            mtime = datetime.utcfromtimestamp(experiment_dir.stat().st_mtime)
             if mtime < cutoff:
-                shutil.rmtree(batch_dir, ignore_errors=True)
-                logger.info(f"Retention cleanup: deleted {batch_dir.name}")
+                shutil.rmtree(experiment_dir, ignore_errors=True)
+                logger.info(f"Retention cleanup: deleted {experiment_dir.name}")
 
 
 # ---------------------------------------------------------------------------
@@ -1512,8 +1512,8 @@ class ReclassifyRequest(BaseModel):
 
 
 class CompareRequest(BaseModel):
-    batch_a_id: str
-    batch_b_id: str
+    experiment_a_id: str
+    experiment_b_id: str
 
 
 class EstimateRequest(BaseModel):
@@ -1580,7 +1580,7 @@ AVG_TOKENS_PER_KLOC = 1400  # prompt + completion, calibrated empirically
 # ---------------------------------------------------------------------------
 
 app = FastAPI(title="Security Review Framework", version="1.0.0")
-coordinator: BatchCoordinator = None  # type: ignore[assignment]  # initialized at startup
+coordinator: ExperimentCoordinator = None  # type: ignore[assignment]  # initialized at startup
 _background_tasks: set[asyncio.Task] = set()
 
 
@@ -1589,7 +1589,7 @@ async def api_and_spa_router(request, call_next):
     """Route /api/* to FastAPI endpoints and serve index.html for SPA routes.
 
     Browser navigation (Accept: text/html) to any non-API path — including
-    SPA paths that collide with API routes (e.g. /batches/{id}) — returns the
+    SPA paths that collide with API routes (e.g. /experiments/{id}) — returns the
     React shell so client-side routing can render the view. httpx / curl
     requests without an Accept header fall through to the API routes.
     """
@@ -1605,8 +1605,8 @@ async def api_and_spa_router(request, call_next):
     return await call_next(request)
 
 
-def build_coordinator_from_env() -> BatchCoordinator:
-    """Build a BatchCoordinator from env vars + files mounted at CONFIG_DIR.
+def build_coordinator_from_env() -> ExperimentCoordinator:
+    """Build an ExperimentCoordinator from env vars + files mounted at CONFIG_DIR.
 
     Env vars (set by the Helm chart):
         STORAGE_ROOT  — shared storage mount path (default: /data)
@@ -1658,7 +1658,7 @@ def build_coordinator_from_env() -> BatchCoordinator:
     storage_root.mkdir(parents=True, exist_ok=True)
     db = Database(storage_root / "coordinator.db")
 
-    return BatchCoordinator(
+    return ExperimentCoordinator(
         k8s_client=k8s_client,
         storage_root=storage_root,
         concurrency_caps=caps,
@@ -1718,7 +1718,7 @@ def health() -> dict:
 @app.post("/smoke-test")
 async def run_smoke_test() -> dict:
     """
-    Submit a minimal 1-model × 1-strategy smoke test batch.
+    Submit a minimal 1-model × 1-strategy smoke test experiment.
     Uses the first configured model (or gpt-4o-mini as a fallback),
     single_agent strategy, with_tools only, no verification.
     Capped at $5.00 for safety.
@@ -1745,19 +1745,19 @@ async def run_smoke_test() -> dict:
     dataset_name = datasets[0]["name"]
 
     timestamp = int(datetime.utcnow().timestamp())
-    batch_id = f"smoke-test-{timestamp}"
+    experiment_id = f"smoke-test-{timestamp}"
 
-    existing_batches = await coordinator.list_batches()
+    existing_experiments = await coordinator.list_experiments()
     terminal = {"completed", "failed", "cancelled"}
-    for b in existing_batches:
-        if b["batch_id"].startswith("smoke-test-") and b["status"] not in terminal:
+    for b in existing_experiments:
+        if b["experiment_id"].startswith("smoke-test-") and b["status"] not in terminal:
             raise HTTPException(
                 status_code=409,
-                detail=f"A smoke test is already running: {b['batch_id']}",
+                detail=f"A smoke test is already running: {b['experiment_id']}",
             )
 
     matrix = ExperimentMatrix(
-        batch_id=batch_id,
+        experiment_id=experiment_id,
         dataset_name=dataset_name,
         dataset_version="latest",
         model_ids=[model_id],
@@ -1766,35 +1766,35 @@ async def run_smoke_test() -> dict:
         review_profiles=[ReviewProfileName.DEFAULT],
         verification_variants=[VerificationVariant.NONE],
         num_repetitions=1,
-        max_batch_cost_usd=5.0,
+        max_experiment_cost_usd=5.0,
         strategy_configs={"single_agent": {"max_turns": 10}},
     )
 
-    await coordinator.submit_batch(matrix)
+    await coordinator.submit_experiment(matrix)
     return {
-        "batch_id": batch_id,
-        "message": "Smoke test batch submitted. Monitor progress on the batch detail page.",
+        "experiment_id": experiment_id,
+        "message": "Smoke test experiment submitted. Monitor progress on the experiment detail page.",
         "total_runs": len(matrix.expand()),
     }
 
 
-# --- Batches ---
+# --- Experiments ---
 
-@app.post("/batches", status_code=201)
-async def submit_batch(matrix: ExperimentMatrix) -> dict:
-    """Submit a new experiment batch. Returns batch_id."""
-    batch_id = await coordinator.submit_batch(matrix)
-    return {"batch_id": batch_id, "total_runs": len(matrix.expand())}
-
-
-@app.get("/batches")
-async def list_batches() -> list[dict]:
-    """List all batches with summary status."""
-    return await coordinator.list_batches()
+@app.post("/experiments", status_code=201)
+async def submit_experiment(matrix: ExperimentMatrix) -> dict:
+    """Submit a new experiment. Returns experiment_id."""
+    experiment_id = await coordinator.submit_experiment(matrix)
+    return {"experiment_id": experiment_id, "total_runs": len(matrix.expand())}
 
 
-@app.post("/batches/estimate")
-async def estimate_batch(req: EstimateRequest) -> dict:
+@app.get("/experiments")
+async def list_experiments() -> list[dict]:
+    """List all experiments with summary status."""
+    return await coordinator.list_experiments()
+
+
+@app.post("/experiments/estimate")
+async def estimate_experiment(req: EstimateRequest) -> dict:
     """Pre-flight cost estimate. Call before submit to avoid expensive mistakes."""
     runs = req.matrix.expand()
     estimates_by_model: dict[str, float] = {}
@@ -1815,93 +1815,93 @@ async def estimate_batch(req: EstimateRequest) -> dict:
     }
 
 
-@app.get("/batches/{batch_id}")
-async def get_batch(batch_id: str) -> dict:
-    """Batch summary: dataset, status, per-status run counts, cost so far and cap."""
-    return await coordinator.get_batch_detail(batch_id)
+@app.get("/experiments/{experiment_id}")
+async def get_experiment(experiment_id: str) -> dict:
+    """Experiment summary: dataset, status, per-status run counts, cost so far and cap."""
+    return await coordinator.get_experiment_detail(experiment_id)
 
 
-@app.get("/batches/{batch_id}/results")
-async def get_results_json(batch_id: str) -> dict:
-    """Matrix report as JSON. Available after batch completes."""
-    return coordinator.get_matrix_report_json(batch_id)
+@app.get("/experiments/{experiment_id}/results")
+async def get_results_json(experiment_id: str) -> dict:
+    """Matrix report as JSON. Available after experiment completes."""
+    return coordinator.get_matrix_report_json(experiment_id)
 
 
-@app.get("/batches/{batch_id}/results/markdown")
-async def get_results_markdown(batch_id: str) -> str:
-    """Matrix report as Markdown. Available after batch completes."""
-    return coordinator.get_matrix_report_markdown(batch_id)
+@app.get("/experiments/{experiment_id}/results/markdown")
+async def get_results_markdown(experiment_id: str) -> str:
+    """Matrix report as Markdown. Available after experiment completes."""
+    return coordinator.get_matrix_report_markdown(experiment_id)
 
 
-@app.get("/batches/{batch_id}/results/download")
-async def download_reports(batch_id: str) -> FileResponse:
+@app.get("/experiments/{experiment_id}/results/download")
+async def download_reports(experiment_id: str) -> FileResponse:
     """Download matrix_report.md, matrix_report.json, and all run reports as a .zip."""
-    zip_path = coordinator.package_reports(batch_id)
+    zip_path = coordinator.package_reports(experiment_id)
     return FileResponse(
-        zip_path, media_type="application/zip", filename=f"{batch_id}_reports.zip"
+        zip_path, media_type="application/zip", filename=f"{experiment_id}_reports.zip"
     )
 
 
-@app.get("/batches/{batch_id}/runs")
-async def list_runs(batch_id: str) -> list[dict]:
-    """List all runs in a batch with status and summary metrics."""
-    return await coordinator.list_runs(batch_id)
+@app.get("/experiments/{experiment_id}/runs")
+async def list_runs(experiment_id: str) -> list[dict]:
+    """List all runs in an experiment with status and summary metrics."""
+    return await coordinator.list_runs(experiment_id)
 
 
-@app.get("/batches/{batch_id}/runs/{run_id}")
-async def get_run(batch_id: str, run_id: str) -> dict:
+@app.get("/experiments/{experiment_id}/runs/{run_id}")
+async def get_run(experiment_id: str, run_id: str) -> dict:
     """Full RunResult including findings, evaluation, and verification details."""
-    return await coordinator.get_run_result(batch_id, run_id)
+    return await coordinator.get_run_result(experiment_id, run_id)
 
 
-@app.post("/batches/{batch_id}/cancel")
-async def cancel_batch(batch_id: str) -> dict:
+@app.post("/experiments/{experiment_id}/cancel")
+async def cancel_experiment(experiment_id: str) -> dict:
     """Cancel pending jobs. Running jobs complete but no new ones are scheduled."""
-    cancelled = await coordinator.cancel_batch(batch_id)
+    cancelled = await coordinator.cancel_experiment(experiment_id)
     return {"cancelled_jobs": cancelled}
 
 
-@app.get("/batches/{batch_id}/compare-runs")
-async def compare_runs(batch_id: str, run_a: str, run_b: str) -> dict:
+@app.get("/experiments/{experiment_id}/compare-runs")
+async def compare_runs(experiment_id: str, run_a: str, run_b: str) -> dict:
     """
     Side-by-side comparison of two runs. Returns findings matched
     by FindingIdentity: which were found by both, only by A, only by B.
     """
-    return await coordinator.compare_runs(batch_id, run_a, run_b)
+    return await coordinator.compare_runs(experiment_id, run_a, run_b)
 
 
-@app.delete("/batches/{batch_id}", status_code=204)
-async def delete_batch(batch_id: str) -> None:
-    """Delete a batch and all its outputs from shared storage."""
-    await coordinator.delete_batch(batch_id)
+@app.delete("/experiments/{experiment_id}", status_code=204)
+async def delete_experiment(experiment_id: str) -> None:
+    """Delete an experiment and all its outputs from shared storage."""
+    await coordinator.delete_experiment(experiment_id)
 
 
 # --- Findings ---
 
-@app.get("/batches/{batch_id}/findings/search")
+@app.get("/experiments/{experiment_id}/findings/search")
 async def search_findings(
-    batch_id: str, q: str, run_id: str | None = None
+    experiment_id: str, q: str, run_id: str | None = None
 ) -> list[dict]:
     """
-    Free-text search across all finding descriptions in a batch.
+    Free-text search across all finding descriptions in an experiment.
     Searches: title, description, recommendation, raw_llm_output.
     Optional run_id filter to scope to a single run.
     """
-    return await coordinator.search_findings(batch_id, q, run_id)
+    return await coordinator.search_findings(experiment_id, q, run_id)
 
 
-@app.post("/batches/{batch_id}/runs/{run_id}/reclassify")
+@app.post("/experiments/{experiment_id}/runs/{run_id}/reclassify")
 async def reclassify_finding(
-    batch_id: str, run_id: str, req: ReclassifyRequest
+    experiment_id: str, run_id: str, req: ReclassifyRequest
 ) -> dict:
     """Reclassify a false positive as unlabeled_real. Recomputes metrics."""
-    return await coordinator.reclassify_finding(batch_id, run_id, req)
+    return await coordinator.reclassify_finding(experiment_id, run_id, req)
 
 
-@app.get("/batches/{batch_id}/runs/{run_id}/tool-audit")
-async def tool_audit(batch_id: str, run_id: str) -> dict:
+@app.get("/experiments/{experiment_id}/runs/{run_id}/tool-audit")
+async def tool_audit(experiment_id: str, run_id: str) -> dict:
     """Tool call audit: counts by tool, any calls with URL-like strings in inputs."""
-    return await coordinator.audit_tool_calls(batch_id, run_id)
+    return await coordinator.audit_tool_calls(experiment_id, run_id)
 
 
 # --- Datasets ---
@@ -1975,15 +1975,15 @@ def get_file_content(dataset_name: str, path: str) -> dict:
 # --- Feedback ---
 
 @app.post("/feedback/compare")
-async def compare_batches(req: CompareRequest) -> dict:
-    """Compare two batches: metric deltas, persistent FP patterns, regressions."""
-    return await coordinator.compare_batches(req.batch_a_id, req.batch_b_id)
+async def compare_experiments_endpoint(req: CompareRequest) -> dict:
+    """Compare two experiments: metric deltas, persistent FP patterns, regressions."""
+    return await coordinator.compare_experiments(req.experiment_a_id, req.experiment_b_id)
 
 
-@app.get("/feedback/patterns/{batch_id}")
-def get_fp_patterns(batch_id: str) -> list[dict]:
-    """Extract recurring false positive patterns from a batch."""
-    return coordinator.get_fp_patterns(batch_id)
+@app.get("/feedback/patterns/{experiment_id}")
+def get_fp_patterns(experiment_id: str) -> list[dict]:
+    """Extract recurring false positive patterns from an experiment."""
+    return coordinator.get_fp_patterns(experiment_id)
 
 
 # --- Matrix ---

@@ -211,7 +211,7 @@ export default function MatrixTable({ runs, onSelect, selectedIds = [] }: Matrix
                   <>
                     <TableRow
                       key={run.run_id}
-                      onClick={() => navigate(`/batches/${run.batch_id}/runs/${run.run_id}`)}
+                      onClick={() => navigate(`/experiments/${run.experiment_id}/runs/${run.run_id}`)}
                       className={cn(
                         'cursor-pointer transition-colors hover:bg-gray-50 dark:hover:bg-gray-800/50 border-b-0',
                         rowBase
@@ -325,7 +325,7 @@ export default function MatrixTable({ runs, onSelect, selectedIds = [] }: Matrix
         </div>
       </div>
       <p className="mt-2 text-xs text-gray-400 dark:text-gray-500">
-        Virtualization skipped — typical batch sizes (5 models × 4 strategies × 2 variants = 40 rows) do not require it.
+        Virtualization skipped — typical experiment sizes (5 models × 4 strategies × 2 variants = 40 rows) do not require it.
       </p>
     </div>
   )

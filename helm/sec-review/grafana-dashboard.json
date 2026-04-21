@@ -56,7 +56,7 @@
   "annotations": {
     "list": []
   },
-  "description": "Security Code Review Framework — batch monitoring dashboard",
+  "description": "Security Code Review Framework — experiment monitoring dashboard",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -67,7 +67,7 @@
       "collapsed": false,
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
       "id": 100,
-      "title": "Batch Progress",
+      "title": "Experiment Progress",
       "type": "row"
     },
     {
@@ -89,18 +89,18 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "sec_review_batch_runs_total{namespace=~\"$namespace\"}",
-          "legendFormat": "Total runs — {{batch_id}}",
+          "expr": "sec_review_experiment_runs_total{namespace=~\"$namespace\"}",
+          "legendFormat": "Total runs — {{experiment_id}}",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "sum(sec_review_runs_completed_total{namespace=~\"$namespace\", status=\"completed\"}) by (batch_id)",
-          "legendFormat": "Completed — {{batch_id}}",
+          "expr": "sum(sec_review_runs_completed_total{namespace=~\"$namespace\", status=\"completed\"}) by (experiment_id)",
+          "legendFormat": "Completed — {{experiment_id}}",
           "refId": "B"
         }
       ],
-      "title": "Batch Progress (runs completed / total)",
+      "title": "Experiment Progress (runs completed / total)",
       "type": "timeseries"
     },
     {
@@ -326,14 +326,14 @@
       {
         "current": {},
         "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-        "definition": "label_values(sec_review_batches_submitted_total, namespace)",
+        "definition": "label_values(sec_review_experiments_submitted_total, namespace)",
         "hide": 0,
         "includeAll": true,
         "multi": false,
         "name": "namespace",
         "options": [],
         "query": {
-          "query": "label_values(sec_review_batches_submitted_total, namespace)",
+          "query": "label_values(sec_review_experiments_submitted_total, namespace)",
           "refId": "StandardVariableQuery"
         },
         "refresh": 1,

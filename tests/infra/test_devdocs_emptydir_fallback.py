@@ -7,7 +7,7 @@ crash with:
 
     RuntimeError: DevDocs root not mounted at '/data/devdocs'. ...
 
-Fix: BatchCoordinator._create_k8s_job checks whether the devdocs root exists
+Fix: ExperimentCoordinator._create_k8s_job checks whether the devdocs root exists
 on its own filesystem (the coordinator also mounts the shared PVC). When it
 does NOT exist, it injects an emptyDir volume+mount at the devdocs path so
 the worker process finds the directory and the DevDocs MCP server starts
@@ -35,7 +35,7 @@ import pytest
 # kubernetes client is optional; skip the whole module when absent.
 kubernetes = pytest.importorskip("kubernetes", reason="kubernetes package not installed")
 
-from sec_review_framework.coordinator import BatchCoordinator
+from sec_review_framework.coordinator import ExperimentCoordinator
 from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
 from sec_review_framework.data.experiment import (
     ExperimentRun,
@@ -53,15 +53,15 @@ from sec_review_framework.reporting.markdown import MarkdownReportGenerator
 # ---------------------------------------------------------------------------
 
 MODEL_ID = "test-model"
-BATCH_ID = "test-batch-devdocs"
+EXPERIMENT_ID = "test-experiment-devdocs"
 DATASET = "test-ds"
 
 
-def _make_coordinator(tmp_path: Path) -> BatchCoordinator:
-    """Create a BatchCoordinator with mock k8s and db clients."""
+def _make_coordinator(tmp_path: Path) -> ExperimentCoordinator:
+    """Create a ExperimentCoordinator with mock k8s and db clients."""
     mock_k8s = MagicMock()
     mock_db = MagicMock()
-    coord = BatchCoordinator(
+    coord = ExperimentCoordinator(
         k8s_client=mock_k8s,
         storage_root=tmp_path / "storage",
         concurrency_caps={},
@@ -87,8 +87,8 @@ def _make_run(tool_extensions: frozenset[ToolExtension] = frozenset()) -> Experi
         if tool_extensions else ""
     )
     return ExperimentRun(
-        id=f"{BATCH_ID}_{MODEL_ID}_single_agent_with_tools_default_none{ext_suffix}",
-        batch_id=BATCH_ID,
+        id=f"{EXPERIMENT_ID}_{MODEL_ID}_single_agent_with_tools_default_none{ext_suffix}",
+        experiment_id=EXPERIMENT_ID,
         model_id=MODEL_ID,
         strategy=StrategyName.SINGLE_AGENT,
         tool_variant=ToolVariant.WITH_TOOLS,
@@ -101,9 +101,9 @@ def _make_run(tool_extensions: frozenset[ToolExtension] = frozenset()) -> Experi
     )
 
 
-def _call_create_k8s_job(coordinator: BatchCoordinator, run: ExperimentRun) -> object:
+def _call_create_k8s_job(coordinator: ExperimentCoordinator, run: ExperimentRun) -> object:
     """Call _create_k8s_job and return the V1Job passed to create_namespaced_job."""
-    coordinator._create_k8s_job(BATCH_ID, run)
+    coordinator._create_k8s_job(EXPERIMENT_ID, run)
     create_calls = coordinator.k8s_client.create_namespaced_job.call_args_list
     assert create_calls, "_create_k8s_job did not call create_namespaced_job"
     # create_namespaced_job(namespace, job) — job is the second positional arg

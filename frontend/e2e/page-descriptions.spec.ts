@@ -5,16 +5,16 @@ test.beforeEach(async ({ page }) => {
   await mockApi(page)
 })
 
-const BATCH_ID = 'aaaaaaaa-0001-0001-0001-000000000001'
+const EXPERIMENT_ID = 'aaaaaaaa-0001-0001-0001-000000000001'
 const RUN_ID = 'run-001-aaa'
 const DATASET = 'cve-2024-python'
 
 const routes: Array<[string, string]> = [
   ['Dashboard', '/'],
-  ['BatchNew', '/batches/new'],
-  ['BatchDetail', `/batches/${BATCH_ID}`],
-  ['RunDetail', `/batches/${BATCH_ID}/runs/${RUN_ID}`],
-  ['RunCompare', `/batches/${BATCH_ID}/compare?a=${RUN_ID}&b=run-002-aaa`],
+  ['ExperimentNew', '/experiments/new'],
+  ['ExperimentDetail', `/experiments/${EXPERIMENT_ID}`],
+  ['RunDetail', `/experiments/${EXPERIMENT_ID}/runs/${RUN_ID}`],
+  ['RunCompare', `/experiments/${EXPERIMENT_ID}/compare?a=${RUN_ID}&b=run-002-aaa`],
   ['Datasets', '/datasets'],
   ['DatasetDetail', `/datasets/${DATASET}`],
   ['CVEDiscovery', '/datasets/discover'],

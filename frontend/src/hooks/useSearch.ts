@@ -3,7 +3,7 @@ import { searchFindings, type Finding } from '../api/client'
 
 const DEBOUNCE_MS = 300
 
-export function useSearch(batchId: string): {
+export function useSearch(experimentId: string): {
   results: Finding[]
   loading: boolean
   search: (q: string) => void
@@ -28,7 +28,7 @@ export function useSearch(batchId: string): {
 
       timerRef.current = setTimeout(async () => {
         try {
-          const data = await searchFindings(batchId, q)
+          const data = await searchFindings(experimentId, q)
           setResults(data)
         } catch {
           setResults([])
@@ -37,7 +37,7 @@ export function useSearch(batchId: string): {
         }
       }, DEBOUNCE_MS)
     },
-    [batchId]
+    [experimentId]
   )
 
   return { results, loading, search }

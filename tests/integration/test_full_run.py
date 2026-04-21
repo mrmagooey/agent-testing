@@ -1,6 +1,6 @@
-"""Integration tests for BatchCoordinator-level operations.
+"""Integration tests for ExperimentCoordinator-level operations.
 
-Replaces the original placeholder. Tests use a real BatchCoordinator backed
+Replaces the original placeholder. Tests use a real ExperimentCoordinator backed
 by a temp SQLite database and temp storage root. K8s is set to None so no
 cluster is required.
 """
@@ -14,7 +14,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from sec_review_framework.coordinator import BatchCoordinator, BatchCostTracker
+from sec_review_framework.coordinator import ExperimentCoordinator, ExperimentCostTracker
 from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
 from sec_review_framework.data.experiment import (
     ExperimentMatrix,
@@ -54,10 +54,10 @@ def cost_calc() -> CostCalculator:
 
 
 @pytest.fixture
-async def coordinator(tmp_path: Path, db: Database, cost_calc: CostCalculator) -> BatchCoordinator:
+async def coordinator(tmp_path: Path, db: Database, cost_calc: CostCalculator) -> ExperimentCoordinator:
     storage = tmp_path / "storage"
     storage.mkdir()
-    return BatchCoordinator(
+    return ExperimentCoordinator(
         k8s_client=None,       # no K8s needed
         storage_root=storage,
         concurrency_caps={},
@@ -70,9 +70,9 @@ async def coordinator(tmp_path: Path, db: Database, cost_calc: CostCalculator) -
     )
 
 
-def _minimal_matrix(batch_id: str = "test-batch") -> ExperimentMatrix:
+def _minimal_matrix(experiment_id: str = "test-experiment") -> ExperimentMatrix:
     return ExperimentMatrix(
-        batch_id=batch_id,
+        experiment_id=experiment_id,
         dataset_name="test-dataset",
         dataset_version="1.0.0",
         model_ids=["gpt-4o"],
@@ -110,31 +110,31 @@ def _run_result_json(run: ExperimentRun) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Test 1: submit_batch creates batch + runs in DB
+# Test 1: submit_experiment creates experiment + runs in DB
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_submit_batch_creates_db_records(coordinator, db):
-    matrix = _minimal_matrix("batch-001")
-    batch_id = await coordinator.submit_batch(matrix)
+async def test_submit_experiment_creates_db_records(coordinator, db):
+    matrix = _minimal_matrix("experiment-001")
+    experiment_id = await coordinator.submit_experiment(matrix)
 
-    assert batch_id == "batch-001"
+    assert experiment_id == "experiment-001"
 
-    batch_row = await db.get_batch("batch-001")
-    assert batch_row is not None
-    assert batch_row["total_runs"] == 1
-    assert batch_row["status"] == "pending"
+    experiment_row = await db.get_experiment("experiment-001")
+    assert experiment_row is not None
+    assert experiment_row["total_runs"] == 1
+    assert experiment_row["status"] == "pending"
 
-    runs = await db.list_runs("batch-001")
+    runs = await db.list_runs("experiment-001")
     assert len(runs) == 1
     assert runs[0]["model_id"] == "gpt-4o"
     assert runs[0]["strategy"] == "single_agent"
 
 
 @pytest.mark.asyncio
-async def test_submit_batch_multi_dim_expands_correctly(coordinator, db):
+async def test_submit_experiment_multi_dim_expands_correctly(coordinator, db):
     matrix = ExperimentMatrix(
-        batch_id="batch-multi",
+        experiment_id="experiment-multi",
         dataset_name="ds",
         dataset_version="1.0",
         model_ids=["gpt-4o", "claude-opus-4"],
@@ -144,33 +144,33 @@ async def test_submit_batch_multi_dim_expands_correctly(coordinator, db):
         verification_variants=[VerificationVariant.NONE],
         parallel_modes=[False],
     )
-    await coordinator.submit_batch(matrix)
+    await coordinator.submit_experiment(matrix)
 
-    runs = await db.list_runs("batch-multi")
+    runs = await db.list_runs("experiment-multi")
     assert len(runs) == 4  # 2 models * 2 strategies
 
 
 # ---------------------------------------------------------------------------
-# Test 2: get_batch_status returns correct counts
+# Test 2: get_experiment_status returns correct counts
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_get_batch_status_counts(coordinator, db):
-    matrix = _minimal_matrix("batch-status")
-    await coordinator.submit_batch(matrix)
+async def test_get_experiment_status_counts(coordinator, db):
+    matrix = _minimal_matrix("experiment-status")
+    await coordinator.submit_experiment(matrix)
 
-    status = await coordinator.get_batch_status("batch-status")
-    assert status.batch_id == "batch-status"
+    status = await coordinator.get_experiment_status("experiment-status")
+    assert status.experiment_id == "experiment-status"
     assert status.total == 1
     # K8s is None so the run stays pending
     assert status.pending + status.running + status.completed + status.failed == 1
 
 
 @pytest.mark.asyncio
-async def test_get_batch_status_404_for_unknown(coordinator):
+async def test_get_experiment_status_404_for_unknown(coordinator):
     from fastapi import HTTPException
     with pytest.raises(HTTPException) as exc_info:
-        await coordinator.get_batch_status("no-such-batch")
+        await coordinator.get_experiment_status("no-such-experiment")
     assert exc_info.value.status_code == 404
 
 
@@ -180,79 +180,79 @@ async def test_get_batch_status_404_for_unknown(coordinator):
 
 def test_collect_results_reads_result_files(coordinator, tmp_path):
     """Write a synthetic run_result.json and verify collect_results picks it up."""
-    matrix = _minimal_matrix("batch-cr")
+    matrix = _minimal_matrix("experiment-cr")
     runs = matrix.expand()
     run = runs[0]
 
-    batch_dir = coordinator.storage_root / "outputs" / "batch-cr" / run.id
-    batch_dir.mkdir(parents=True)
-    (batch_dir / "run_result.json").write_text(_run_result_json(run))
+    output_dir = coordinator.storage_root / "outputs" / "experiment-cr" / run.id
+    output_dir.mkdir(parents=True)
+    (output_dir / "run_result.json").write_text(_run_result_json(run))
 
-    results = coordinator.collect_results("batch-cr")
+    results = coordinator.collect_results("experiment-cr")
     assert len(results) == 1
     assert results[0].experiment.id == run.id
     assert results[0].status == RunStatus.COMPLETED
 
 
 def test_collect_results_empty_when_no_outputs(coordinator):
-    results = coordinator.collect_results("batch-nonexistent")
+    results = coordinator.collect_results("experiment-nonexistent")
     assert results == []
 
 
 def test_collect_results_skips_malformed_json(coordinator):
-    batch_dir = coordinator.storage_root / "outputs" / "batch-bad" / "run-xyz"
-    batch_dir.mkdir(parents=True)
-    (batch_dir / "run_result.json").write_text("NOT VALID JSON {{{{")
+    output_dir = coordinator.storage_root / "outputs" / "experiment-bad" / "run-xyz"
+    output_dir.mkdir(parents=True)
+    (output_dir / "run_result.json").write_text("NOT VALID JSON {{{{")
 
-    results = coordinator.collect_results("batch-bad")
+    results = coordinator.collect_results("experiment-bad")
     assert results == []
 
 
 # ---------------------------------------------------------------------------
-# Test 4: finalize_batch generates matrix reports
+# Test 4: finalize_experiment generates matrix reports
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_finalize_batch_writes_matrix_report(coordinator, db):
-    matrix = _minimal_matrix("batch-fin")
-    await coordinator.submit_batch(matrix)
+async def test_finalize_experiment_writes_matrix_report(coordinator, db):
+    matrix = _minimal_matrix("experiment-fin")
+    await coordinator.submit_experiment(matrix)
 
     # Seed a result file so finalize has something to render
     runs = matrix.expand()
     run = runs[0]
-    batch_dir = coordinator.storage_root / "outputs" / "batch-fin" / run.id
-    batch_dir.mkdir(parents=True)
-    (batch_dir / "run_result.json").write_text(_run_result_json(run))
+    output_dir = coordinator.storage_root / "outputs" / "experiment-fin" / run.id
+    output_dir.mkdir(parents=True)
+    (output_dir / "run_result.json").write_text(_run_result_json(run))
 
-    await coordinator.finalize_batch("batch-fin")
+    await coordinator.finalize_experiment("experiment-fin")
 
     # matrix_report.md should exist
-    report = coordinator.storage_root / "outputs" / "batch-fin" / "matrix_report.md"
+    report = coordinator.storage_root / "outputs" / "experiment-fin" / "matrix_report.md"
     assert report.exists()
     assert len(report.read_text()) > 0
 
     # DB status updated to completed
-    batch_row = await db.get_batch("batch-fin")
-    assert batch_row["status"] == "completed"
+    experiment_row = await db.get_experiment("experiment-fin")
+    assert experiment_row["status"] == "completed"
 
 
 @pytest.mark.asyncio
-async def test_finalize_batch_no_results_still_completes(coordinator, db):
-    """finalize_batch with no result files should not crash and marks DB completed."""
-    matrix = _minimal_matrix("batch-empty-fin")
-    await coordinator.submit_batch(matrix)
-    await coordinator.finalize_batch("batch-empty-fin")
+async def test_finalize_experiment_no_results_still_completes(coordinator, db):
+    """finalize_experiment with no result files should not crash and marks DB completed."""
+    matrix = _minimal_matrix("experiment-empty-fin")
+    await coordinator.submit_experiment(matrix)
+    await coordinator.finalize_experiment("experiment-empty-fin")
 
-    batch_row = await db.get_batch("batch-empty-fin")
-    assert batch_row["status"] == "completed"
+    experiment_row = await db.get_experiment("experiment-empty-fin")
+    assert experiment_row["status"] == "completed"
 
 
 # ---------------------------------------------------------------------------
-# Test 5: BatchCostTracker.record_job_cost returns True when cap exceeded
+# Test 5: ExperimentCostTracker.record_job_cost returns True when cap exceeded
 # ---------------------------------------------------------------------------
 
-def test_batch_cost_tracker_cap_exceeded():
-    tracker = BatchCostTracker(batch_id="batch-cap", cap_usd=1.00)
+def test_experiment_cost_tracker_cap_exceeded():
+    tracker = ExperimentCostTracker(experiment_id="experiment-cap", cap_usd=1.00)
     assert not tracker.record_job_cost(0.50)
     assert tracker.spent_usd == pytest.approx(0.50)
     assert not tracker._cancelled
@@ -264,8 +264,8 @@ def test_batch_cost_tracker_cap_exceeded():
     assert tracker.spent_usd == pytest.approx(1.10)
 
 
-def test_batch_cost_tracker_no_cap_never_triggers():
-    tracker = BatchCostTracker(batch_id="batch-nocap", cap_usd=None)
+def test_experiment_cost_tracker_no_cap_never_triggers():
+    tracker = ExperimentCostTracker(experiment_id="experiment-nocap", cap_usd=None)
     for _ in range(10):
         result = tracker.record_job_cost(100.0)
         assert result is False
@@ -273,16 +273,16 @@ def test_batch_cost_tracker_no_cap_never_triggers():
     assert tracker._cancelled is False
 
 
-def test_batch_cost_tracker_exact_cap_triggers():
-    tracker = BatchCostTracker(batch_id="batch-exact", cap_usd=1.00)
+def test_experiment_cost_tracker_exact_cap_triggers():
+    tracker = ExperimentCostTracker(experiment_id="experiment-exact", cap_usd=1.00)
     result = tracker.record_job_cost(1.00)
     assert result is True
     assert tracker._cancelled is True
 
 
-def test_batch_cost_tracker_already_cancelled_returns_false():
+def test_experiment_cost_tracker_already_cancelled_returns_false():
     """Once cancelled, subsequent calls should not re-trigger (idempotent guard)."""
-    tracker = BatchCostTracker(batch_id="batch-idem", cap_usd=0.50)
+    tracker = ExperimentCostTracker(experiment_id="experiment-idem", cap_usd=0.50)
     tracker.record_job_cost(1.00)  # triggers cancellation
     assert tracker._cancelled is True
     # Second call — cap already marked, should not re-cancel
@@ -291,20 +291,20 @@ def test_batch_cost_tracker_already_cancelled_returns_false():
 
 
 # ---------------------------------------------------------------------------
-# Test 6: cancel_batch marks batch cancelled in DB (no K8s required)
+# Test 6: cancel_experiment marks experiment cancelled in DB (no K8s required)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_cancel_batch_updates_db_status(coordinator, db):
-    matrix = _minimal_matrix("batch-cancel")
-    await coordinator.submit_batch(matrix)
+async def test_cancel_experiment_updates_db_status(coordinator, db):
+    matrix = _minimal_matrix("experiment-cancel")
+    await coordinator.submit_experiment(matrix)
 
-    cancelled_count = await coordinator.cancel_batch("batch-cancel")
+    cancelled_count = await coordinator.cancel_experiment("experiment-cancel")
     # No K8s client, so no jobs to cancel
     assert cancelled_count == 0
 
-    batch_row = await db.get_batch("batch-cancel")
-    assert batch_row["status"] == "cancelled"
+    experiment_row = await db.get_experiment("experiment-cancel")
+    assert experiment_row["status"] == "cancelled"
 
 
 # ---------------------------------------------------------------------------
@@ -313,47 +313,47 @@ async def test_cancel_batch_updates_db_status(coordinator, db):
 
 @pytest.mark.asyncio
 async def test_reconcile_is_idempotent(coordinator, db):
-    # Submit a batch so reconcile has something to look at
-    matrix = _minimal_matrix("batch-reconcile")
-    await coordinator.submit_batch(matrix)
+    # Submit an experiment so reconcile has something to look at
+    matrix = _minimal_matrix("experiment-reconcile")
+    await coordinator.submit_experiment(matrix)
 
     # Mark the run as completed so reconcile finalizes rather than re-dispatches
-    runs = await db.list_runs("batch-reconcile")
+    runs = await db.list_runs("experiment-reconcile")
     for run in runs:
         await db.update_run(run["id"], status="completed")
 
     # Seed result file so finalize doesn't fail
     run_id = runs[0]["id"]
     run_obj = matrix.expand()[0]
-    batch_dir = coordinator.storage_root / "outputs" / "batch-reconcile" / run_id
-    batch_dir.mkdir(parents=True)
-    (batch_dir / "run_result.json").write_text(_run_result_json(run_obj))
+    output_dir = coordinator.storage_root / "outputs" / "experiment-reconcile" / run_id
+    output_dir.mkdir(parents=True)
+    (output_dir / "run_result.json").write_text(_run_result_json(run_obj))
 
     # First reconcile
     await coordinator.reconcile()
-    batch_row_1 = await db.get_batch("batch-reconcile")
+    experiment_row_1 = await db.get_experiment("experiment-reconcile")
 
-    # Second reconcile — should be a no-op on completed batch
+    # Second reconcile — should be a no-op on completed experiment
     await coordinator.reconcile()
-    batch_row_2 = await db.get_batch("batch-reconcile")
+    experiment_row_2 = await db.get_experiment("experiment-reconcile")
 
-    assert batch_row_1["status"] == batch_row_2["status"]
+    assert experiment_row_1["status"] == experiment_row_2["status"]
 
 
 # ---------------------------------------------------------------------------
-# Test 8: delete_batch removes output directory
+# Test 8: delete_experiment removes output directory
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_delete_batch_removes_output_dir(coordinator, db):
-    matrix = _minimal_matrix("batch-del")
-    await coordinator.submit_batch(matrix)
+async def test_delete_experiment_removes_output_dir(coordinator, db):
+    matrix = _minimal_matrix("experiment-del")
+    await coordinator.submit_experiment(matrix)
 
     # Create an output dir to be cleaned up
-    output_dir = coordinator.storage_root / "outputs" / "batch-del"
+    output_dir = coordinator.storage_root / "outputs" / "experiment-del"
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "dummy.json").write_text("{}")
 
     assert output_dir.exists()
-    await coordinator.delete_batch("batch-del")
+    await coordinator.delete_experiment("experiment-del")
     assert not output_dir.exists()

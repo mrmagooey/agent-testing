@@ -10,13 +10,13 @@ test('shows page heading', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Feedback' })).toBeVisible()
 })
 
-test('shows batch comparison section', async ({ page }) => {
-  await expect(page.getByRole('heading', { name: 'Batch Comparison' })).toBeVisible()
+test('shows experiment comparison section', async ({ page }) => {
+  await expect(page.getByRole('heading', { name: 'Experiment Comparison' })).toBeVisible()
 })
 
-test('shows batch A and batch B selects', async ({ page }) => {
-  await expect(page.getByText('Batch A (baseline)')).toBeVisible()
-  await expect(page.getByText('Batch B (new)')).toBeVisible()
+test('shows experiment A and experiment B selects', async ({ page }) => {
+  await expect(page.getByText('Experiment A (baseline)')).toBeVisible()
+  await expect(page.getByText('Experiment B (new)')).toBeVisible()
   const selects = page.locator('select')
   await expect(selects).toHaveCount(3)
 })
@@ -25,7 +25,7 @@ test('shows compare button initially disabled', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Compare' })).toBeDisabled()
 })
 
-test('compare button enabled when both batches selected', async ({ page }) => {
+test('compare button enabled when both experiments selected', async ({ page }) => {
   const selects = page.locator('select')
   await selects.nth(0).selectOption({ index: 1 })
   await selects.nth(1).selectOption({ index: 2 })
@@ -36,17 +36,17 @@ test('shows FP pattern browser section', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'FP Pattern Browser' })).toBeVisible()
 })
 
-test('FP pattern load button disabled with no batch selected', async ({ page }) => {
+test('FP pattern load button disabled with no experiment selected', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Load Patterns' })).toBeDisabled()
 })
 
-test('completed batches appear in selects', async ({ page }) => {
+test('completed experiments appear in selects', async ({ page }) => {
   const firstSelect = page.locator('select').first()
   await expect(firstSelect.locator('option').nth(1)).toContainText('aaaaaaaa')
   await expect(firstSelect.locator('option').nth(1)).toContainText('cve-2024-python')
 })
 
-test('comparing two batches shows metric deltas table', async ({ page }) => {
+test('comparing two experiments shows metric deltas table', async ({ page }) => {
   const selects = page.locator('select')
   await selects.nth(0).selectOption({ index: 1 })
   await selects.nth(1).selectOption({ index: 2 })

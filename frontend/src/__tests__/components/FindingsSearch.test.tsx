@@ -18,7 +18,7 @@ function makeFinding(id: string): Finding {
   return {
     finding_id: id,
     run_id: 'r1',
-    batch_id: 'b1',
+    experiment_id: 'e1',
     title: `Finding ${id}`,
     description: 'SQL injection',
     vuln_class: 'sqli',
@@ -41,13 +41,13 @@ afterEach(() => {
 
 describe('FindingsSearch', () => {
   it('renders the search input', () => {
-    render(<FindingsSearch batchId="b1" onResults={vi.fn()} />)
+    render(<FindingsSearch experimentId="e1" onResults={vi.fn()} />)
     expect(screen.getByPlaceholderText(/search findings/i)).toBeInTheDocument()
   })
 
   it('does not call searchFindings when input is empty', async () => {
     const onResults = vi.fn()
-    render(<FindingsSearch batchId="b1" onResults={onResults} />)
+    render(<FindingsSearch experimentId="e1" onResults={onResults} />)
 
     // First type something, then clear to empty — that triggers onResults([])
     fireEvent.change(screen.getByPlaceholderText(/search findings/i), { target: { value: 'sql' } })
@@ -61,7 +61,7 @@ describe('FindingsSearch', () => {
 
   it('does not call searchFindings for whitespace-only input', async () => {
     const onResults = vi.fn()
-    render(<FindingsSearch batchId="b1" onResults={onResults} />)
+    render(<FindingsSearch experimentId="e1" onResults={onResults} />)
 
     fireEvent.change(screen.getByPlaceholderText(/search findings/i), { target: { value: '   ' } })
 
@@ -71,7 +71,7 @@ describe('FindingsSearch', () => {
 
   it('debounces: does not call searchFindings immediately after typing', () => {
     mockSearch.mockResolvedValue([])
-    render(<FindingsSearch batchId="b1" onResults={vi.fn()} />)
+    render(<FindingsSearch experimentId="e1" onResults={vi.fn()} />)
 
     fireEvent.change(screen.getByPlaceholderText(/search findings/i), {
       target: { value: 'sqli' },
@@ -81,19 +81,19 @@ describe('FindingsSearch', () => {
     expect(mockSearch).not.toHaveBeenCalled()
   })
 
-  it('calls searchFindings with batchId and query after debounce', async () => {
+  it('calls searchFindings with experimentId and query after debounce', async () => {
     const findings = [makeFinding('f1'), makeFinding('f2')]
     mockSearch.mockResolvedValue(findings)
     const onResults = vi.fn()
 
-    render(<FindingsSearch batchId="b1" onResults={onResults} />)
+    render(<FindingsSearch experimentId="e1" onResults={onResults} />)
 
     fireEvent.change(screen.getByPlaceholderText(/search findings/i), {
       target: { value: 'sql' },
     })
 
     await waitFor(() => {
-      expect(mockSearch).toHaveBeenCalledWith('b1', 'sql')
+      expect(mockSearch).toHaveBeenCalledWith('e1', 'sql')
     }, { timeout: 2000 })
   }, 10000)
 
@@ -102,7 +102,7 @@ describe('FindingsSearch', () => {
     mockSearch.mockResolvedValue(findings)
     const onResults = vi.fn()
 
-    render(<FindingsSearch batchId="b1" onResults={onResults} />)
+    render(<FindingsSearch experimentId="e1" onResults={onResults} />)
 
     fireEvent.change(screen.getByPlaceholderText(/search findings/i), {
       target: { value: 'injection' },
@@ -117,7 +117,7 @@ describe('FindingsSearch', () => {
     mockSearch.mockRejectedValue(new Error('API error'))
     const onResults = vi.fn()
 
-    render(<FindingsSearch batchId="b1" onResults={onResults} />)
+    render(<FindingsSearch experimentId="e1" onResults={onResults} />)
 
     fireEvent.change(screen.getByPlaceholderText(/search findings/i), {
       target: { value: 'error-query' },
@@ -130,7 +130,7 @@ describe('FindingsSearch', () => {
 
   it('shows clear button after search completes (loading=false, query not empty)', async () => {
     mockSearch.mockResolvedValue([])
-    render(<FindingsSearch batchId="b1" onResults={vi.fn()} />)
+    render(<FindingsSearch experimentId="e1" onResults={vi.fn()} />)
 
     fireEvent.change(screen.getByPlaceholderText(/search findings/i), {
       target: { value: 'sqli' },
@@ -146,7 +146,7 @@ describe('FindingsSearch', () => {
     mockSearch.mockResolvedValue([])
     const onResults = vi.fn()
 
-    render(<FindingsSearch batchId="b1" onResults={onResults} />)
+    render(<FindingsSearch experimentId="e1" onResults={onResults} />)
 
     fireEvent.change(screen.getByPlaceholderText(/search findings/i), {
       target: { value: 'sqli' },
@@ -166,7 +166,7 @@ describe('FindingsSearch', () => {
 
   it('shows loading spinner while request is in-flight', async () => {
     mockSearch.mockReturnValue(new Promise(() => {}))  // never resolves
-    render(<FindingsSearch batchId="b1" onResults={vi.fn()} />)
+    render(<FindingsSearch experimentId="e1" onResults={vi.fn()} />)
 
     fireEvent.change(screen.getByPlaceholderText(/search findings/i), {
       target: { value: 'sql' },

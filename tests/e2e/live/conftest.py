@@ -53,29 +53,29 @@ def require_coordinator(live_base_url: str):
 # ---------------------------------------------------------------------------
 
 
-def unique_batch_id(prefix: str) -> str:
+def unique_experiment_id(prefix: str) -> str:
     return f"{prefix}-{int(time.time())}-{os.getpid()}"
 
 
 def poll_until_done(
     client: httpx.Client,
-    batch_id: str,
+    experiment_id: str,
     timeout_s: int = 600,
     poll_interval_s: int = 5,
 ) -> dict:
-    """Poll GET /batches/{batch_id} until the batch reaches a terminal state.
+    """Poll GET /experiments/{experiment_id} until the experiment reaches a terminal state.
 
     Terminal is defined as:
       - completed_runs + failed_runs >= total_runs, OR
-      - batch-level status is one of: completed, cancelled, failed
+      - experiment-level status is one of: completed, cancelled, failed
 
-    Returns the final batch status dict. Raises TimeoutError on timeout.
+    Returns the final experiment status dict. Raises TimeoutError on timeout.
     """
     terminal_statuses = {"completed", "cancelled", "failed"}
     deadline = time.monotonic() + timeout_s
 
     while time.monotonic() < deadline:
-        resp = client.get(f"/batches/{batch_id}")
+        resp = client.get(f"/experiments/{experiment_id}")
         resp.raise_for_status()
         data = resp.json()
 
@@ -92,7 +92,7 @@ def poll_until_done(
         time.sleep(poll_interval_s)
 
     raise TimeoutError(
-        f"Batch {batch_id} did not reach terminal state within {timeout_s}s"
+        f"Experiment {experiment_id} did not reach terminal state within {timeout_s}s"
     )
 
 
@@ -102,12 +102,12 @@ def poll_until_done(
 
 
 @pytest.fixture
-def batch_cleanup(live_client: httpx.Client):
-    """Yields a list; append batch IDs to it; they will be deleted after the test."""
-    batch_ids: list[str] = []
-    yield batch_ids
-    for bid in batch_ids:
+def experiment_cleanup(live_client: httpx.Client):
+    """Yields a list; append experiment IDs to it; they will be deleted after the test."""
+    experiment_ids: list[str] = []
+    yield experiment_ids
+    for eid in experiment_ids:
         try:
-            live_client.delete(f"/batches/{bid}")
+            live_client.delete(f"/experiments/{eid}")
         except Exception:
             pass  # best-effort; never fail the test on cleanup errors

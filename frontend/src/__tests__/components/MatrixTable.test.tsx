@@ -9,7 +9,6 @@ import type { Run } from '../../api/client'
 function makeRun(overrides: Partial<Run> = {}): Run {
   return {
     run_id: 'r1',
-    batch_id: 'b1',
     experiment_id: 'exp1',
     model: 'claude-3-5-sonnet',
     strategy: 'basic',

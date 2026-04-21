@@ -23,7 +23,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import sec_review_framework.coordinator as coord_module
-from sec_review_framework.coordinator import BatchCoordinator
+from sec_review_framework.coordinator import ExperimentCoordinator
 from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
 from sec_review_framework.data.experiment import (
     ExperimentRun,
@@ -40,12 +40,12 @@ from sec_review_framework.reporting.markdown import MarkdownReportGenerator
 # Helpers
 # ---------------------------------------------------------------------------
 
-BATCH_ID = "stall-det-batch"
+EXPERIMENT_ID = "stall-det-experiment"
 MODEL_ID = "fake-model"
 DATASET = "test-ds"
 
 
-def _make_coordinator(tmp_path: Path, db: Database) -> BatchCoordinator:
+def _make_coordinator(tmp_path: Path, db: Database) -> ExperimentCoordinator:
     # k8s_client is intentionally a pure BatchV1Api-shaped mock with NO
     # list_namespaced_pod attribute — mimicking what main() creates today.
     batch_v1_mock = MagicMock(spec=[
@@ -54,7 +54,7 @@ def _make_coordinator(tmp_path: Path, db: Database) -> BatchCoordinator:
         "delete_namespaced_job",
         # Deliberately omitting list_namespaced_pod — that is a CoreV1Api method.
     ])
-    return BatchCoordinator(
+    return ExperimentCoordinator(
         k8s_client=batch_v1_mock,
         storage_root=tmp_path / "storage",
         concurrency_caps={},
@@ -70,10 +70,10 @@ def _make_coordinator(tmp_path: Path, db: Database) -> BatchCoordinator:
 
 
 def _make_run(run_id: str | None = None) -> ExperimentRun:
-    rid = run_id or f"{BATCH_ID}_{MODEL_ID}_single_agent_with_tools_default_none"
+    rid = run_id or f"{EXPERIMENT_ID}_{MODEL_ID}_single_agent_with_tools_default_none"
     return ExperimentRun(
         id=rid,
-        batch_id=BATCH_ID,
+        experiment_id=EXPERIMENT_ID,
         model_id=MODEL_ID,
         strategy=StrategyName.SINGLE_AGENT,
         tool_variant=ToolVariant.WITH_TOOLS,
@@ -112,15 +112,15 @@ async def test_check_stalled_job_uses_core_v1_api(tmp_path: Path, temp_db: Datab
 
     run = _make_run()
 
-    await temp_db.create_batch(
-        batch_id=BATCH_ID,
+    await temp_db.create_experiment(
+        experiment_id=EXPERIMENT_ID,
         config_json="{}",
         total_runs=1,
         max_cost_usd=None,
     )
     await temp_db.create_run(
         run_id=run.id,
-        batch_id=BATCH_ID,
+        experiment_id=EXPERIMENT_ID,
         config_json=run.model_dump_json(),
         model_id=run.model_id,
         strategy=run.strategy.value,

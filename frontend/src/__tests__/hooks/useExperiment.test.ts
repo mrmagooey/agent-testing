@@ -1,21 +1,21 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
-import { useBatch } from '../../hooks/useBatch'
+import { useExperiment } from '../../hooks/useExperiment'
 
 // ─── Mock the API client ─────────────────────────────────────────────────────
 
 vi.mock('../../api/client', () => ({
-  getBatch: vi.fn(),
+  getExperiment: vi.fn(),
 }))
 
-import { getBatch, type Batch } from '../../api/client'
-const mockGetBatch = vi.mocked(getBatch)
+import { getExperiment, type Experiment } from '../../api/client'
+const mockGetExperiment = vi.mocked(getExperiment)
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function makeBatch(overrides: Partial<Batch> = {}): Batch {
+function makeExperiment(overrides: Partial<Experiment> = {}): Experiment {
   return {
-    batch_id: 'b1',
+    experiment_id: 'e1',
     status: 'running',
     dataset: 'ds1',
     created_at: '2026-01-01T00:00:00Z',
@@ -41,62 +41,62 @@ afterEach(() => {
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
-describe('useBatch', () => {
-  it('starts with loading=true and batch=null', () => {
+describe('useExperiment', () => {
+  it('starts with loading=true and experiment=null', () => {
     // Never resolve — we just check initial state
-    mockGetBatch.mockReturnValue(new Promise(() => {}))
+    mockGetExperiment.mockReturnValue(new Promise(() => {}))
 
-    const { result } = renderHook(() => useBatch('b1'))
+    const { result } = renderHook(() => useExperiment('e1'))
 
     expect(result.current.loading).toBe(true)
-    expect(result.current.batch).toBeNull()
+    expect(result.current.experiment).toBeNull()
     expect(result.current.error).toBeNull()
   })
 
-  it('populates batch data after a successful fetch', async () => {
-    const batch = makeBatch({ status: 'completed' })
-    mockGetBatch.mockResolvedValue(batch)
+  it('populates experiment data after a successful fetch', async () => {
+    const experiment = makeExperiment({ status: 'completed' })
+    mockGetExperiment.mockResolvedValue(experiment)
 
-    const { result } = renderHook(() => useBatch('b1'))
+    const { result } = renderHook(() => useExperiment('e1'))
 
     await waitFor(() => {
       expect(result.current.loading).toBe(false)
     })
 
-    expect(result.current.batch).toEqual(batch)
+    expect(result.current.experiment).toEqual(experiment)
     expect(result.current.error).toBeNull()
   })
 
-  it('sets error when getBatch rejects', async () => {
-    mockGetBatch.mockRejectedValue(new Error('Network failure'))
+  it('sets error when getExperiment rejects', async () => {
+    mockGetExperiment.mockRejectedValue(new Error('Network failure'))
 
-    const { result } = renderHook(() => useBatch('b1'))
+    const { result } = renderHook(() => useExperiment('e1'))
 
     await waitFor(() => {
       expect(result.current.loading).toBe(false)
     })
 
     expect(result.current.error).toBe('Network failure')
-    expect(result.current.batch).toBeNull()
+    expect(result.current.experiment).toBeNull()
   })
 
-  it('calls getBatch with the provided batchId', async () => {
-    mockGetBatch.mockResolvedValue(makeBatch({ status: 'completed' }))
+  it('calls getExperiment with the provided experimentId', async () => {
+    mockGetExperiment.mockResolvedValue(makeExperiment({ status: 'completed' }))
 
-    renderHook(() => useBatch('my-batch-123'))
+    renderHook(() => useExperiment('my-experiment-123'))
 
     await waitFor(() => {
-      expect(mockGetBatch).toHaveBeenCalledWith('my-batch-123')
+      expect(mockGetExperiment).toHaveBeenCalledWith('my-experiment-123')
     })
   })
 
-  it('does not fetch when batchId is undefined', async () => {
-    const { result } = renderHook(() => useBatch(undefined))
+  it('does not fetch when experimentId is undefined', async () => {
+    const { result } = renderHook(() => useExperiment(undefined))
 
     await waitFor(() => {
       expect(result.current.loading).toBe(false)
     })
 
-    expect(mockGetBatch).not.toHaveBeenCalled()
+    expect(mockGetExperiment).not.toHaveBeenCalled()
   })
 })

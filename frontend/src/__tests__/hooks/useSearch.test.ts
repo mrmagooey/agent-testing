@@ -18,7 +18,7 @@ function makeFinding(id: string): Finding {
   return {
     finding_id: id,
     run_id: 'r1',
-    batch_id: 'b1',
+    experiment_id: 'e1',
     title: `Finding ${id}`,
     description: 'A vulnerability',
     vuln_class: 'sqli',
@@ -41,18 +41,18 @@ afterEach(() => {
 
 describe('useSearch', () => {
   it('starts with empty results and loading=false', () => {
-    const { result } = renderHook(() => useSearch('b1'))
+    const { result } = renderHook(() => useSearch('e1'))
     expect(result.current.results).toEqual([])
     expect(result.current.loading).toBe(false)
   })
 
   it('exposes a search function', () => {
-    const { result } = renderHook(() => useSearch('b1'))
+    const { result } = renderHook(() => useSearch('e1'))
     expect(typeof result.current.search).toBe('function')
   })
 
   it('does not call API for empty string', async () => {
-    const { result } = renderHook(() => useSearch('b1'))
+    const { result } = renderHook(() => useSearch('e1'))
 
     act(() => {
       result.current.search('')
@@ -65,7 +65,7 @@ describe('useSearch', () => {
   }, 10000)
 
   it('does not call API for whitespace-only query', async () => {
-    const { result } = renderHook(() => useSearch('b1'))
+    const { result } = renderHook(() => useSearch('e1'))
 
     act(() => {
       result.current.search('   ')
@@ -77,7 +77,7 @@ describe('useSearch', () => {
 
   it('sets loading=true immediately when search is called with non-empty query', () => {
     mockSearch.mockReturnValue(new Promise(() => {}))
-    const { result } = renderHook(() => useSearch('b1'))
+    const { result } = renderHook(() => useSearch('e1'))
 
     act(() => {
       result.current.search('sqli')
@@ -88,7 +88,7 @@ describe('useSearch', () => {
 
   it('debounces: does not call API immediately', () => {
     mockSearch.mockResolvedValue([])
-    const { result } = renderHook(() => useSearch('b1'))
+    const { result } = renderHook(() => useSearch('e1'))
 
     act(() => {
       result.current.search('sqli')
@@ -98,16 +98,16 @@ describe('useSearch', () => {
     expect(mockSearch).not.toHaveBeenCalled()
   })
 
-  it('calls searchFindings with correct batchId and query after debounce', async () => {
+  it('calls searchFindings with correct experimentId and query after debounce', async () => {
     mockSearch.mockResolvedValue([])
-    const { result } = renderHook(() => useSearch('my-batch'))
+    const { result } = renderHook(() => useSearch('my-experiment'))
 
     act(() => {
       result.current.search('injection')
     })
 
     await waitFor(() => {
-      expect(mockSearch).toHaveBeenCalledWith('my-batch', 'injection')
+      expect(mockSearch).toHaveBeenCalledWith('my-experiment', 'injection')
     }, { timeout: 2000 })
   }, 10000)
 
@@ -115,7 +115,7 @@ describe('useSearch', () => {
     const findings = [makeFinding('f1'), makeFinding('f2')]
     mockSearch.mockResolvedValue(findings)
 
-    const { result } = renderHook(() => useSearch('b1'))
+    const { result } = renderHook(() => useSearch('e1'))
 
     act(() => {
       result.current.search('sql')
@@ -129,7 +129,7 @@ describe('useSearch', () => {
   it('loading is false after successful search completes', async () => {
     mockSearch.mockResolvedValue([makeFinding('f1')])
 
-    const { result } = renderHook(() => useSearch('b1'))
+    const { result } = renderHook(() => useSearch('e1'))
 
     act(() => {
       result.current.search('xss')
@@ -143,7 +143,7 @@ describe('useSearch', () => {
   it('resets results to empty array on API error', async () => {
     mockSearch.mockRejectedValue(new Error('Network error'))
 
-    const { result } = renderHook(() => useSearch('b1'))
+    const { result } = renderHook(() => useSearch('e1'))
 
     act(() => {
       result.current.search('error')
@@ -158,7 +158,7 @@ describe('useSearch', () => {
   it('loading is false after error', async () => {
     mockSearch.mockRejectedValue(new Error('API down'))
 
-    const { result } = renderHook(() => useSearch('b1'))
+    const { result } = renderHook(() => useSearch('e1'))
 
     act(() => {
       result.current.search('test')
@@ -171,7 +171,7 @@ describe('useSearch', () => {
 
   it('cancels previous debounce when search is called rapidly', async () => {
     mockSearch.mockResolvedValue([])
-    const { result } = renderHook(() => useSearch('b1'))
+    const { result } = renderHook(() => useSearch('e1'))
 
     // Call search multiple times rapidly (simulating user typing)
     act(() => {
@@ -185,11 +185,11 @@ describe('useSearch', () => {
     }, { timeout: 2000 })
 
     // Should only be called with the last query
-    expect(mockSearch).toHaveBeenCalledWith('b1', 'sql')
+    expect(mockSearch).toHaveBeenCalledWith('e1', 'sql')
   }, 10000)
 
   it('loading returns to false when empty query clears the debounce', async () => {
-    const { result } = renderHook(() => useSearch('b1'))
+    const { result } = renderHook(() => useSearch('e1'))
 
     act(() => {
       result.current.search('sql')   // loading = true

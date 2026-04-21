@@ -1,4 +1,4 @@
-"""Unit tests for BatchCoordinator.list_models() config_dir handling."""
+"""Unit tests for ExperimentCoordinator.list_models() config_dir handling."""
 
 import json
 from pathlib import Path
@@ -6,14 +6,14 @@ from pathlib import Path
 import pytest
 import yaml
 
-from sec_review_framework.coordinator import BatchCoordinator
+from sec_review_framework.coordinator import ExperimentCoordinator
 from sec_review_framework.cost.calculator import CostCalculator
 from sec_review_framework.db import Database
 
 
 @pytest.fixture
 def temp_coordinator(tmp_path):
-    """Create a BatchCoordinator with a temporary config_dir."""
+    """Create a ExperimentCoordinator with a temporary config_dir."""
     storage_root = tmp_path / "data"
     storage_root.mkdir(parents=True, exist_ok=True)
 
@@ -22,7 +22,7 @@ def temp_coordinator(tmp_path):
 
     db = Database(storage_root / "test.db")
 
-    return BatchCoordinator(
+    return ExperimentCoordinator(
         k8s_client=None,
         storage_root=storage_root,
         concurrency_caps={},
@@ -71,7 +71,7 @@ def test_list_models_uses_env_var_config_dir(tmp_path, monkeypatch):
     db = Database(storage_root / "test.db")
 
     # Create coordinator with config_dir from env
-    coordinator = BatchCoordinator(
+    coordinator = ExperimentCoordinator(
         k8s_client=None,
         storage_root=storage_root,
         concurrency_caps={},
@@ -138,7 +138,7 @@ def test_list_models_does_not_read_from_storage_root_parent(tmp_path):
     }))
 
     db = Database(storage_root / "test.db")
-    coordinator = BatchCoordinator(
+    coordinator = ExperimentCoordinator(
         k8s_client=None,
         storage_root=storage_root,
         concurrency_caps={},

@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react'
 import {
-  listBatches,
-  compareBatches,
+  listExperiments,
+  compareExperiments,
   getFPPatterns,
-  type Batch,
+  type Experiment,
   type FPPattern,
 } from '../api/client'
 import { PageLoadingSpinner } from '../components/Skeleton'
@@ -24,9 +24,9 @@ function DeltaCell({ value }: { value: number }) {
 }
 
 export default function Feedback() {
-  const [batches, setBatches] = useState<Batch[]>([])
-  const [batchAId, setBatchAId] = useState('')
-  const [batchBId, setBatchBId] = useState('')
+  const [experiments, setExperiments] = useState<Experiment[]>([])
+  const [experimentAId, setExperimentAId] = useState('')
+  const [experimentBId, setExperimentBId] = useState('')
   const [loading, setLoading] = useState(true)
   const [comparing, setComparing] = useState(false)
   const [comparison, setComparison] = useState<{
@@ -36,23 +36,23 @@ export default function Feedback() {
   } | null>(null)
   const [compareError, setCompareError] = useState<string | null>(null)
 
-  const [fpBatchId, setFpBatchId] = useState('')
+  const [fpExperimentId, setFpExperimentId] = useState('')
   const [fpPatterns, setFpPatterns] = useState<FPPattern[]>([])
   const [fpLoading, setFpLoading] = useState(false)
 
   useEffect(() => {
-    listBatches()
-      .then(setBatches)
+    listExperiments()
+      .then(setExperiments)
       .catch(() => null)
       .finally(() => setLoading(false))
   }, [])
 
   const handleCompare = async () => {
-    if (!batchAId || !batchBId) return
+    if (!experimentAId || !experimentBId) return
     setComparing(true)
     setCompareError(null)
     try {
-      const result = await compareBatches(batchAId, batchBId)
+      const result = await compareExperiments(experimentAId, experimentBId)
       setComparison(result)
     } catch (err) {
       setCompareError(err instanceof Error ? err.message : 'Comparison failed')
@@ -62,10 +62,10 @@ export default function Feedback() {
   }
 
   const handleLoadFP = async () => {
-    if (!fpBatchId) return
+    if (!fpExperimentId) return
     setFpLoading(true)
     try {
-      const patterns = await getFPPatterns(fpBatchId)
+      const patterns = await getFPPatterns(fpExperimentId)
       setFpPatterns(patterns)
     } catch {
       setFpPatterns([])
@@ -74,7 +74,7 @@ export default function Feedback() {
     }
   }
 
-  const completedBatches = batches.filter((b) => b.status === 'completed')
+  const completedExperiments = experiments.filter((b) => b.status === 'completed')
 
   if (loading) return <PageLoadingSpinner />
 
@@ -82,47 +82,47 @@ export default function Feedback() {
     <div className="max-w-5xl mx-auto space-y-8">
       <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Feedback</h1>
       <PageDescription>
-        Batch-to-batch accuracy deltas, stability across reruns, and recurring false-positive patterns mined from completed runs.
+        Experiment-to-experiment accuracy deltas, stability across reruns, and recurring false-positive patterns mined from completed runs.
         Use it to quantify whether a prompt, model, or strategy change actually improved results against a baseline.
       </PageDescription>
 
-      {/* Batch Comparison */}
+      {/* Experiment Comparison */}
       <section className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
-        <h2 className="font-semibold mb-5">Batch Comparison</h2>
+        <h2 className="font-semibold mb-5">Experiment Comparison</h2>
         <div className="flex flex-wrap items-end gap-4 mb-6">
           <div>
-            <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Batch A (baseline)</label>
+            <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Experiment A (baseline)</label>
             <select
-              value={batchAId}
-              onChange={(e) => setBatchAId(e.target.value)}
+              value={experimentAId}
+              onChange={(e) => setExperimentAId(e.target.value)}
               className="text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2 min-w-48"
             >
-              <option value="">Select batch…</option>
-              {completedBatches.map((b) => (
-                <option key={b.batch_id} value={b.batch_id}>
-                  {b.batch_id.slice(0, 12)}… ({b.dataset})
+              <option value="">Select experiment…</option>
+              {completedExperiments.map((b) => (
+                <option key={b.experiment_id} value={b.experiment_id}>
+                  {b.experiment_id.slice(0, 12)}… ({b.dataset})
                 </option>
               ))}
             </select>
           </div>
           <div>
-            <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Batch B (new)</label>
+            <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Experiment B (new)</label>
             <select
-              value={batchBId}
-              onChange={(e) => setBatchBId(e.target.value)}
+              value={experimentBId}
+              onChange={(e) => setExperimentBId(e.target.value)}
               className="text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2 min-w-48"
             >
-              <option value="">Select batch…</option>
-              {completedBatches.map((b) => (
-                <option key={b.batch_id} value={b.batch_id}>
-                  {b.batch_id.slice(0, 12)}… ({b.dataset})
+              <option value="">Select experiment…</option>
+              {completedExperiments.map((b) => (
+                <option key={b.experiment_id} value={b.experiment_id}>
+                  {b.experiment_id.slice(0, 12)}… ({b.dataset})
                 </option>
               ))}
             </select>
           </div>
           <button
             onClick={handleCompare}
-            disabled={!batchAId || !batchBId || comparing}
+            disabled={!experimentAId || !experimentBId || comparing}
             className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium transition-colors disabled:opacity-50"
           >
             {comparing ? 'Comparing…' : 'Compare'}
@@ -203,23 +203,23 @@ export default function Feedback() {
         <h2 className="font-semibold mb-5">FP Pattern Browser</h2>
         <div className="flex items-end gap-4 mb-5">
           <div>
-            <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Select batch</label>
+            <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Select experiment</label>
             <select
-              value={fpBatchId}
-              onChange={(e) => setFpBatchId(e.target.value)}
+              value={fpExperimentId}
+              onChange={(e) => setFpExperimentId(e.target.value)}
               className="text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2 min-w-48"
             >
-              <option value="">Select batch…</option>
-              {completedBatches.map((b) => (
-                <option key={b.batch_id} value={b.batch_id}>
-                  {b.batch_id.slice(0, 12)}… ({b.dataset})
+              <option value="">Select experiment…</option>
+              {completedExperiments.map((b) => (
+                <option key={b.experiment_id} value={b.experiment_id}>
+                  {b.experiment_id.slice(0, 12)}… ({b.dataset})
                 </option>
               ))}
             </select>
           </div>
           <button
             onClick={handleLoadFP}
-            disabled={!fpBatchId || fpLoading}
+            disabled={!fpExperimentId || fpLoading}
             className="px-4 py-2 rounded-lg bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-sm font-medium transition-colors disabled:opacity-50"
           >
             {fpLoading ? 'Loading…' : 'Load Patterns'}
@@ -227,7 +227,7 @@ export default function Feedback() {
         </div>
 
         {fpPatterns.length > 0 && <FPPatternsTable patterns={fpPatterns} />}
-        {fpPatterns.length === 0 && fpBatchId && !fpLoading && (
+        {fpPatterns.length === 0 && fpExperimentId && !fpLoading && (
           <p className="text-sm text-gray-400 dark:text-gray-500">No FP patterns found.</p>
         )}
       </section>

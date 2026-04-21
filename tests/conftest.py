@@ -191,8 +191,8 @@ def sample_label() -> GroundTruthLabel:
 def sample_experiment_run() -> ExperimentRun:
     """A minimal experiment run fixture."""
     return ExperimentRun(
-        id="batch-example_gpt-4o_single_agent_with_tools_default_none",
-        batch_id="batch-example",
+        id="experiment-example_gpt-4o_single_agent_with_tools_default_none",
+        experiment_id="experiment-example",
         model_id="gpt-4o",
         strategy=StrategyName.SINGLE_AGENT,
         tool_variant=ToolVariant.WITH_TOOLS,
@@ -213,7 +213,7 @@ def sample_experiment_run() -> ExperimentRun:
 def sample_experiment_matrix() -> ExperimentMatrix:
     """A small experiment matrix: 2 models x 2 strategies = 4 base runs."""
     return ExperimentMatrix(
-        batch_id="test-batch",
+        experiment_id="test-experiment",
         dataset_name="test-dataset",
         dataset_version="1.0.0",
         model_ids=["gpt-4o", "claude-opus-4"],

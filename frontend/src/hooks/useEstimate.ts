@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
-import { estimateBatch, type CostEstimate, type BatchConfig } from '../api/client'
+import { estimateExperiment, type CostEstimate, type ExperimentConfig } from '../api/client'
 
 const DEBOUNCE_MS = 300
 
-export function useEstimate(config: Partial<BatchConfig>): {
+export function useEstimate(config: Partial<ExperimentConfig>): {
   estimate: CostEstimate | null
   loading: boolean
 } {
@@ -29,7 +29,7 @@ export function useEstimate(config: Partial<BatchConfig>): {
 
     timerRef.current = setTimeout(async () => {
       try {
-        const result = await estimateBatch(config)
+        const result = await estimateExperiment(config)
         setEstimate(result)
       } catch {
         // Silently swallow — estimate is best-effort

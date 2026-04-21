@@ -24,7 +24,7 @@ function makeFinding(overrides: Partial<Finding> = {}): Finding {
   return {
     finding_id: 'f-001',
     run_id: 'r-001',
-    batch_id: 'b1',
+    experiment_id: 'e1',
     title: 'SQL Injection',
     description: 'SQL query built from user input',
     vuln_class: 'sqli',
@@ -54,47 +54,47 @@ afterEach(() => {
 describe('FindingsExplorer', () => {
   it('renders the findings count', () => {
     const findings = [makeFinding({ finding_id: 'f1' }), makeFinding({ finding_id: 'f2' })]
-    render(<FindingsExplorer batchId="b1" findings={findings} />)
+    render(<FindingsExplorer experimentId="e1" findings={findings} />)
     expect(screen.getByText(/2 findings/i)).toBeInTheDocument()
   })
 
   it('shows "No findings match" message when list is empty', () => {
-    render(<FindingsExplorer batchId="b1" findings={[]} />)
+    render(<FindingsExplorer experimentId="e1" findings={[]} />)
     expect(screen.getByText(/no findings match/i)).toBeInTheDocument()
   })
 
   it('renders finding title in a table row', () => {
-    render(<FindingsExplorer batchId="b1" findings={[makeFinding()]} />)
+    render(<FindingsExplorer experimentId="e1" findings={[makeFinding()]} />)
     expect(screen.getByText('SQL Injection')).toBeInTheDocument()
   })
 
   it('renders match status badge', () => {
-    render(<FindingsExplorer batchId="b1" findings={[makeFinding({ match_status: 'fp' })]} />)
+    render(<FindingsExplorer experimentId="e1" findings={[makeFinding({ match_status: 'fp' })]} />)
     expect(screen.getByText('fp')).toBeInTheDocument()
   })
 
   it('renders severity badge in the table', () => {
-    render(<FindingsExplorer batchId="b1" findings={[makeFinding({ severity: 'critical' })]} />)
+    render(<FindingsExplorer experimentId="e1" findings={[makeFinding({ severity: 'critical' })]} />)
     // getAllByText since 'critical' also appears in the severity dropdown
     const items = screen.getAllByText('critical')
     expect(items.length).toBeGreaterThanOrEqual(1)
   })
 
   it('renders file path in row', () => {
-    render(<FindingsExplorer batchId="b1" findings={[makeFinding()]} />)
+    render(<FindingsExplorer experimentId="e1" findings={[makeFinding()]} />)
     expect(screen.getByText('app/views.py')).toBeInTheDocument()
   })
 
   it('renders dash for missing file_path', () => {
     const finding = makeFinding({ file_path: undefined })
-    render(<FindingsExplorer batchId="b1" findings={[finding]} />)
+    render(<FindingsExplorer experimentId="e1" findings={[finding]} />)
     // Should show '—' for missing file path
     const dashes = screen.getAllByText('—')
     expect(dashes.length).toBeGreaterThanOrEqual(1)
   })
 
   it('renders line_start in row', () => {
-    render(<FindingsExplorer batchId="b1" findings={[makeFinding({ line_start: 99 })]} />)
+    render(<FindingsExplorer experimentId="e1" findings={[makeFinding({ line_start: 99 })]} />)
     expect(screen.getByText('99')).toBeInTheDocument()
   })
 
@@ -103,7 +103,7 @@ describe('FindingsExplorer', () => {
       makeFinding({ finding_id: 'f1', title: 'TP Finding', match_status: 'tp' }),
       makeFinding({ finding_id: 'f2', title: 'FP Finding', match_status: 'fp' }),
     ]
-    render(<FindingsExplorer batchId="b1" findings={findings} />)
+    render(<FindingsExplorer experimentId="e1" findings={findings} />)
 
     const statusSelect = screen.getAllByRole('combobox')[0]
     fireEvent.change(statusSelect, { target: { value: 'fp' } })
@@ -117,7 +117,7 @@ describe('FindingsExplorer', () => {
       makeFinding({ finding_id: 'f1', title: 'High Finding', severity: 'high' }),
       makeFinding({ finding_id: 'f2', title: 'Low Finding', severity: 'low' }),
     ]
-    render(<FindingsExplorer batchId="b1" findings={findings} />)
+    render(<FindingsExplorer experimentId="e1" findings={findings} />)
 
     const severitySelect = screen.getAllByRole('combobox')[2]
     fireEvent.change(severitySelect, { target: { value: 'high' } })
@@ -127,7 +127,7 @@ describe('FindingsExplorer', () => {
   })
 
   it('expands finding on row click to show description', async () => {
-    render(<FindingsExplorer batchId="b1" findings={[makeFinding()]} />)
+    render(<FindingsExplorer experimentId="e1" findings={[makeFinding()]} />)
 
     const row = screen.getByText('SQL Injection').closest('tr')!
     await act(async () => {
@@ -138,7 +138,7 @@ describe('FindingsExplorer', () => {
   })
 
   it('collapses finding on second click', async () => {
-    render(<FindingsExplorer batchId="b1" findings={[makeFinding()]} />)
+    render(<FindingsExplorer experimentId="e1" findings={[makeFinding()]} />)
 
     const row = screen.getByText('SQL Injection').closest('tr')!
     await act(async () => { fireEvent.click(row) })
@@ -149,7 +149,7 @@ describe('FindingsExplorer', () => {
   })
 
   it('shows reclassify button for FP findings when expanded', async () => {
-    render(<FindingsExplorer batchId="b1" findings={[makeFinding({ match_status: 'fp' })]} />)
+    render(<FindingsExplorer experimentId="e1" findings={[makeFinding({ match_status: 'fp' })]} />)
 
     const row = screen.getByText('SQL Injection').closest('tr')!
     await act(async () => {
@@ -160,7 +160,7 @@ describe('FindingsExplorer', () => {
   })
 
   it('does not show reclassify button for TP findings', async () => {
-    render(<FindingsExplorer batchId="b1" findings={[makeFinding({ match_status: 'tp' })]} />)
+    render(<FindingsExplorer experimentId="e1" findings={[makeFinding({ match_status: 'tp' })]} />)
 
     const row = screen.getByText('SQL Injection').closest('tr')!
     await act(async () => {

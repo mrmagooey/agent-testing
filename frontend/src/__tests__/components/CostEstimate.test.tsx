@@ -24,12 +24,12 @@ describe('CostEstimate', () => {
 
   it('shows placeholder message when not loading and no estimate', () => {
     render(<CostEstimate estimate={null} loading={false} />)
-    expect(screen.getByText(/configure batch/i)).toBeInTheDocument()
+    expect(screen.getByText(/configure experiment/i)).toBeInTheDocument()
   })
 
   it('does not show placeholder when loading', () => {
     render(<CostEstimate estimate={null} loading={true} />)
-    expect(screen.queryByText(/configure batch/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/configure experiment/i)).not.toBeInTheDocument()
   })
 
   it('renders total_runs when estimate is provided', () => {

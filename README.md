@@ -40,14 +40,14 @@ Each run produces a `RunResult` with findings, token counts, tool-call audit, co
 │  - REST API + React SPA      │──────▶ │  ExperimentWorker.run()      │
 │  - Matrix expansion          │  Jobs  │   → ModelProvider (LiteLLM)  │
 │  - Per-model concurrency     │        │   → Strategy + Tools         │
-│  - SQLite batch tracking     │        │   → Finding parser           │
+│  - SQLite experiment tracking │        │   → Finding parser           │
 │  - Result aggregation        │        │   → Evaluator + Reporter     │
 │  - Cost & spend caps         │◀───────│  Writes run_result.json,     │
 └──────────────────────────────┘ shared │  findings.jsonl, report.md   │
                                 storage └──────────────────────────────┘
 ```
 
-- **Coordinator**: single FastAPI deployment that serves the API and the frontend SPA on one port. Manages the batch lifecycle, creates K8s Jobs for each run, enforces per-model concurrency caps, and finalizes matrix reports.
+- **Coordinator**: single FastAPI deployment that serves the API and the frontend SPA on one port. Manages the experiment lifecycle, creates K8s Jobs for each run, enforces per-model concurrency caps, and finalizes matrix reports.
 - **Workers**: one K8s Job per `ExperimentRun`. Pulls config from shared storage, runs the strategy against `LiteLLMProvider`, and writes artifacts back to shared storage.
 - **Ground truth**: labels come from CVE-patched repos (auto-imported) and from the vulnerability injection system (templated vulns applied to clean repos for controlled experiments).
 - **VPC-only**: network policies restrict worker pods to LLM egress + shared storage. Tool calls are audited and anomalous access is flagged.
@@ -131,9 +131,9 @@ release namespace (managed by external-secrets / sealed-secrets).
 
 ```
 src/sec_review_framework/
-  coordinator.py        FastAPI app + BatchCoordinator
+  coordinator.py        FastAPI app + ExperimentCoordinator
   worker.py             ExperimentWorker (K8s Job entrypoint)
-  db.py                 SQLite batch/run tracking
+  db.py                 SQLite experiment/run tracking
   models/               LiteLLM provider + retry logic
   strategies/           single_agent, per_file, per_vuln_class, sast_first, diff_review
   tools/                repo_access, semgrep, doc_lookup, registry with audit log
@@ -143,7 +143,7 @@ src/sec_review_framework/
   reporting/            Markdown + JSON matrix reports
   cost/                 Per-model token pricing and spend tracking
   profiles/             Review profile registry
-  feedback/             Batch comparison, FP pattern mining
+  feedback/             Experiment comparison, FP pattern mining
   data/                 Pydantic models (experiment, findings, evaluation)
   config.py             YAML config loaders
 
@@ -165,7 +165,7 @@ The suite is organized by isolation level:
 | `tests/unit/` | Individual modules (parsers, evaluator, dedup, cost, ...) | None |
 | `tests/integration/` | Strategy + real tools + tmp repo + FakeModelProvider | None |
 | `tests/e2e/test_offline_smoke.py` | Full `ExperimentWorker` pipeline | FakeModelProvider |
-| `tests/e2e/test_coordinator_smoke.py` | Full batch lifecycle via `TestClient` | FakeModelProvider |
+| `tests/e2e/test_coordinator_smoke.py` | Full experiment lifecycle via `TestClient` | FakeModelProvider |
 | `tests/e2e/test_live_smoke.py` | Full pipeline with a real OpenRouter model | Real LLM |
 | `tests/infra/` | Docker build + K8s manifest validation | None |
 
@@ -205,7 +205,7 @@ make kind-e2e-playwright                # Playwright --grep @live
 make kind-e2e-down
 ```
 
-To add a spec to the live suite, tag its `describe` with `@live` and make it tolerant of real-backend state (no mocked `page.route()`, don't assume a clean dataset). See `live-golden-path.spec.ts` for the pattern — it submits via `request.post('/api/batches')` rather than driving the form, because the dataset and model lists come from the live database.
+To add a spec to the live suite, tag its `describe` with `@live` and make it tolerant of real-backend state (no mocked `page.route()`, don't assume a clean dataset). See `live-golden-path.spec.ts` for the pattern — it submits via `request.post('/api/experiments')` rather than driving the form, because the dataset and model lists come from the live database.
 
 ---
 

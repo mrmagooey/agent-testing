@@ -5,7 +5,7 @@
 import { test, expect } from '@playwright/test'
 import { mockApi } from './helpers/mockApi'
 
-const BATCH_ID = 'aaaaaaaa-0001-0001-0001-000000000001'
+const EXPERIMENT_ID = 'aaaaaaaa-0001-0001-0001-000000000001'
 const RUN_ID = 'run-001-aaa'
 
 // ---------------------------------------------------------------------------
@@ -13,8 +13,8 @@ const RUN_ID = 'run-001-aaa'
 // ---------------------------------------------------------------------------
 
 test.describe('Dashboard error state', () => {
-  test('shows error banner when GET /batches returns 500', async ({ page }) => {
-    await page.route('**/api/batches', (route) => {
+  test('shows error banner when GET /experiments returns 500', async ({ page }) => {
+    await page.route('**/api/experiments', (route) => {
       route.fulfill({ status: 500, contentType: 'application/json', body: '{"detail":"Internal Server Error"}' })
     })
     await page.goto('/')
@@ -45,16 +45,16 @@ test.describe('Dashboard smoke test failure', () => {
 })
 
 // ---------------------------------------------------------------------------
-// BatchDetail error state
+// ExperimentDetail error state
 // ---------------------------------------------------------------------------
 
-test.describe('BatchDetail error state', () => {
-  test('shows error when GET /batches/:id returns 404', async ({ page }) => {
+test.describe('ExperimentDetail error state', () => {
+  test('shows error when GET /experiments/:id returns 404', async ({ page }) => {
     await mockApi(page)
-    await page.route(`**/api/batches/${BATCH_ID}`, (route) => {
+    await page.route(`**/api/experiments/${EXPERIMENT_ID}`, (route) => {
       route.fulfill({ status: 404, contentType: 'application/json', body: '{"detail":"Not found"}' })
     })
-    await page.goto(`/batches/${BATCH_ID}`)
+    await page.goto(`/experiments/${EXPERIMENT_ID}`)
     await expect(
       page.locator('[class*="red"], [class*="error"]').filter({ hasText: /not found|error|404/i }).first()
     ).toBeVisible()
@@ -66,12 +66,12 @@ test.describe('BatchDetail error state', () => {
 // ---------------------------------------------------------------------------
 
 test.describe('RunDetail error state', () => {
-  test('shows error when GET /batches/:id/runs/:runId returns 404', async ({ page }) => {
+  test('shows error when GET /experiments/:id/runs/:runId returns 404', async ({ page }) => {
     await mockApi(page)
-    await page.route(`**/api/batches/${BATCH_ID}/runs/${RUN_ID}`, (route) => {
+    await page.route(`**/api/experiments/${EXPERIMENT_ID}/runs/${RUN_ID}`, (route) => {
       route.fulfill({ status: 404, contentType: 'application/json', body: '{"detail":"Not found"}' })
     })
-    await page.goto(`/batches/${BATCH_ID}/runs/${RUN_ID}`)
+    await page.goto(`/experiments/${EXPERIMENT_ID}/runs/${RUN_ID}`)
     await expect(
       page.locator('[class*="red"]').filter({ hasText: /not found|error/i }).first()
     ).toBeVisible()
@@ -85,11 +85,11 @@ test.describe('RunDetail error state', () => {
 test.describe('RunCompare error state', () => {
   test('shows error when compare-runs returns 500', async ({ page }) => {
     await mockApi(page)
-    // Frontend calls /api/batches/{id}/compare?a=...&b=... (not compare-runs)
-    await page.route(`**/api/batches/${BATCH_ID}/compare**`, (route) => {
+    // Frontend calls /api/experiments/{id}/compare?a=...&b=... (not compare-runs)
+    await page.route(`**/api/experiments/${EXPERIMENT_ID}/compare**`, (route) => {
       route.fulfill({ status: 500, contentType: 'application/json', body: '{"detail":"server error"}' })
     })
-    await page.goto(`/batches/${BATCH_ID}/compare?a=run-001-aaa&b=run-002-bbb`)
+    await page.goto(`/experiments/${EXPERIMENT_ID}/compare?a=run-001-aaa&b=run-002-bbb`)
     await expect(
       page.locator('[class*="red"]').filter({ hasText: /error|Could not load/i }).first()
     ).toBeVisible()
@@ -103,9 +103,9 @@ test.describe('RunCompare error state', () => {
 test.describe('Loading skeleton states', () => {
   test('Dashboard shows loading spinner during initial fetch', async ({ page }) => {
     await mockApi(page)
-    await page.route('**/api/batches', (route) => {
+    await page.route('**/api/experiments', (route) => {
       const url = new URL(route.request().url())
-      if (url.pathname.replace(/^\/api/, '') === '/batches' && route.request().method() === 'GET') {
+      if (url.pathname.replace(/^\/api/, '') === '/experiments' && route.request().method() === 'GET') {
         return route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
       }
       return route.fallback()
@@ -116,38 +116,38 @@ test.describe('Loading skeleton states', () => {
 })
 
 test.describe('EmptyState components', () => {
-  // Both empty-state messages appear in a single Dashboard render when batches=[]
-  test('Dashboard shows empty active batches message when batches list is empty', async ({ page }) => {
-    // Install the full mockApi first so every route is handled, then override batches with []
+  // Both empty-state messages appear in a single Dashboard render when experiments=[]
+  test('Dashboard shows empty active experiments message when experiments list is empty', async ({ page }) => {
+    // Install the full mockApi first so every route is handled, then override experiments with []
     await mockApi(page)
-    await page.route('**/api/batches', (route) => {
+    await page.route('**/api/experiments', (route) => {
       const url = new URL(route.request().url())
-      // Only intercept the bare /batches list route — let sub-paths fall through to mockApi
-      if (url.pathname.replace(/^\/api/, '') === '/batches' && route.request().method() === 'GET') {
+      // Only intercept the bare /experiments list route — let sub-paths fall through to mockApi
+      if (url.pathname.replace(/^\/api/, '') === '/experiments' && route.request().method() === 'GET') {
         route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
       } else {
         route.fallback()
       }
     })
     await page.goto('/')
-    // Wait for the "Active Batches" card heading to confirm Dashboard rendered
-    await expect(page.getByRole('heading', { name: 'Active Batches' })).toBeVisible({ timeout: 10000 })
-    await expect(page.getByText('No active batches.')).toBeVisible()
+    // Wait for the "Active Experiments" card heading to confirm Dashboard rendered
+    await expect(page.getByRole('heading', { name: 'Active Experiments' })).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText('No active experiments.')).toBeVisible()
   })
 
-  test('Dashboard shows empty completed batches message', async ({ page }) => {
+  test('Dashboard shows empty completed experiments message', async ({ page }) => {
     await mockApi(page)
-    await page.route('**/api/batches', (route) => {
+    await page.route('**/api/experiments', (route) => {
       const url = new URL(route.request().url())
-      if (url.pathname.replace(/^\/api/, '') === '/batches' && route.request().method() === 'GET') {
+      if (url.pathname.replace(/^\/api/, '') === '/experiments' && route.request().method() === 'GET') {
         route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
       } else {
         route.fallback()
       }
     })
     await page.goto('/')
-    await expect(page.getByRole('heading', { name: 'Recent Batches' })).toBeVisible({ timeout: 10000 })
-    await expect(page.getByText(/No completed batches yet/)).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Recent Experiments' })).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText(/No completed experiments yet/)).toBeVisible()
   })
 })
 
@@ -158,7 +158,7 @@ test.describe('EmptyState components', () => {
 test.describe('Reclassify finding flow', () => {
   test.beforeEach(async ({ page }) => {
     await mockApi(page)
-    await page.goto(`/batches/${BATCH_ID}/runs/${RUN_ID}`)
+    await page.goto(`/experiments/${EXPERIMENT_ID}/runs/${RUN_ID}`)
   })
 
   test('Reclassify button is visible on fp finding rows when expanded', async ({ page }) => {
@@ -171,7 +171,7 @@ test.describe('Reclassify finding flow', () => {
 
   test('clicking Reclassify button calls the reclassify API', async ({ page }) => {
     let reclassifyCalled = false
-    await page.route('**/api/batches/**/runs/**/reclassify', (route) => {
+    await page.route('**/api/experiments/**/runs/**/reclassify', (route) => {
       reclassifyCalled = true
       route.fulfill({ status: 204, body: '' })
     })
@@ -184,26 +184,26 @@ test.describe('Reclassify finding flow', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Download button in RunDetail and BatchDetail
+// Download button in RunDetail and ExperimentDetail
 // ---------------------------------------------------------------------------
 
 test.describe('Download button functionality', () => {
   test('RunDetail shows Download Run button', async ({ page }) => {
     await mockApi(page)
-    await page.goto(`/batches/${BATCH_ID}/runs/${RUN_ID}`)
+    await page.goto(`/experiments/${EXPERIMENT_ID}/runs/${RUN_ID}`)
     await expect(page.getByRole('button', { name: /Download Run/i })).toBeVisible()
   })
 
-  test('BatchDetail shows Download Reports button for completed batch', async ({ page }) => {
+  test('ExperimentDetail shows Download Results button for completed experiment', async ({ page }) => {
     await mockApi(page)
-    await page.goto(`/batches/${BATCH_ID}`)
-    // DownloadButton renders for terminal (completed) batches
-    await expect(page.getByRole('button', { name: /Download Reports/i })).toBeVisible()
+    await page.goto(`/experiments/${EXPERIMENT_ID}`)
+    // DownloadButton renders for terminal (completed) experiments
+    await expect(page.getByRole('button', { name: /Download Results/i })).toBeVisible()
   })
 
   test('Download button triggers file download link creation', async ({ page }) => {
     await mockApi(page)
-    await page.goto(`/batches/${BATCH_ID}/runs/${RUN_ID}`)
+    await page.goto(`/experiments/${EXPERIMENT_ID}/runs/${RUN_ID}`)
 
     // Listen for download events (the button creates an <a> and clicks it)
     const downloadPromise = page.waitForEvent('download', { timeout: 5000 }).catch(() => null)

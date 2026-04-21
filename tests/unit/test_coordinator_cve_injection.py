@@ -11,7 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import sec_review_framework.coordinator as coord_module
-from sec_review_framework.coordinator import app, BatchCoordinator
+from sec_review_framework.coordinator import app, ExperimentCoordinator
 from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
 from sec_review_framework.data.evaluation import GroundTruthLabel, GroundTruthSource
 from sec_review_framework.data.findings import Severity, VulnClass
@@ -28,13 +28,13 @@ FIXTURE_TEMPLATE_ID = "test_sqli_format_string"
 # ---------------------------------------------------------------------------
 
 
-def _make_coordinator(tmp_path: Path, db: Database) -> BatchCoordinator:
+def _make_coordinator(tmp_path: Path, db: Database) -> ExperimentCoordinator:
     cost_calc = CostCalculator(
         pricing={
             "gpt-4o": ModelPricing(input_per_million=5.0, output_per_million=15.0),
         }
     )
-    return BatchCoordinator(
+    return ExperimentCoordinator(
         k8s_client=None,
         storage_root=tmp_path / "storage",
         concurrency_caps={},

@@ -1,7 +1,7 @@
 import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom'
 import Dashboard from './pages/Dashboard'
-import BatchNew from './pages/BatchNew'
-import BatchDetail from './pages/BatchDetail'
+import ExperimentNew from './pages/ExperimentNew'
+import ExperimentDetail from './pages/ExperimentDetail'
 import RunDetail from './pages/RunDetail'
 import RunCompare from './pages/RunCompare'
 import CVEDiscovery from './pages/CVEDiscovery'
@@ -12,7 +12,7 @@ import ThemeToggle from './components/ThemeToggle'
 
 const NAV_LINKS = [
   { to: '/', label: 'Dashboard', end: true },
-  { to: '/batches/new', label: 'New Batch', end: false },
+  { to: '/experiments/new', label: 'New Experiment', end: false },
   { to: '/datasets', label: 'Datasets', end: true },
   { to: '/datasets/discover', label: 'CVE Discovery', end: false },
   { to: '/feedback', label: 'Feedback', end: false },
@@ -98,10 +98,10 @@ export default function App() {
         <main className="max-w-screen-xl mx-auto px-4 py-6">
           <Routes>
             <Route path="/" element={<Dashboard />} />
-            <Route path="/batches/new" element={<BatchNew />} />
-            <Route path="/batches/:id/compare" element={<RunCompare />} />
-            <Route path="/batches/:batchId/runs/:runId" element={<RunDetail />} />
-            <Route path="/batches/:id" element={<BatchDetail />} />
+            <Route path="/experiments/new" element={<ExperimentNew />} />
+            <Route path="/experiments/:id/compare" element={<RunCompare />} />
+            <Route path="/experiments/:experimentId/runs/:runId" element={<RunDetail />} />
+            <Route path="/experiments/:id" element={<ExperimentDetail />} />
             <Route path="/datasets/discover" element={<CVEDiscovery />} />
             <Route path="/datasets/:name" element={<DatasetDetail />} />
             <Route path="/datasets" element={<Datasets />} />

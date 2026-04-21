@@ -11,7 +11,7 @@ import os
 
 import pytest
 
-from tests.e2e.live.conftest import K8S_LIVE_MARK, poll_until_done, unique_batch_id
+from tests.e2e.live.conftest import K8S_LIVE_MARK, poll_until_done, unique_experiment_id
 
 pytestmark = [
     K8S_LIVE_MARK,
@@ -36,27 +36,27 @@ MATRIX_PAYLOAD = {
     "parallel_modes": [False],
     "tool_extension_sets": [[]],
     "num_repetitions": 1,
-    "max_batch_cost_usd": 0.30,
+    "max_experiment_cost_usd": 0.30,
     "strategy_configs": {"single_agent": {"max_turns": 3}, "per_file": {"max_turns": 3}},
 }
 
 
-def test_matrix_2x2(live_client, batch_cleanup):
-    batch_id = unique_batch_id("live-e2e-2x2")
-    payload = {**MATRIX_PAYLOAD, "batch_id": batch_id}
-    batch_cleanup.append(batch_id)
+def test_matrix_2x2(live_client, experiment_cleanup):
+    experiment_id = unique_experiment_id("live-e2e-2x2")
+    payload = {**MATRIX_PAYLOAD, "experiment_id": experiment_id}
+    experiment_cleanup.append(experiment_id)
 
     # --- Submit ---
-    resp = live_client.post("/batches", json=payload)
+    resp = live_client.post("/experiments", json=payload)
     assert resp.status_code == 201, f"Expected 201, got {resp.status_code}: {resp.text}"
     submit_body = resp.json()
-    assert submit_body["batch_id"] == batch_id
+    assert submit_body["experiment_id"] == experiment_id
     assert submit_body["total_runs"] == 4, (
         f"Expected 4 runs (2 strategies × 2 tool_variants), got {submit_body['total_runs']}"
     )
 
     # --- Poll to completion (15 min max) ---
-    final = poll_until_done(live_client, batch_id, timeout_s=900, poll_interval_s=10)
+    final = poll_until_done(live_client, experiment_id, timeout_s=900, poll_interval_s=10)
 
     completed = final["completed_runs"]
     failed = final["failed_runs"]
@@ -69,7 +69,7 @@ def test_matrix_2x2(live_client, batch_cleanup):
     )
 
     # --- Matrix report has all 4 cells ---
-    results_resp = live_client.get(f"/batches/{batch_id}/results")
+    results_resp = live_client.get(f"/experiments/{experiment_id}/results")
     assert results_resp.status_code == 200
     results = results_resp.json()
     runs = results.get("runs", [])

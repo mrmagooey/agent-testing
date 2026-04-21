@@ -5,7 +5,7 @@
  * Covers:
  *  1. Severity filter select change (critical) — visible row shifts
  *  2. Match-status filter select change (fp) — FP rows visible
- *  3. Findings search input — POST/GET /api/batches/{id}/findings/search fires
+ *  3. Findings search input — POST/GET /api/experiments/{id}/findings/search fires
  *  4. Pagination Previous/Next button states
  *  5. Prompt Snapshot collapsible toggle (expand / collapse)
  *  6. Conversation Transcript collapsible toggle (expand / collapse)
@@ -24,9 +24,9 @@ import { fileURLToPath } from 'url'
 // Constants derived from fixture files
 // ---------------------------------------------------------------------------
 
-const BATCH_ID = 'aaaaaaaa-0001-0001-0001-000000000001'
+const EXPERIMENT_ID = 'aaaaaaaa-0001-0001-0001-000000000001'
 const RUN_ID = 'run-001-aaa'
-const BASE_URL = `/batches/${BATCH_ID}/runs/${RUN_ID}`
+const BASE_URL = `/experiments/${EXPERIMENT_ID}/runs/${RUN_ID}`
 
 // The fixture has exactly 2 findings (< PAGE_SIZE=25), so pagination is hidden
 // unless we override. We will use a custom large-findings fixture for pagination tests.
@@ -112,11 +112,11 @@ test('match filter "fp" — URL param updated', async ({ page }) => {
 
 // NOTE: RunDetail's inline search input (type="search") filters locally — it does NOT
 // call the /findings/search endpoint. That endpoint is called by FindingsSearch inside
-// FindingsExplorer on the BatchDetail page. There is no FindingsSearch component on
+// FindingsExplorer on the ExperimentDetail page. There is no FindingsSearch component on
 // RunDetail, so we assert the inline filter behaviour instead and skip the API-request
 // assertion for this page.
 // TODO: If a FindingsSearch component is added to RunDetail in future, replace this test
-//       with a waitForRequest assertion against /api/batches/{id}/findings/search?q=sql.
+//       with a waitForRequest assertion against /api/experiments/{id}/findings/search?q=sql.
 
 test('search input "sql" — matching finding remains visible (inline client-side filter)', async ({ page }) => {
   const searchInput = page.locator('input[type="search"]')
@@ -126,10 +126,10 @@ test('search input "sql" — matching finding remains visible (inline client-sid
   await expect(page.getByRole('cell', { name: 'Reflected XSS in search results' })).not.toBeVisible()
 })
 
-test.skip('findings search fires GET /api/batches/{id}/findings/search?q=sql — NOT on RunDetail', async () => {
+test.skip('findings search fires GET /api/experiments/{id}/findings/search?q=sql — NOT on RunDetail', async () => {
   // TODO: RunDetail does not mount FindingsSearch; the /findings/search endpoint is only
-  //       called from FindingsExplorer (BatchDetail). Add this test there once the
-  //       batch-detail-interactions spec is written.
+  //       called from FindingsExplorer (ExperimentDetail). Add this test there once the
+  //       experiment-detail-interactions spec is written.
 })
 
 // ---------------------------------------------------------------------------
@@ -145,7 +145,7 @@ test('pagination — Previous button disabled on page 1 when fixture has < 25 fi
 
 test('pagination — Previous disabled on page 1 and Next enabled with >25 findings', async ({ page }) => {
   // Override the run endpoint to return 30 padded findings so pagination renders.
-  await page.route(`**/api/batches/${BATCH_ID}/runs/${RUN_ID}`, (route) => {
+  await page.route(`**/api/experiments/${EXPERIMENT_ID}/runs/${RUN_ID}`, (route) => {
     route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -168,7 +168,7 @@ test('pagination — Previous disabled on page 1 and Next enabled with >25 findi
 })
 
 test('pagination — clicking Next enables Previous', async ({ page }) => {
-  await page.route(`**/api/batches/${BATCH_ID}/runs/${RUN_ID}`, (route) => {
+  await page.route(`**/api/experiments/${EXPERIMENT_ID}/runs/${RUN_ID}`, (route) => {
     route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -327,7 +327,7 @@ test('clicking Reclassify as Unlabeled Real posts to /reclassify endpoint', asyn
 
   // Wait for the POST request — mock returns 204 so no UI crash expected
   const req = await reclassifyRequestPromise
-  expect(req.url()).toMatch(new RegExp(`/batches/${BATCH_ID}/runs/${RUN_ID}/reclassify`))
+  expect(req.url()).toMatch(new RegExp(`/experiments/${EXPERIMENT_ID}/runs/${RUN_ID}/reclassify`))
   expect(req.method()).toBe('POST')
 })
 

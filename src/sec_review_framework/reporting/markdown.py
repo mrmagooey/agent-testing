@@ -199,7 +199,7 @@ class MarkdownReportGenerator(ReportGenerator):
     # ------------------------------------------------------------------
 
     def render_matrix(self, results: list[RunResult], output_dir: Path) -> None:
-        """Write matrix_report.md comparing all runs in the batch."""
+        """Write matrix_report.md comparing all runs in the experiment."""
         output_dir.mkdir(parents=True, exist_ok=True)
         content = self._build_matrix_report(results)
         (output_dir / "matrix_report.md").write_text(content, encoding="utf-8")
@@ -208,10 +208,10 @@ class MarkdownReportGenerator(ReportGenerator):
         if not results:
             return "# Security Review Framework — No Results\n"
 
-        batch_id = results[0].experiment.batch_id
+        experiment_id = results[0].experiment.experiment_id
         lines: list[str] = []
 
-        lines.append(f"# Security Review Framework — Batch `{batch_id}` Results\n")
+        lines.append(f"# Security Review Framework — Experiment `{experiment_id}` Results\n")
 
         # --- Comparative Matrix ---
         lines.append("## Comparative Matrix\n")
@@ -323,8 +323,8 @@ class MarkdownReportGenerator(ReportGenerator):
 
         # --- Cost Analysis ---
         lines.append("## Cost Analysis\n")
-        lines.append("| Model | Avg Cost/Run | Total Batch Cost | Cost per True Positive |")
-        lines.append("|-------|-------------|------------------|----------------------|")
+        lines.append("| Model | Avg Cost/Run | Total Experiment Cost | Cost per True Positive |")
+        lines.append("|-------|-------------|----------------------|----------------------|")
         by_model: dict[str, list[RunResult]] = defaultdict(list)
         for r in results:
             by_model[r.experiment.model_id].append(r)

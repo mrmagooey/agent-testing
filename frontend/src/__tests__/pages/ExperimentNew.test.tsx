@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
-import BatchNew, { generatePowerSet } from '../../pages/BatchNew'
+import ExperimentNew, { generatePowerSet } from '../../pages/ExperimentNew'
 
-// ─── Regression: React error #31 on /batches/new ─────────────────────────────
+// ─── Regression: React error #31 on /experiments/new ─────────────────────────
 //
 // The coordinator's /models, /strategies, /profiles endpoints return
 // `list[dict]` (e.g. `{"name": "default", "description": "..."}`).
@@ -63,7 +63,7 @@ function mockRealCoordinatorFetch() {
   return fetchMock
 }
 
-describe('BatchNew page rendering (React #31 regression)', () => {
+describe('ExperimentNew page rendering (React #31 regression)', () => {
   beforeEach(() => {
     mockRealCoordinatorFetch()
   })
@@ -72,20 +72,20 @@ describe('BatchNew page rendering (React #31 regression)', () => {
     vi.restoreAllMocks()
   })
 
-  it('renders /batches/new without throwing when the coordinator returns object-shape config payloads', async () => {
+  it('renders /experiments/new without throwing when the coordinator returns object-shape config payloads', async () => {
     // Capture console.error so we can detect React's #31 warning even in
     // environments where it would otherwise be swallowed.
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
     render(
-      <MemoryRouter initialEntries={['/batches/new']}>
-        <BatchNew />
+      <MemoryRouter initialEntries={['/experiments/new']}>
+        <ExperimentNew />
       </MemoryRouter>,
     )
 
     // Wait for the page to finish loading (Loading… disappears once Promise.all resolves).
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'New Batch' })).toBeVisible()
+      expect(screen.getByRole('heading', { name: 'New Experiment' })).toBeVisible()
     })
 
     // The profile radio list must show the profile names (not [object Object]).

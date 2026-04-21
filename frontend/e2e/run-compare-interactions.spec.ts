@@ -10,7 +10,7 @@
 import { test, expect } from '@playwright/test'
 import { mockApi } from './helpers/mockApi'
 
-const BATCH_ID = 'aaaaaaaa-0001-0001-0001-000000000001'
+const EXPERIMENT_ID = 'aaaaaaaa-0001-0001-0001-000000000001'
 const RUN_A = 'run-001-aaa'
 const RUN_B = 'run-002-bbb'
 
@@ -32,7 +32,7 @@ const ACTIVE_TAB_CLASS = 'border-indigo-600'
 test.describe('RunCompare tab switching', () => {
   test.beforeEach(async ({ page }) => {
     await mockApi(page)
-    await page.goto(`/batches/${BATCH_ID}/compare?a=${RUN_A}&b=${RUN_B}`)
+    await page.goto(`/experiments/${EXPERIMENT_ID}/compare?a=${RUN_A}&b=${RUN_B}`)
   })
 
   test('"Found by Both" tab is active by default and shows shared findings', async ({ page }) => {
@@ -128,7 +128,7 @@ test.describe('RunCompare tab switching', () => {
 test.describe('RunCompare finding card expander', () => {
   test.beforeEach(async ({ page }) => {
     await mockApi(page)
-    await page.goto(`/batches/${BATCH_ID}/compare?a=${RUN_A}&b=${RUN_B}`)
+    await page.goto(`/experiments/${EXPERIMENT_ID}/compare?a=${RUN_A}&b=${RUN_B}`)
   })
 
   test('finding card header button expands the description on first click', async ({ page }) => {

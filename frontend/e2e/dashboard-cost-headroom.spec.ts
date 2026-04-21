@@ -4,41 +4,41 @@
  * Tests:
  * - Cost Headroom card: normal (green), warning (>80%, yellow), critical (>95%, red)
  * - RunCompare: Venn SVG presence + cost delta badge color
- * - BatchDetail: sticky action bar appears when runs selected, navigates on compare
+ * - ExperimentDetail: sticky action bar appears when runs selected, navigates on compare
  */
 import { test, expect } from '@playwright/test'
 import { mockApi } from './helpers/mockApi'
 
-const BATCH_ID = 'aaaaaaaa-0001-0001-0001-000000000001'
-const RUNNING_BATCH_ID = 'bbbbbbbb-0002-0002-0002-000000000002'
+const EXPERIMENT_ID = 'aaaaaaaa-0001-0001-0001-000000000001'
+const RUNNING_EXPERIMENT_ID = 'bbbbbbbb-0002-0002-0002-000000000002'
 const RUN_A = 'run-001-aaa'
 const RUN_B = 'run-002-bbb'
 
 // ---------------------------------------------------------------------------
 // Cost Headroom — normal (< 80%)
-// The fixture batch has total_cost_usd=12.45, spend_cap_usd=50 → 24.9% — green
+// The fixture experiment has total_cost_usd=12.45, spend_cap_usd=50 → 24.9% — green
 // ---------------------------------------------------------------------------
 
 test.describe('Cost Headroom card', () => {
-  test('Cost Headroom card is visible with completed batches', async ({ page }) => {
+  test('Cost Headroom card is visible with completed experiments', async ({ page }) => {
     await mockApi(page)
     await page.goto('/')
     // Headroom card only renders when costSparkData.length >= 2
-    // The fixture has 2 completed batches, so the Trends section should show
+    // The fixture has 2 completed experiments, so the Trends section should show
     // We need to check for the headroom card text
     await expect(page.getByText('Cost Headroom')).toBeVisible()
   })
 
   test('Cost Headroom shows green bar at low spend percentage', async ({ page }) => {
     await mockApi(page)
-    // Override batches so total spend is clearly under 80%
-    await page.route('**/api/batches', (route) => {
+    // Override experiments so total spend is clearly under 80%
+    await page.route('**/api/experiments', (route) => {
       route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify([
           {
-            batch_id: 'aaa-01',
+            experiment_id: 'aaa-01',
             status: 'completed',
             dataset: 'ds-1',
             created_at: '2026-04-16T00:00:00Z',
@@ -52,7 +52,7 @@ test.describe('Cost Headroom card', () => {
             spend_cap_usd: 50.0,
           },
           {
-            batch_id: 'aaa-02',
+            experiment_id: 'aaa-02',
             status: 'completed',
             dataset: 'ds-2',
             created_at: '2026-04-17T00:00:00Z',
@@ -79,13 +79,13 @@ test.describe('Cost Headroom card', () => {
 
   test('Cost Headroom shows warning at >=80% spend', async ({ page }) => {
     await mockApi(page)
-    await page.route('**/api/batches', (route) => {
+    await page.route('**/api/experiments', (route) => {
       route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify([
           {
-            batch_id: 'warn-01',
+            experiment_id: 'warn-01',
             status: 'completed',
             dataset: 'ds-warn',
             created_at: '2026-04-16T00:00:00Z',
@@ -99,7 +99,7 @@ test.describe('Cost Headroom card', () => {
             spend_cap_usd: 25.0,  // 80% exactly
           },
           {
-            batch_id: 'warn-02',
+            experiment_id: 'warn-02',
             status: 'completed',
             dataset: 'ds-warn2',
             created_at: '2026-04-17T00:00:00Z',
@@ -121,13 +121,13 @@ test.describe('Cost Headroom card', () => {
 
   test('Cost Headroom shows critical warning at >=95% spend', async ({ page }) => {
     await mockApi(page)
-    await page.route('**/api/batches', (route) => {
+    await page.route('**/api/experiments', (route) => {
       route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify([
           {
-            batch_id: 'crit-01',
+            experiment_id: 'crit-01',
             status: 'completed',
             dataset: 'ds-crit',
             created_at: '2026-04-16T00:00:00Z',
@@ -141,7 +141,7 @@ test.describe('Cost Headroom card', () => {
             spend_cap_usd: 50.0,  // 96%
           },
           {
-            batch_id: 'crit-02',
+            experiment_id: 'crit-02',
             status: 'completed',
             dataset: 'ds-crit2',
             created_at: '2026-04-17T00:00:00Z',
@@ -169,7 +169,7 @@ test.describe('Cost Headroom card', () => {
 test.describe('RunCompare Venn and cost delta', () => {
   test.beforeEach(async ({ page }) => {
     await mockApi(page)
-    await page.goto(`/batches/${BATCH_ID}/compare?a=${RUN_A}&b=${RUN_B}`)
+    await page.goto(`/experiments/${EXPERIMENT_ID}/compare?a=${RUN_A}&b=${RUN_B}`)
   })
 
   test('Venn SVG diagram is rendered', async ({ page }) => {
@@ -207,8 +207,8 @@ test.describe('RunCompare Venn and cost delta', () => {
 
   test('delta badge shows red when B is more expensive than A', async ({ page }) => {
     // Override comparison to make B more expensive
-    // Frontend calls /api/batches/{id}/compare (not compare-runs)
-    await page.route(`**/api/batches/${BATCH_ID}/compare**`, (route) => {
+    // Frontend calls /api/experiments/{id}/compare (not compare-runs)
+    await page.route(`**/api/experiments/${EXPERIMENT_ID}/compare**`, (route) => {
       route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -241,20 +241,20 @@ test.describe('RunCompare Venn and cost delta', () => {
         }),
       })
     })
-    await page.goto(`/batches/${BATCH_ID}/compare?a=${RUN_A}&b=${RUN_B}`)
+    await page.goto(`/experiments/${EXPERIMENT_ID}/compare?a=${RUN_A}&b=${RUN_B}`)
     // B is more expensive — badge shows +$0.4000 (positive delta with $ sign)
     await expect(page.getByText(/\+\$0\.4000/)).toBeVisible()
   })
 })
 
 // ---------------------------------------------------------------------------
-// BatchDetail: sticky action bar
+// ExperimentDetail: sticky action bar
 // ---------------------------------------------------------------------------
 
-test.describe('BatchDetail sticky action bar', () => {
+test.describe('ExperimentDetail sticky action bar', () => {
   test.beforeEach(async ({ page }) => {
     await mockApi(page)
-    await page.goto(`/batches/${BATCH_ID}`)
+    await page.goto(`/experiments/${EXPERIMENT_ID}`)
   })
 
   test('sticky action bar is not visible initially', async ({ page }) => {
@@ -307,7 +307,7 @@ test.describe('BatchDetail sticky action bar', () => {
     }
   })
 
-  test('Download Batch button visible in sticky action bar when run selected', async ({ page }) => {
+  test('Download Experiment button visible in sticky action bar when run selected', async ({ page }) => {
     const matrixSection = page.locator('section').filter({ hasText: 'Comparative Matrix' })
     const checkboxes = matrixSection.locator('input[type="checkbox"]')
     const count = await checkboxes.count()

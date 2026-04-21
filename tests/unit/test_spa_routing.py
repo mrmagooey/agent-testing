@@ -1,9 +1,9 @@
 """Unit tests for the SPA middleware and /api prefix stripping in coordinator.py.
 
 These tests verify:
-  - GET /batches/new with Accept: text/html returns index.html (SPA route).
-  - GET /batches/new with Accept: application/json falls through to the API.
-  - GET /api/batches strips the /api prefix and routes to the API handler.
+  - GET /experiments/new with Accept: text/html returns index.html (SPA route).
+  - GET /experiments/new with Accept: application/json falls through to the API.
+  - GET /api/experiments strips the /api prefix and routes to the API handler.
   - GET /api/health strips the /api prefix and returns healthy.
 """
 
@@ -16,7 +16,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import sec_review_framework.coordinator as coord_module
-from sec_review_framework.coordinator import BatchCoordinator, BatchCostTracker, app
+from sec_review_framework.coordinator import ExperimentCoordinator, ExperimentCostTracker, app
 from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
 from sec_review_framework.db import Database
 from sec_review_framework.reporting.markdown import MarkdownReportGenerator
@@ -27,7 +27,7 @@ from sec_review_framework.reporting.markdown import MarkdownReportGenerator
 # ---------------------------------------------------------------------------
 
 
-def _make_coordinator(tmp_path: Path, db: Database) -> BatchCoordinator:
+def _make_coordinator(tmp_path: Path, db: Database) -> ExperimentCoordinator:
     cost_calc = CostCalculator(
         pricing={
             "gpt-4o": ModelPricing(input_per_million=5.0, output_per_million=15.0),
@@ -35,7 +35,7 @@ def _make_coordinator(tmp_path: Path, db: Database) -> BatchCoordinator:
     )
     config_dir = tmp_path / "config"
     config_dir.mkdir(parents=True, exist_ok=True)
-    return BatchCoordinator(
+    return ExperimentCoordinator(
         k8s_client=None,
         storage_root=tmp_path / "storage",
         concurrency_caps={},
@@ -82,10 +82,10 @@ async def spa_client(tmp_path: Path, dist_dir: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_spa_deep_link_batches_new_returns_html(spa_client):
-    """Browser navigation to /batches/new must return the React shell."""
+def test_spa_deep_link_experiments_new_returns_html(spa_client):
+    """Browser navigation to /experiments/new must return the React shell."""
     resp = spa_client.get(
-        "/batches/new",
+        "/experiments/new",
         headers={"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"},
         follow_redirects=True,
     )
@@ -93,10 +93,10 @@ def test_spa_deep_link_batches_new_returns_html(spa_client):
     assert "SPA" in resp.text
 
 
-def test_spa_deep_link_batches_trailing_slash_returns_html(spa_client):
-    """Browser navigation to /batches/ must return the React shell."""
+def test_spa_deep_link_experiments_trailing_slash_returns_html(spa_client):
+    """Browser navigation to /experiments/ must return the React shell."""
     resp = spa_client.get(
-        "/batches/",
+        "/experiments/",
         headers={"Accept": "text/html,*/*;q=0.8"},
         follow_redirects=True,
     )
@@ -118,7 +118,7 @@ def test_spa_deep_link_datasets_discover_returns_html(spa_client):
 def test_spa_returns_html_content_type(spa_client):
     """The SPA fallback response must declare text/html content-type."""
     resp = spa_client.get(
-        "/batches/new",
+        "/experiments/new",
         headers={"Accept": "text/html"},
         follow_redirects=True,
     )
@@ -134,17 +134,17 @@ def test_spa_returns_html_content_type(spa_client):
 def test_json_accept_does_not_serve_spa(spa_client):
     """httpx / curl without text/html accept must NOT get the SPA shell."""
     resp = spa_client.get(
-        "/batches/new",
+        "/experiments/new",
         headers={"Accept": "application/json"},
     )
-    # The API route will 404/422 because "new" is not a real batch_id.
+    # The API route will 404/422 because "new" is not a real experiment_id.
     # Crucially it must NOT return the SPA HTML page.
     assert resp.status_code != 200 or "SPA" not in resp.text
 
 
 def test_no_accept_header_does_not_serve_spa(spa_client):
     """A GET with no Accept header must NOT serve the SPA index.html."""
-    resp = spa_client.get("/batches/new")
+    resp = spa_client.get("/experiments/new")
     assert "SPA" not in resp.text
 
 
@@ -160,9 +160,9 @@ def test_api_prefix_stripped_for_health(spa_client):
     assert resp.json()["status"] == "ok"
 
 
-def test_api_prefix_stripped_for_batches(spa_client):
-    """/api/batches must route to /batches (the list endpoint) and return a list."""
-    resp = spa_client.get("/api/batches", headers={"Accept": "application/json"})
+def test_api_prefix_stripped_for_experiments(spa_client):
+    """/api/experiments must route to /experiments (the list endpoint) and return a list."""
+    resp = spa_client.get("/api/experiments", headers={"Accept": "application/json"})
     assert resp.status_code == 200
     assert isinstance(resp.json(), list)
 
@@ -193,9 +193,9 @@ async def test_spa_fallback_absent_when_no_index_html(tmp_path: Path):
         with patch.object(coord_module, "coordinator", c):
             with patch.object(c, "reconcile", return_value=None):
                 with TestClient(app, raise_server_exceptions=True) as client:
-                    # Falls through to the API; "new" is not a valid batch_id → 404/422
+                    # Falls through to the API; "new" is not a valid experiment_id → 404/422
                     resp = client.get(
-                        "/batches/new",
+                        "/experiments/new",
                         headers={"Accept": "text/html"},
                         follow_redirects=True,
                     )

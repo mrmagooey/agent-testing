@@ -14,7 +14,7 @@ from sec_review_framework.data.experiment import (
 def _minimal_matrix(**overrides) -> ExperimentMatrix:
     """Helper to create a minimal ExperimentMatrix with sensible defaults."""
     defaults = dict(
-        batch_id="batch-1",
+        experiment_id="experiment-1",
         dataset_name="ds",
         dataset_version="1.0",
         model_ids=["model-a"],
@@ -78,7 +78,7 @@ def test_multiple_slashed_models_all_sanitized():
 def test_run_id_preserves_other_dimensions():
     """Sanitization should not affect other run_id components."""
     matrix = _minimal_matrix(
-        batch_id="my-batch",
+        experiment_id="my-experiment",
         model_ids=["openrouter/model"],
         strategies=[StrategyName.PER_FILE],
         tool_variants=[ToolVariant.WITHOUT_TOOLS],
@@ -86,7 +86,7 @@ def test_run_id_preserves_other_dimensions():
     )
     runs = matrix.expand()
     run_id = runs[0].id
-    assert "my-batch" in run_id
+    assert "my-experiment" in run_id
     assert "openrouter--model" in run_id
     assert "per_file" in run_id
     assert "without_tools" in run_id

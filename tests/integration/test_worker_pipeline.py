@@ -116,8 +116,8 @@ def datasets_dir(tmp_path: Path) -> Path:
 def base_run() -> ExperimentRun:
     """A minimal ExperimentRun for single_agent / with_tools."""
     return ExperimentRun(
-        id="batch-w_fake-model_single_agent_with_tools_default_none",
-        batch_id="batch-w",
+        id="experiment-w_fake-model_single_agent_with_tools_default_none",
+        experiment_id="experiment-w",
         model_id="fake-model",
         strategy=StrategyName.SINGLE_AGENT,
         tool_variant=ToolVariant.WITHOUT_TOOLS,  # avoids real semgrep/file tools
@@ -225,8 +225,8 @@ def test_worker_failed_strategy_captured(datasets_dir, tmp_path):
     from sec_review_framework.models.base import RetryPolicy
 
     run = ExperimentRun(
-        id="batch-fail_single_agent",
-        batch_id="batch-fail",
+        id="experiment-fail_single_agent",
+        experiment_id="experiment-fail",
         model_id="fake-model",
         strategy=StrategyName.SINGLE_AGENT,
         tool_variant=ToolVariant.WITHOUT_TOOLS,

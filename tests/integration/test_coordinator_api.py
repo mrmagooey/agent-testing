@@ -1,7 +1,7 @@
 """Integration tests for the FastAPI coordinator API.
 
 Tests all endpoints that don't require a live K8s cluster by monkey-patching
-the global ``coordinator`` object with a real BatchCoordinator backed by a
+the global ``coordinator`` object with a real ExperimentCoordinator backed by a
 temp SQLite DB and temp storage root.
 """
 
@@ -17,8 +17,8 @@ from fastapi.testclient import TestClient
 import sec_review_framework.coordinator as coord_module
 from sec_review_framework.coordinator import (
     AUDIT_URL_CHECK_EXEMPT_PREFIXES,
-    BatchCoordinator,
-    BatchCostTracker,
+    ExperimentCoordinator,
+    ExperimentCostTracker,
     app,
 )
 from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
@@ -40,8 +40,8 @@ from sec_review_framework.reporting.markdown import MarkdownReportGenerator
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_coordinator(tmp_path: Path, db: Database) -> BatchCoordinator:
-    """Build a BatchCoordinator wired to a temp DB and storage root."""
+def _make_coordinator(tmp_path: Path, db: Database) -> ExperimentCoordinator:
+    """Build an ExperimentCoordinator wired to a temp DB and storage root."""
     cost_calc = CostCalculator(
         pricing={
             "gpt-4o": ModelPricing(input_per_million=5.0, output_per_million=15.0),
@@ -50,7 +50,7 @@ def _make_coordinator(tmp_path: Path, db: Database) -> BatchCoordinator:
     )
     config_dir = tmp_path / "config"
     config_dir.mkdir(parents=True, exist_ok=True)
-    return BatchCoordinator(
+    return ExperimentCoordinator(
         k8s_client=None,
         storage_root=tmp_path / "storage",
         concurrency_caps={},
@@ -67,7 +67,7 @@ def _make_coordinator(tmp_path: Path, db: Database) -> BatchCoordinator:
 def _minimal_matrix() -> dict:
     """Minimal ExperimentMatrix payload for API calls."""
     return {
-        "batch_id": "test-batch",
+        "experiment_id": "test-experiment",
         "dataset_name": "test-dataset",
         "dataset_version": "1.0.0",
         "model_ids": ["gpt-4o"],
@@ -111,12 +111,12 @@ def test_health_returns_ok(coordinator_client):
 
 
 # ---------------------------------------------------------------------------
-# GET /batches — empty initially
+# GET /experiments — empty initially
 # ---------------------------------------------------------------------------
 
-def test_list_batches_empty(coordinator_client):
+def test_list_experiments_empty(coordinator_client):
     client, *_ = coordinator_client
-    resp = client.get("/batches")
+    resp = client.get("/experiments")
     assert resp.status_code == 200
     assert resp.json() == []
 
@@ -185,16 +185,16 @@ def test_list_models(coordinator_client):
 
 
 # ---------------------------------------------------------------------------
-# POST /batches/estimate
+# POST /experiments/estimate
 # ---------------------------------------------------------------------------
 
-def test_estimate_batch_returns_cost(coordinator_client):
+def test_estimate_experiment_returns_cost(coordinator_client):
     client, *_ = coordinator_client
     payload = {
         "matrix": _minimal_matrix(),
         "target_kloc": 10.0,
     }
-    resp = client.post("/batches/estimate", json=payload)
+    resp = client.post("/experiments/estimate", json=payload)
     assert resp.status_code == 200
     data = resp.json()
     assert "total_runs" in data
@@ -204,61 +204,61 @@ def test_estimate_batch_returns_cost(coordinator_client):
     assert data["total_runs"] == 1  # 1 model * 1 strategy * 1 tool * 1 profile * 1 verif
 
 
-def test_estimate_batch_cost_is_positive_for_known_model(coordinator_client):
+def test_estimate_experiment_cost_is_positive_for_known_model(coordinator_client):
     client, *_ = coordinator_client
     payload = {
         "matrix": _minimal_matrix(),
         "target_kloc": 5.0,
     }
-    data = client.post("/batches/estimate", json=payload).json()
+    data = client.post("/experiments/estimate", json=payload).json()
     assert data["estimated_cost_usd"] >= 0.0
     assert "gpt-4o" in data["by_model"]
 
 
-def test_estimate_batch_larger_matrix(coordinator_client):
+def test_estimate_experiment_larger_matrix(coordinator_client):
     client, *_ = coordinator_client
     payload = {
         "matrix": {
             **_minimal_matrix(),
-            "batch_id": "big-batch",
+            "experiment_id": "big-experiment",
             "model_ids": ["gpt-4o", "claude-opus-4"],
             "strategies": ["single_agent", "per_file"],
         },
         "target_kloc": 2.0,
     }
-    data = client.post("/batches/estimate", json=payload).json()
+    data = client.post("/experiments/estimate", json=payload).json()
     # 2 models * 2 strategies = 4 runs (1 tool * 1 profile * 1 verif)
     assert data["total_runs"] == 4
 
 
 # ---------------------------------------------------------------------------
-# GET /batches/{id} — non-existent → 404
+# GET /experiments/{id} — non-existent → 404
 # ---------------------------------------------------------------------------
 
-def test_get_nonexistent_batch_returns_404(coordinator_client):
+def test_get_nonexistent_experiment_returns_404(coordinator_client):
     client, *_ = coordinator_client
-    resp = client.get("/batches/does-not-exist")
+    resp = client.get("/experiments/does-not-exist")
     assert resp.status_code == 404
 
 
 # ---------------------------------------------------------------------------
-# GET /batches/{id}/runs — non-existent → empty list (no rows)
+# GET /experiments/{id}/runs — non-existent → empty list (no rows)
 # ---------------------------------------------------------------------------
 
-def test_list_runs_nonexistent_batch_returns_empty(coordinator_client):
+def test_list_runs_nonexistent_experiment_returns_empty(coordinator_client):
     client, *_ = coordinator_client
-    resp = client.get("/batches/does-not-exist/runs")
+    resp = client.get("/experiments/does-not-exist/runs")
     assert resp.status_code == 200
     assert resp.json() == []
 
 
 # ---------------------------------------------------------------------------
-# GET /batches/{id}/runs/{run_id} — non-existent → 404
+# GET /experiments/{id}/runs/{run_id} — non-existent → 404
 # ---------------------------------------------------------------------------
 
-def test_get_nonexistent_run_returns_404(coordinator_client):
+def test_get_nonexistent_experiment_run_returns_404(coordinator_client):
     client, *_ = coordinator_client
-    resp = client.get("/batches/does-not-exist/runs/also-missing")
+    resp = client.get("/experiments/does-not-exist/runs/also-missing")
     assert resp.status_code == 404
 
 
@@ -316,17 +316,17 @@ def test_get_labels_returns_labels_when_present(coordinator_client):
 # POST /feedback/compare
 # ---------------------------------------------------------------------------
 
-def test_feedback_compare_with_empty_batches(coordinator_client):
-    """compare_batches returns a valid structure even when both batches are empty."""
+def test_feedback_compare_with_empty_experiments(coordinator_client):
+    """compare_experiments returns a valid structure even when both experiments are empty."""
     client, *_ = coordinator_client
     resp = client.post(
         "/feedback/compare",
-        json={"batch_a_id": "batch-x", "batch_b_id": "batch-y"},
+        json={"experiment_a_id": "experiment-x", "experiment_b_id": "experiment-y"},
     )
     assert resp.status_code == 200
     data = resp.json()
-    assert "batch_a_id" in data
-    assert "batch_b_id" in data
+    assert "experiment_a_id" in data
+    assert "experiment_b_id" in data
     assert "metric_deltas" in data
     assert "persistent_false_positives" in data
 
@@ -343,33 +343,33 @@ def test_list_templates(coordinator_client):
 
 
 # ---------------------------------------------------------------------------
-# GET /batches/{id}/results — 404 if report file missing
+# GET /experiments/{id}/results — 404 if report file missing
 # ---------------------------------------------------------------------------
 
 def test_get_results_json_404_when_not_finalized(coordinator_client):
     client, *_ = coordinator_client
-    resp = client.get("/batches/missing-batch/results")
+    resp = client.get("/experiments/missing-experiment/results")
     assert resp.status_code == 404
 
 
 def test_get_results_markdown_404_when_not_finalized(coordinator_client):
     client, *_ = coordinator_client
-    resp = client.get("/batches/missing-batch/results/markdown")
+    resp = client.get("/experiments/missing-experiment/results/markdown")
     assert resp.status_code == 404
 
 
 # ---------------------------------------------------------------------------
-# POST /batches — submit creates batch in DB (K8s job skipped because k8s=None)
+# POST /experiments — submit creates experiment in DB (K8s job skipped because k8s=None)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_submit_batch_creates_db_record(tmp_path: Path):
+async def test_submit_experiment_creates_db_record(tmp_path: Path):
     db = Database(tmp_path / "test.db")
     await db.init()
     c = _make_coordinator(tmp_path, db)
 
     matrix = ExperimentMatrix(
-        batch_id="submit-test",
+        experiment_id="submit-test",
         dataset_name="ds",
         dataset_version="1.0",
         model_ids=["gpt-4o"],
@@ -380,24 +380,24 @@ async def test_submit_batch_creates_db_record(tmp_path: Path):
         parallel_modes=[False],
     )
 
-    batch_id = await c.submit_batch(matrix)
-    assert batch_id == "submit-test"
+    experiment_id = await c.submit_experiment(matrix)
+    assert experiment_id == "submit-test"
 
-    batch_row = await db.get_batch("submit-test")
-    assert batch_row is not None
-    assert batch_row["total_runs"] == 1
+    experiment_row = await db.get_experiment("submit-test")
+    assert experiment_row is not None
+    assert experiment_row["total_runs"] == 1
 
     runs = await db.list_runs("submit-test")
     assert len(runs) == 1
 
 
 # ---------------------------------------------------------------------------
-# Batch Frontend Contract — enforce shape of serialized batches
+# Experiment Frontend Contract — enforce shape of serialized experiments
 # ---------------------------------------------------------------------------
 
-# Expected frontend Batch interface from frontend/src/api/client.ts:7-20
-FRONTEND_BATCH_REQUIRED_KEYS = {
-    "batch_id",
+# Expected frontend Experiment interface from frontend/src/api/client.ts:7-20
+FRONTEND_EXPERIMENT_REQUIRED_KEYS = {
+    "experiment_id",
     "status",
     "dataset",
     "created_at",
@@ -409,7 +409,7 @@ FRONTEND_BATCH_REQUIRED_KEYS = {
     "total_cost_usd",
 }
 
-FRONTEND_BATCH_OPTIONAL_KEYS = {
+FRONTEND_EXPERIMENT_OPTIONAL_KEYS = {
     "completed_at",
     "spend_cap_usd",
 }
@@ -417,96 +417,96 @@ FRONTEND_BATCH_OPTIONAL_KEYS = {
 ALLOWED_STATUS_VALUES = {"pending", "running", "completed", "failed", "cancelled"}
 
 
-class TestBatchFrontendContract:
-    """Test that batch endpoints return correct shape for frontend consumption."""
+class TestExperimentFrontendContract:
+    """Test that experiment endpoints return correct shape for frontend consumption."""
 
     @pytest.mark.asyncio
-    async def test_list_batches_contract(self, coordinator_client):
-        """GET /batches returns array of batches matching frontend Batch interface."""
+    async def test_list_experiments_contract(self, coordinator_client):
+        """GET /experiments returns array of experiments matching frontend Experiment interface."""
         client, c, tmp_path = coordinator_client
 
-        # Submit a batch
-        resp = client.post("/batches", json=_minimal_matrix())
+        # Submit an experiment
+        resp = client.post("/experiments", json=_minimal_matrix())
         assert resp.status_code == 201
 
-        # List batches
-        resp = client.get("/batches")
+        # List experiments
+        resp = client.get("/experiments")
         assert resp.status_code == 200
-        batches = resp.json()
-        assert isinstance(batches, list)
-        assert len(batches) > 0
+        experiments = resp.json()
+        assert isinstance(experiments, list)
+        assert len(experiments) > 0
 
-        # Check first batch conforms to frontend contract
-        batch = batches[0]
-        self._assert_batch_contract(batch)
+        # Check first experiment conforms to frontend contract
+        experiment = experiments[0]
+        self._assert_experiment_contract(experiment)
 
     @pytest.mark.asyncio
-    async def test_get_batch_detail_contract(self, coordinator_client):
-        """GET /batches/{id} returns single batch matching frontend Batch interface."""
+    async def test_get_experiment_detail_contract(self, coordinator_client):
+        """GET /experiments/{id} returns single experiment matching frontend Experiment interface."""
         client, c, tmp_path = coordinator_client
 
-        # Submit a batch
-        resp = client.post("/batches", json=_minimal_matrix())
+        # Submit an experiment
+        resp = client.post("/experiments", json=_minimal_matrix())
         assert resp.status_code == 201
-        batch_id = resp.json()["batch_id"]
+        experiment_id = resp.json()["experiment_id"]
 
-        # Get batch detail
-        resp = client.get(f"/batches/{batch_id}")
+        # Get experiment detail
+        resp = client.get(f"/experiments/{experiment_id}")
         assert resp.status_code == 200
-        batch = resp.json()
+        experiment = resp.json()
 
-        # Check batch conforms to frontend contract
-        self._assert_batch_contract(batch)
+        # Check experiment conforms to frontend contract
+        self._assert_experiment_contract(experiment)
 
-    def _assert_batch_contract(self, batch: dict) -> None:
-        """Assert batch dict has exactly the keys and types the frontend expects."""
+    def _assert_experiment_contract(self, experiment: dict) -> None:
+        """Assert experiment dict has exactly the keys and types the frontend expects."""
         # Check all required keys present
-        batch_keys = set(batch.keys())
-        missing = FRONTEND_BATCH_REQUIRED_KEYS - batch_keys
+        experiment_keys = set(experiment.keys())
+        missing = FRONTEND_EXPERIMENT_REQUIRED_KEYS - experiment_keys
         assert not missing, f"Missing required keys: {missing}"
 
         # Check no unexpected keys (only required + optional allowed)
-        allowed_keys = FRONTEND_BATCH_REQUIRED_KEYS | FRONTEND_BATCH_OPTIONAL_KEYS
-        unexpected = batch_keys - allowed_keys
+        allowed_keys = FRONTEND_EXPERIMENT_REQUIRED_KEYS | FRONTEND_EXPERIMENT_OPTIONAL_KEYS
+        unexpected = experiment_keys - allowed_keys
         assert not unexpected, f"Unexpected keys: {unexpected}"
 
         # Check types
-        assert isinstance(batch["batch_id"], str)
-        assert batch["status"] in ALLOWED_STATUS_VALUES
-        assert isinstance(batch["dataset"], str)
-        assert isinstance(batch["created_at"], str)
-        assert isinstance(batch["total_runs"], int)
-        assert isinstance(batch["completed_runs"], int)
-        assert isinstance(batch["running_runs"], int)
-        assert isinstance(batch["pending_runs"], int)
-        assert isinstance(batch["failed_runs"], int)
-        assert isinstance(batch["total_cost_usd"], (int, float))
+        assert isinstance(experiment["experiment_id"], str)
+        assert experiment["status"] in ALLOWED_STATUS_VALUES
+        assert isinstance(experiment["dataset"], str)
+        assert isinstance(experiment["created_at"], str)
+        assert isinstance(experiment["total_runs"], int)
+        assert isinstance(experiment["completed_runs"], int)
+        assert isinstance(experiment["running_runs"], int)
+        assert isinstance(experiment["pending_runs"], int)
+        assert isinstance(experiment["failed_runs"], int)
+        assert isinstance(experiment["total_cost_usd"], (int, float))
 
         # Optional fields may be present as null or their type
-        if batch.get("completed_at") is not None:
-            assert isinstance(batch["completed_at"], str)
-        if batch.get("spend_cap_usd") is not None:
-            assert isinstance(batch["spend_cap_usd"], (int, float))
+        if experiment.get("completed_at") is not None:
+            assert isinstance(experiment["completed_at"], str)
+        if experiment.get("spend_cap_usd") is not None:
+            assert isinstance(experiment["spend_cap_usd"], (int, float))
 
 
 # ---------------------------------------------------------------------------
-# GET /batches/{id}/findings/search — no crash when batch has no results
+# GET /experiments/{id}/findings/search — no crash when experiment has no results
 # ---------------------------------------------------------------------------
 
-def test_search_findings_empty_batch(coordinator_client):
+def test_search_findings_empty_experiment(coordinator_client):
     client, *_ = coordinator_client
-    resp = client.get("/batches/empty-batch/findings/search?q=injection")
+    resp = client.get("/experiments/empty-experiment/findings/search?q=injection")
     assert resp.status_code == 200
     assert resp.json() == []
 
 
 # ---------------------------------------------------------------------------
-# GET /batches/{id}/runs/{run_id}/tool-audit — returns empty audit when no file
+# GET /experiments/{id}/runs/{run_id}/tool-audit — returns empty audit when no file
 # ---------------------------------------------------------------------------
 
 def test_tool_audit_no_file(coordinator_client):
     client, *_ = coordinator_client
-    resp = client.get("/batches/b/runs/r/tool-audit")
+    resp = client.get("/experiments/b/runs/r/tool-audit")
     assert resp.status_code == 200
     data = resp.json()
     assert data["counts_by_tool"] == {}
@@ -596,7 +596,7 @@ def test_audit_doc_tool_with_url_not_flagged(coordinator_client, tmp_path):
     import json as _json
     client, c, tp = coordinator_client
     storage = tp / "storage"
-    run_dir = storage / "outputs" / "batch-x" / "run-1"
+    run_dir = storage / "outputs" / "experiment-x" / "run-1"
     run_dir.mkdir(parents=True)
     tool_calls = run_dir / "tool_calls.jsonl"
     tool_calls.write_text(
@@ -606,7 +606,7 @@ def test_audit_doc_tool_with_url_not_flagged(coordinator_client, tmp_path):
         }) + "\n"
     )
 
-    resp = client.get("/batches/batch-x/runs/run-1/tool-audit")
+    resp = client.get("/experiments/experiment-x/runs/run-1/tool-audit")
     assert resp.status_code == 200
     data = resp.json()
     assert data["suspicious_calls"] == []
@@ -617,7 +617,7 @@ def test_audit_unknown_tool_with_url_flagged(coordinator_client, tmp_path):
     import json as _json
     client, c, tp = coordinator_client
     storage = tp / "storage"
-    run_dir = storage / "outputs" / "batch-y" / "run-2"
+    run_dir = storage / "outputs" / "experiment-y" / "run-2"
     run_dir.mkdir(parents=True)
     tool_calls = run_dir / "tool_calls.jsonl"
     tool_calls.write_text(
@@ -627,7 +627,7 @@ def test_audit_unknown_tool_with_url_flagged(coordinator_client, tmp_path):
         }) + "\n"
     )
 
-    resp = client.get("/batches/batch-y/runs/run-2/tool-audit")
+    resp = client.get("/experiments/experiment-y/runs/run-2/tool-audit")
     assert resp.status_code == 200
     data = resp.json()
     assert len(data["suspicious_calls"]) == 1

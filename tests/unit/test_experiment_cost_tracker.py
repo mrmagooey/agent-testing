@@ -1,4 +1,4 @@
-"""Unit tests for BatchCostTracker — thread-safety, idempotent halt, race conditions."""
+"""Unit tests for ExperimentCostTracker — thread-safety, idempotent halt, race conditions."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from sec_review_framework.coordinator import BatchCostTracker
+from sec_review_framework.coordinator import ExperimentCostTracker
 
 
 # ---------------------------------------------------------------------------
@@ -15,32 +15,32 @@ from sec_review_framework.coordinator import BatchCostTracker
 # ---------------------------------------------------------------------------
 
 
-class TestBatchCostTrackerBasic:
+class TestExperimentCostTrackerBasic:
     def test_initial_state(self):
-        tracker = BatchCostTracker("batch-1", cap_usd=10.0)
+        tracker = ExperimentCostTracker("experiment-1", cap_usd=10.0)
         assert tracker.spent_usd == 0.0
         assert tracker._cancelled is False
 
     def test_record_below_cap_returns_false(self):
-        tracker = BatchCostTracker("batch-1", cap_usd=10.0)
+        tracker = ExperimentCostTracker("experiment-1", cap_usd=10.0)
         result = tracker.record_job_cost(5.0)
         assert result is False
         assert tracker.spent_usd == pytest.approx(5.0)
 
     def test_record_exactly_at_cap_returns_true(self):
-        tracker = BatchCostTracker("batch-1", cap_usd=10.0)
+        tracker = ExperimentCostTracker("experiment-1", cap_usd=10.0)
         result = tracker.record_job_cost(10.0)
         assert result is True
         assert tracker._cancelled is True
 
     def test_record_exceeds_cap_returns_true(self):
-        tracker = BatchCostTracker("batch-1", cap_usd=5.0)
+        tracker = ExperimentCostTracker("experiment-1", cap_usd=5.0)
         tracker.record_job_cost(3.0)
         result = tracker.record_job_cost(3.0)
         assert result is True
 
     def test_no_cap_never_cancels(self):
-        tracker = BatchCostTracker("batch-1", cap_usd=None)
+        tracker = ExperimentCostTracker("experiment-1", cap_usd=None)
         for _ in range(100):
             result = tracker.record_job_cost(1000.0)
             assert result is False
@@ -48,14 +48,14 @@ class TestBatchCostTrackerBasic:
 
     def test_cap_zero_cancels_immediately(self):
         """A cap of 0.0 triggers halt on the first non-zero cost."""
-        tracker = BatchCostTracker("batch-1", cap_usd=0.0)
+        tracker = ExperimentCostTracker("experiment-1", cap_usd=0.0)
         result = tracker.record_job_cost(0.01)
         # cap_usd is falsy when 0.0; check Python bool(0.0) is False
         # The source checks `if self.cap_usd and ...` — so cap=0.0 behaves like no cap.
         assert result is False  # 0.0 is falsy — documents existing behaviour
 
     def test_spent_accumulates_multiple_calls(self):
-        tracker = BatchCostTracker("batch-x", cap_usd=100.0)
+        tracker = ExperimentCostTracker("experiment-x", cap_usd=100.0)
         tracker.record_job_cost(1.5)
         tracker.record_job_cost(2.5)
         tracker.record_job_cost(3.0)
@@ -70,7 +70,7 @@ class TestBatchCostTrackerBasic:
 class TestIdempotentHalt:
     def test_second_call_after_cancel_returns_false(self):
         """Once _cancelled is True, subsequent calls should return False (idempotent)."""
-        tracker = BatchCostTracker("batch-1", cap_usd=5.0)
+        tracker = ExperimentCostTracker("experiment-1", cap_usd=5.0)
         first = tracker.record_job_cost(6.0)   # crosses cap → True
         second = tracker.record_job_cost(1.0)   # already cancelled → False
         assert first is True
@@ -78,13 +78,13 @@ class TestIdempotentHalt:
 
     def test_halt_fires_exactly_once(self):
         """Record 10 costs crossing cap; exactly one call should return True."""
-        tracker = BatchCostTracker("batch-1", cap_usd=3.0)
+        tracker = ExperimentCostTracker("experiment-1", cap_usd=3.0)
         results = [tracker.record_job_cost(1.0) for _ in range(10)]
         true_count = sum(1 for r in results if r is True)
         assert true_count == 1
 
     def test_cancelled_flag_stays_true(self):
-        tracker = BatchCostTracker("batch-1", cap_usd=1.0)
+        tracker = ExperimentCostTracker("experiment-1", cap_usd=1.0)
         tracker.record_job_cost(2.0)  # cancel
         tracker.record_job_cost(0.0)  # harmless zero-cost follow-up
         assert tracker._cancelled is True
@@ -98,7 +98,7 @@ class TestIdempotentHalt:
 class TestConcurrency:
     def test_concurrent_accumulation_is_accurate(self):
         """_spent must equal the sum of all costs across 50 concurrent threads."""
-        tracker = BatchCostTracker("batch-c", cap_usd=None)
+        tracker = ExperimentCostTracker("experiment-c", cap_usd=None)
         n_threads = 50
         cost_per_thread = 0.10
 
@@ -118,7 +118,7 @@ class TestConcurrency:
         cap = 5.0
         cost_per_call = 0.5
         n_threads = 50  # total cost = 25.0, cap will be crossed
-        tracker = BatchCostTracker("batch-c", cap_usd=cap)
+        tracker = ExperimentCostTracker("experiment-c", cap_usd=cap)
 
         results: list[bool] = []
         lock = threading.Lock()
@@ -139,7 +139,7 @@ class TestConcurrency:
 
     def test_no_data_race_on_cancelled_flag(self):
         """_cancelled should only ever transition from False → True (never back)."""
-        tracker = BatchCostTracker("batch-c", cap_usd=1.0)
+        tracker = ExperimentCostTracker("experiment-c", cap_usd=1.0)
         violations: list[bool] = []
 
         def worker():
@@ -159,7 +159,7 @@ class TestConcurrency:
 
     def test_spent_never_decreases_under_concurrency(self):
         """Each recorded cost must move _spent monotonically upward."""
-        tracker = BatchCostTracker("batch-c", cap_usd=None)
+        tracker = ExperimentCostTracker("experiment-c", cap_usd=None)
         samples: list[float] = []
         lock = threading.Lock()
 

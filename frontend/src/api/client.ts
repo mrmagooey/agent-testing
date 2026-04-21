@@ -4,8 +4,8 @@ const BASE_URL = '/api'
 
 // ─── Data Types ────────────────────────────────────────────────────────────
 
-export interface Batch {
-  batch_id: string
+export interface Experiment {
+  experiment_id: string
   status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
   dataset: string
   created_at: string
@@ -21,7 +21,6 @@ export interface Batch {
 
 export interface Run {
   run_id: string
-  batch_id: string
   experiment_id: string
   model: string
   strategy: string
@@ -46,7 +45,7 @@ export interface Run {
 export interface Finding {
   finding_id: string
   run_id: string
-  batch_id: string
+  experiment_id: string
   title: string
   description: string
   vuln_class: string
@@ -104,7 +103,7 @@ export interface CVECandidate {
   fix_commit?: string
 }
 
-export interface BatchConfig {
+export interface ExperimentConfig {
   dataset: string
   models: string[]
   strategies: string[]
@@ -236,98 +235,98 @@ export async function listToolExtensions(): Promise<ToolExtension[]> {
   }
 }
 
-// ─── Batch Endpoints ───────────────────────────────────────────────────────
+// ─── Experiment Endpoints ──────────────────────────────────────────────────
 
-export function submitBatch(config: BatchConfig): Promise<Batch> {
-  return apiFetch<Batch>('/batches', { method: 'POST', body: JSON.stringify(config) })
+export function submitExperiment(config: ExperimentConfig): Promise<Experiment> {
+  return apiFetch<Experiment>('/experiments', { method: 'POST', body: JSON.stringify(config) })
 }
 
-export function listBatches(): Promise<Batch[]> {
-  return apiFetch<Batch[]>('/batches')
+export function listExperiments(): Promise<Experiment[]> {
+  return apiFetch<Experiment[]>('/experiments')
 }
 
-export function getBatch(batchId: string): Promise<Batch> {
-  return apiFetch<Batch>(`/batches/${batchId}`)
+export function getExperiment(experimentId: string): Promise<Experiment> {
+  return apiFetch<Experiment>(`/experiments/${experimentId}`)
 }
 
-export function getBatchResults(batchId: string): Promise<{ runs: Run[]; findings: Finding[] }> {
-  return apiFetch(`/batches/${batchId}/results`)
+export function getExperimentResults(experimentId: string): Promise<{ runs: Run[]; findings: Finding[] }> {
+  return apiFetch(`/experiments/${experimentId}/results`)
 }
 
-export function listRuns(batchId: string): Promise<Run[]> {
-  return apiFetch<Run[]>(`/batches/${batchId}/runs`)
+export function listRuns(experimentId: string): Promise<Run[]> {
+  return apiFetch<Run[]>(`/experiments/${experimentId}/runs`)
 }
 
 export function getRun(
-  batchId: string,
+  experimentId: string,
   runId: string
 ): Promise<Run & { findings: Finding[]; tool_calls: ToolCall[]; messages: Message[]; prompt_snapshot?: PromptSnapshot }> {
-  return apiFetch(`/batches/${batchId}/runs/${runId}`)
+  return apiFetch(`/experiments/${experimentId}/runs/${runId}`)
 }
 
 export function getAccuracyMatrix(): Promise<AccuracyMatrix> {
   return apiFetch<AccuracyMatrix>('/matrix/accuracy')
 }
 
-export function cancelBatch(batchId: string): Promise<void> {
-  return apiFetch<void>(`/batches/${batchId}/cancel`, { method: 'POST' })
+export function cancelExperiment(experimentId: string): Promise<void> {
+  return apiFetch<void>(`/experiments/${experimentId}/cancel`, { method: 'POST' })
 }
 
 /** Returns the download URL (not a fetch — open in browser directly) */
-export function downloadReports(batchId: string): string {
-  return `${BASE_URL}/batches/${batchId}/results/download`
+export function downloadReports(experimentId: string): string {
+  return `${BASE_URL}/experiments/${experimentId}/results/download`
 }
 
 export function compareRuns(
-  batchId: string,
+  experimentId: string,
   runAId: string,
   runBId: string
 ): Promise<RunComparison> {
   return apiFetch<RunComparison>(
-    `/batches/${batchId}/compare?a=${encodeURIComponent(runAId)}&b=${encodeURIComponent(runBId)}`
+    `/experiments/${experimentId}/compare?a=${encodeURIComponent(runAId)}&b=${encodeURIComponent(runBId)}`
   )
 }
 
-export function searchFindings(batchId: string, q: string): Promise<Finding[]> {
+export function searchFindings(experimentId: string, q: string): Promise<Finding[]> {
   return apiFetch<Finding[]>(
-    `/batches/${batchId}/findings/search?q=${encodeURIComponent(q)}`
+    `/experiments/${experimentId}/findings/search?q=${encodeURIComponent(q)}`
   )
 }
 
 export function reclassifyFinding(
-  batchId: string,
+  experimentId: string,
   runId: string,
   findingId: string,
   newStatus: string,
   note: string
 ): Promise<void> {
-  return apiFetch<void>(`/batches/${batchId}/runs/${runId}/reclassify`, {
+  return apiFetch<void>(`/experiments/${experimentId}/runs/${runId}/reclassify`, {
     method: 'POST',
     body: JSON.stringify({ finding_id: findingId, new_status: newStatus, note }),
   })
 }
 
-export function toolAudit(batchId: string, runId: string): Promise<ToolCall[]> {
-  return apiFetch<ToolCall[]>(`/batches/${batchId}/runs/${runId}/tool-audit`)
+export function toolAudit(experimentId: string, runId: string): Promise<ToolCall[]> {
+  return apiFetch<ToolCall[]>(`/experiments/${experimentId}/runs/${runId}/tool-audit`)
 }
 
-export function compareBatches(
-  batchAId: string,
-  batchBId: string
+export function compareExperiments(
+  experimentAId: string,
+  experimentBId: string
 ): Promise<{
   metric_deltas: Record<string, unknown>[]
   fp_patterns: FPPattern[]
   stability: Record<string, unknown>
 }> {
-  return apiFetch(`/batches/compare?a=${encodeURIComponent(batchAId)}&b=${encodeURIComponent(batchBId)}`)
+  return apiFetch(`/experiments/compare?a=${encodeURIComponent(experimentAId)}&b=${encodeURIComponent(experimentBId)}`)
 }
 
-export function getFPPatterns(batchId: string): Promise<FPPattern[]> {
-  return apiFetch<FPPattern[]>(`/batches/${batchId}/fp-patterns`)
+export function getFPPatterns(experimentId: string): Promise<FPPattern[]> {
+  return apiFetch<FPPattern[]>(`/experiments/${experimentId}/fp-patterns`)
 }
 
-export function estimateBatch(config: Partial<BatchConfig>): Promise<CostEstimate> {
-  return apiFetch<CostEstimate>('/batches/estimate', {
+export function estimateExperiment(config: Partial<ExperimentConfig>): Promise<CostEstimate> {
+  return apiFetch<CostEstimate>('/experiments/estimate', {
     method: 'POST',
     body: JSON.stringify(config),
   })
@@ -448,6 +447,6 @@ export function listTemplates(): Promise<InjectionTemplate[]> {
 
 // ─── Smoke Test ────────────────────────────────────────────────────────────
 
-export async function runSmokeTest(): Promise<{ batch_id: string; message: string; total_runs: number }> {
+export async function runSmokeTest(): Promise<{ experiment_id: string; message: string; total_runs: number }> {
   return apiFetch('/smoke-test', { method: 'POST' })
 }
