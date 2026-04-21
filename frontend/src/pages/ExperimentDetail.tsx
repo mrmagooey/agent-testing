@@ -244,13 +244,13 @@ export default function ExperimentDetail() {
             <MatrixFilterBar
               runs={results.runs}
               value={filter}
-              onChange={(next) => setSearchParams(serializeMatrixFilter(next))}
+              onChange={(next) => setSearchParams(serializeMatrixFilter(next), { replace: true })}
             />
             {filteredRuns.length === 0 && results.runs.length > 0 ? (
               <div className="flex flex-col items-center justify-center gap-3 py-12 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-lg text-center">
                 <p className="text-gray-500 dark:text-gray-400 font-medium">No runs match these filters</p>
                 <button
-                  onClick={() => setSearchParams(serializeMatrixFilter(clearMatrixFilter()))}
+                  onClick={() => setSearchParams(serializeMatrixFilter(clearMatrixFilter()), { replace: true })}
                   className="px-4 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
                 >
                   Clear filters
