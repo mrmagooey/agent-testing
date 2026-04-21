@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useState, useEffect, useMemo } from 'react'
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   getExperimentResults,
   cancelExperiment,
@@ -10,10 +10,12 @@ import { useExperiment } from '../hooks/useExperiment'
 import Breadcrumbs from '../components/Breadcrumbs'
 import ProgressBar from '../components/ProgressBar'
 import MatrixTable from '../components/MatrixTable'
+import MatrixFilterBar from '../components/MatrixFilterBar'
 import FindingsExplorer from '../components/FindingsExplorer'
 import DimensionChart from '../components/DimensionChart'
 import DownloadButton from '../components/DownloadButton'
 import PageDescription from '../components/PageDescription'
+import { parseMatrixFilter, serializeMatrixFilter, applyMatrixFilter, clearMatrixFilter } from '../lib/matrixFilter'
 
 const STATUS_BADGE: Record<string, string> = {
   pending: 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400',
@@ -104,12 +106,16 @@ function TokenMeter({ runs }: { runs: Run[] }) {
 export default function ExperimentDetail() {
   const { id: experimentId } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const { experiment, loading, error } = useExperiment(experimentId)
   const [results, setResults] = useState<{ runs: Run[]; findings: Finding[] } | null>(null)
   const [resultsLoading, setResultsLoading] = useState(false)
   const [selectedRuns, setSelectedRuns] = useState<string[]>([])
   const [cancelling, setCancelling] = useState(false)
   const [showCancelModal, setShowCancelModal] = useState(false)
+
+  const filter = useMemo(() => parseMatrixFilter(searchParams), [searchParams])
+  const filteredRuns = useMemo(() => (results ? applyMatrixFilter(results.runs, filter) : []), [results, filter])
 
   const isTerminal = experiment && ['completed', 'failed', 'cancelled'].includes(experiment.status)
 
@@ -235,17 +241,34 @@ export default function ExperimentDetail() {
           {/* Experiment Matrix */}
           <section className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
             <h2 className="text-lg font-semibold mb-4">Experiment Matrix</h2>
-            <MatrixTable
+            <MatrixFilterBar
               runs={results.runs}
-              onSelect={setSelectedRuns}
-              selectedIds={selectedRuns}
+              value={filter}
+              onChange={(next) => setSearchParams(serializeMatrixFilter(next))}
             />
+            {filteredRuns.length === 0 && results.runs.length > 0 ? (
+              <div className="flex flex-col items-center justify-center gap-3 py-12 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-lg text-center">
+                <p className="text-gray-500 dark:text-gray-400 font-medium">No runs match these filters</p>
+                <button
+                  onClick={() => setSearchParams(serializeMatrixFilter(clearMatrixFilter()))}
+                  className="px-4 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+                >
+                  Clear filters
+                </button>
+              </div>
+            ) : (
+              <MatrixTable
+                runs={filteredRuns}
+                onSelect={setSelectedRuns}
+                selectedIds={selectedRuns}
+              />
+            )}
           </section>
 
           {/* Dimension Charts */}
           <section className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <DimensionChart
-              data={buildModelChart(results.runs)}
+              data={buildModelChart(filteredRuns)}
               xKey="model"
               yKey="avg_f1"
               title="Model Comparison (Avg F1)"
@@ -253,7 +276,7 @@ export default function ExperimentDetail() {
             <DimensionChart
               data={(() => {
                 const byStrategy: Record<string, number[]> = {}
-                for (const r of results.runs) {
+                for (const r of filteredRuns) {
                   if (r.f1 !== undefined) {
                     byStrategy[r.strategy] = byStrategy[r.strategy] ?? []
                     byStrategy[r.strategy].push(r.f1)
@@ -285,7 +308,7 @@ export default function ExperimentDetail() {
               </thead>
               <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
                 {Object.entries(
-                  results.runs.reduce(
+                  filteredRuns.reduce(
                     (acc, r) => {
                       if (!acc[r.model]) acc[r.model] = { count: 0, total: 0 }
                       acc[r.model].count++
@@ -306,10 +329,10 @@ export default function ExperimentDetail() {
                 ))}
               </tbody>
             </table>
-            <TokenMeter runs={results.runs} />
+            <TokenMeter runs={filteredRuns} />
           </section>
 
-          {/* Findings Explorer */}
+          {/* Findings Explorer — intentionally uses full run set */}
           {experimentId && (
             <section className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
               <h2 className="text-lg font-semibold mb-4">Findings</h2>
