@@ -35,7 +35,7 @@ datasets/cve_imports/
 outputs/
 
 # Frontend build
-frontend/node_modules/
+frontend/node_modules
 frontend/dist/
 frontend/playwright-report/
 frontend/test-results/
