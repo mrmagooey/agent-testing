@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import threading
 import zipfile
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 RECONCILE_INTERVAL_S = int(os.environ.get("RECONCILE_INTERVAL_S", "5"))
@@ -2462,7 +2462,7 @@ def get_fp_patterns(experiment_id: str) -> list[dict]:
 @app.get("/trends")
 async def get_trends(
     dataset: str | None = None,
-    limit: int = 10,
+    limit: int = Query(default=10, ge=1, le=200),
     tool_ext: str | None = None,
     since: str | None = None,
     until: str | None = None,
@@ -2470,11 +2470,18 @@ async def get_trends(
     """Historical F1 trend series per (model, strategy, tool_variant, tool_extensions) cell.
 
     Required: ``dataset`` — 400 if omitted.
-    Optional: ``limit`` (default 10), ``tool_ext`` (filter by extension key),
-              ``since``/``until`` (ISO date strings, allowlisted to query params only — no SQL injection risk).
+    Optional: ``limit`` (1..200, default 10), ``tool_ext`` (filter by extension key),
+              ``since``/``until`` (ISO date strings; validated — no SQL injection risk).
     """
     if not dataset:
         raise HTTPException(status_code=400, detail="dataset query parameter is required")
+    for label, value in (("since", since), ("until", until)):
+        if value is None:
+            continue
+        try:
+            date.fromisoformat(value[:10])
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"{label} must be an ISO date (YYYY-MM-DD)")
     return await coordinator.get_trends(
         dataset=dataset,
         limit=limit,

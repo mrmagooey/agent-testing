@@ -409,6 +409,53 @@ class TestTrendsEndpoint:
         finally:
             coord_mod.coordinator = original
 
+    def test_limit_above_max_is_rejected(self):
+        """GET /trends?limit=999999 returns 422 (Query bound violation)."""
+        from fastapi.testclient import TestClient
+        from sec_review_framework.coordinator import app
+        import sec_review_framework.coordinator as coord_mod
+
+        original = coord_mod.coordinator
+        coord_mod.coordinator = MagicMock()
+        try:
+            client = TestClient(app)
+            response = client.get("/api/trends?dataset=foo&limit=999999")
+            assert response.status_code == 422
+        finally:
+            coord_mod.coordinator = original
+
+    def test_invalid_since_date_is_rejected(self):
+        """GET /trends with non-ISO since returns 400."""
+        from fastapi.testclient import TestClient
+        from sec_review_framework.coordinator import app
+        import sec_review_framework.coordinator as coord_mod
+
+        original = coord_mod.coordinator
+        coord_mod.coordinator = MagicMock()
+        try:
+            client = TestClient(app, raise_server_exceptions=False)
+            response = client.get("/api/trends?dataset=foo&since=not-a-date")
+            assert response.status_code == 400
+            assert "ISO date" in response.json()["detail"]
+        finally:
+            coord_mod.coordinator = original
+
+    def test_invalid_until_date_is_rejected(self):
+        """GET /trends with non-ISO until returns 400."""
+        from fastapi.testclient import TestClient
+        from sec_review_framework.coordinator import app
+        import sec_review_framework.coordinator as coord_mod
+
+        original = coord_mod.coordinator
+        coord_mod.coordinator = MagicMock()
+        try:
+            client = TestClient(app, raise_server_exceptions=False)
+            response = client.get("/api/trends?dataset=foo&until=zzz")
+            assert response.status_code == 400
+            assert "ISO date" in response.json()["detail"]
+        finally:
+            coord_mod.coordinator = original
+
 
 # ---------------------------------------------------------------------------
 # Helpers for writing result files
