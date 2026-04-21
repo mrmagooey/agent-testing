@@ -7,6 +7,7 @@ import RunCompare from './pages/RunCompare'
 import CVEDiscovery from './pages/CVEDiscovery'
 import Datasets from './pages/Datasets'
 import DatasetDetail from './pages/DatasetDetail'
+import DatasetSourceView from './pages/DatasetSourceView'
 import Feedback from './pages/Feedback'
 import Findings from './pages/Findings'
 import ThemeToggle from './components/ThemeToggle'
@@ -105,6 +106,7 @@ export default function App() {
             <Route path="/experiments/:experimentId/runs/:runId" element={<RunDetail />} />
             <Route path="/experiments/:id" element={<ExperimentDetail />} />
             <Route path="/datasets/discover" element={<CVEDiscovery />} />
+            <Route path="/datasets/:name/source" element={<DatasetSourceView />} />
             <Route path="/datasets/:name" element={<DatasetDetail />} />
             <Route path="/datasets" element={<Datasets />} />
             <Route path="/findings" element={<Findings />} />

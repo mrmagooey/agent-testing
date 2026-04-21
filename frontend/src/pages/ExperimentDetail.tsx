@@ -336,7 +336,7 @@ export default function ExperimentDetail() {
           {experimentId && (
             <section className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
               <h2 className="text-lg font-semibold mb-4">Findings</h2>
-              <FindingsExplorer experimentId={experimentId} findings={results.findings} />
+              <FindingsExplorer experimentId={experimentId} findings={results.findings} datasetName={experiment?.dataset} />
             </section>
           )}
         </>

@@ -400,10 +400,24 @@ export function getFileTree(datasetName: string): Promise<FileTree> {
 
 export function getFileContent(
   datasetName: string,
-  filePath: string
-): Promise<{ content: string; language: string }> {
+  filePath: string,
+  options?: { start?: number; end?: number }
+): Promise<{
+  content: string
+  language: string
+  line_count?: number
+  size_bytes?: number
+  labels?: Label[]
+  binary?: boolean
+  truncated?: boolean
+  highlight_start?: number
+  highlight_end?: number
+}> {
+  const params = new URLSearchParams({ path: filePath })
+  if (options?.start != null) params.set('start', String(options.start))
+  if (options?.end != null) params.set('end', String(options.end))
   return apiFetch(
-    `/datasets/${encodeURIComponent(datasetName)}/file?path=${encodeURIComponent(filePath)}`
+    `/datasets/${encodeURIComponent(datasetName)}/file?${params}`
   )
 }
 

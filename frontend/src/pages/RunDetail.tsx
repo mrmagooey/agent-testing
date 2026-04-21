@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
-import { useParams, useSearchParams, useLocation } from 'react-router-dom'
+import { useParams, useSearchParams, useLocation, Link } from 'react-router-dom'
 import { getRun, getFileContent, reclassifyFinding, type Run, type Finding, type ToolCall, type Message, type PromptSnapshot } from '../api/client'
+import { useExperiment } from '../hooks/useExperiment'
 import Breadcrumbs from '../components/Breadcrumbs'
 import CodeViewer from '../components/CodeViewer'
 import ConversationViewer from '../components/ConversationViewer'
@@ -87,6 +88,7 @@ export default function RunDetail() {
   const { experimentId, runId } = useParams<{ experimentId: string; runId: string }>()
   const [searchParams, setSearchParams] = useSearchParams()
   const location = useLocation()
+  const { experiment } = useExperiment(experimentId)
   const [run, setRun] = useState<RunFull | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -343,17 +345,36 @@ export default function RunDetail() {
                                   <CodeViewer content={sourceContent[f.finding_id]} maxHeight="200px" />
                                 </div>
                               )}
-                              {f.match_status === 'fp' && experimentId && (
-                                <button
-                                  onClick={async (e) => {
-                                    e.stopPropagation()
-                                    await reclassifyFinding(experimentId, run.run_id, f.finding_id, 'unlabeled_real', '')
-                                  }}
-                                  className="text-xs px-3 py-1 rounded bg-orange-100 dark:bg-orange-900 text-orange-800 dark:text-orange-200 hover:bg-orange-200 transition-colors focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:outline-none"
-                                >
-                                  Reclassify as Unlabeled Real
-                                </button>
-                              )}
+                              <div className="flex flex-wrap gap-2">
+                                {f.file_path && experiment?.dataset && (
+                                  <Link
+                                    to={`/datasets/${encodeURIComponent(experiment.dataset)}/source?${new URLSearchParams({
+                                      path: f.file_path,
+                                      ...(f.line_start != null ? { line: String(f.line_start) } : {}),
+                                      ...(f.line_end != null ? { end: String(f.line_end) } : {}),
+                                      from_experiment: experimentId ?? '',
+                                      from_run: run.run_id,
+                                    })}`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="text-xs px-3 py-1 rounded bg-indigo-100 dark:bg-indigo-900 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-200 dark:hover:bg-indigo-800 transition-colors focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:outline-none"
+                                  >
+                                    View in dataset
+                                  </Link>
+                                )}
+                                {f.match_status === 'fp' && experimentId && (
+                                  <button
+                                    onClick={async (e) => {
+                                      e.stopPropagation()
+                                      await reclassifyFinding(experimentId, run.run_id, f.finding_id, 'unlabeled_real', '')
+                                    }}
+                                    className="text-xs px-3 py-1 rounded bg-orange-100 dark:bg-orange-900 text-orange-800 dark:text-orange-200 hover:bg-orange-200 transition-colors focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:outline-none"
+                                  >
+                                    Reclassify as Unlabeled Real
+                                  </button>
+                                )}
+                              </div>
                             </div>
                           </td>
                         </tr>

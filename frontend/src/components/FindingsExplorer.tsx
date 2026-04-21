@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import type { Finding } from '../api/client'
 import { reclassifyFinding } from '../api/client'
 import CodeViewer from './CodeViewer'
@@ -8,9 +9,10 @@ import { SEVERITY_COLORS, MATCH_STATUS_COLORS } from '../constants/colors'
 export interface FindingsExplorerProps {
   experimentId: string
   findings: Finding[]
+  datasetName?: string
 }
 
-export default function FindingsExplorer({ experimentId, findings: initialFindings }: FindingsExplorerProps) {
+export default function FindingsExplorer({ experimentId, findings: initialFindings, datasetName }: FindingsExplorerProps) {
   const [searchResults, setSearchResults] = useState<Finding[] | null>(null)
   const [matchFilter, setMatchFilter] = useState('all')
   const [vulnFilter, setVulnFilter] = useState('all')
@@ -153,21 +155,40 @@ export default function FindingsExplorer({ experimentId, findings: initialFindin
                             Matched label: <code className="font-mono">{finding.matched_label_id}</code>
                           </p>
                         )}
-                        {finding.match_status === 'fp' && (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              setReclassifyModal({
-                                findingId: finding.finding_id,
-                                runId: finding.run_id,
-                                note: '',
-                              })
-                            }}
-                            className="text-xs px-3 py-1 rounded bg-orange-100 dark:bg-orange-900 text-orange-800 dark:text-orange-200 hover:bg-orange-200 dark:hover:bg-orange-800 transition-colors"
-                          >
-                            Reclassify as Unlabeled Real
-                          </button>
-                        )}
+                        <div className="flex flex-wrap gap-2">
+                          {finding.file_path && datasetName && (
+                            <Link
+                              to={`/datasets/${encodeURIComponent(datasetName)}/source?${new URLSearchParams({
+                                path: finding.file_path,
+                                ...(finding.line_start != null ? { line: String(finding.line_start) } : {}),
+                                ...(finding.line_end != null ? { end: String(finding.line_end) } : {}),
+                                from_experiment: experimentId,
+                                from_run: finding.run_id,
+                              })}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              className="text-xs px-3 py-1 rounded bg-indigo-100 dark:bg-indigo-900 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-200 dark:hover:bg-indigo-800 transition-colors"
+                            >
+                              View in dataset
+                            </Link>
+                          )}
+                          {finding.match_status === 'fp' && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setReclassifyModal({
+                                  findingId: finding.finding_id,
+                                  runId: finding.run_id,
+                                  note: '',
+                                })
+                              }}
+                              className="text-xs px-3 py-1 rounded bg-orange-100 dark:bg-orange-900 text-orange-800 dark:text-orange-200 hover:bg-orange-200 dark:hover:bg-orange-800 transition-colors"
+                            >
+                              Reclassify as Unlabeled Real
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </td>
                   </tr>

@@ -1456,28 +1456,80 @@ class ExperimentCoordinator:
 
         return build_tree(dataset_dir)
 
-    def get_file_content(self, dataset_name: str, path: str) -> dict:
-        dataset_dir = self.storage_root / "datasets" / dataset_name
-        file_path = dataset_dir / path
-        if not file_path.exists() or not file_path.is_file():
+    _MAX_FILE_BYTES = 2 * 1024 * 1024  # 2 MiB
+
+    def get_file_content(
+        self,
+        dataset_name: str,
+        path: str,
+        start: int | None = None,
+        end: int | None = None,
+    ) -> dict:
+        # Reject NUL bytes and absolute paths before any Path construction.
+        if "\x00" in path:
+            raise HTTPException(status_code=400, detail="path contains NUL byte")
+        if path.startswith("/"):
+            raise HTTPException(status_code=400, detail="path escapes dataset")
+
+        dataset_dir = (self.storage_root / "datasets" / dataset_name).resolve()
+        candidate = (dataset_dir / path).resolve()
+
+        # Strict containment: resolved path must stay inside dataset_dir.
+        if not candidate.is_relative_to(dataset_dir):
+            raise HTTPException(status_code=400, detail="path escapes dataset")
+
+        if not candidate.exists() or not candidate.is_file():
             raise HTTPException(status_code=404, detail=f"File {path} not found")
-        content = file_path.read_text(errors="replace")
-        suffix = file_path.suffix.lstrip(".")
+
+        size_bytes = candidate.stat().st_size
+        suffix = candidate.suffix.lstrip(".")
         lang_map = {
             "py": "python", "js": "javascript", "ts": "typescript",
             "java": "java", "go": "go", "rb": "ruby", "rs": "rust",
             "cpp": "cpp", "c": "c", "cs": "csharp", "php": "php",
         }
         language = lang_map.get(suffix, suffix or "text")
+
+        # Binary detection: first 8 KB scanned for NUL bytes.
+        probe = candidate.read_bytes()[:8192]
+        if b"\x00" in probe:
+            return {
+                "path": path,
+                "binary": True,
+                "content": "",
+                "language": language,
+                "line_count": 0,
+                "size_bytes": size_bytes,
+                "labels": [],
+            }
+
+        truncated = False
+        if size_bytes > self._MAX_FILE_BYTES:
+            truncated = True
+            raw = candidate.read_bytes()
+            head = raw[: self._MAX_FILE_BYTES // 2].decode("utf-8", errors="replace")
+            tail = raw[-(self._MAX_FILE_BYTES // 2) :].decode("utf-8", errors="replace")
+            content = head + "\n\n... [truncated] ...\n\n" + tail
+        else:
+            content = candidate.read_text(errors="replace")
+
         file_labels = [lb for lb in self.get_labels(dataset_name) if lb.get("file_path") == path]
-        return {
+
+        result: dict = {
             "path": path,
             "content": content,
             "language": language,
             "line_count": content.count("\n") + 1,
-            "size_bytes": file_path.stat().st_size,
+            "size_bytes": size_bytes,
             "labels": file_labels,
         }
+        if truncated:
+            result["truncated"] = True
+        if start is not None:
+            result["highlight_start"] = start
+        if end is not None:
+            result["highlight_end"] = end
+        return result
 
     # ------------------------------------------------------------------
     # Feedback
@@ -2148,9 +2200,14 @@ def get_file_tree(dataset_name: str) -> dict:
 
 
 @app.get("/datasets/{dataset_name}/file")
-def get_file_content(dataset_name: str, path: str) -> dict:
+def get_file_content(
+    dataset_name: str,
+    path: str,
+    start: int | None = None,
+    end: int | None = None,
+) -> dict:
     """Read a file from the dataset repo. Returns content with metadata."""
-    return coordinator.get_file_content(dataset_name, path)
+    return coordinator.get_file_content(dataset_name, path, start=start, end=end)
 
 
 # --- Feedback ---

@@ -146,9 +146,16 @@ export async function mockApi(page: Page) {
       return json(route, fileTree)
     }
     if (path.match(/^\/datasets\/[^/]+\/file$/) && method === 'GET') {
+      const reqPath = url.searchParams.get('path') ?? ''
       return json(route, {
+        path: reqPath,
         content: 'def login(username, password):\n    query = f"SELECT * FROM users WHERE username=\'{username}\'"\n    return db.execute(query)\n',
         language: 'python',
+        line_count: 3,
+        size_bytes: 120,
+        labels: (labels as Array<Record<string, unknown>>).filter((l) => l['file_path'] === reqPath),
+        binary: false,
+        truncated: false,
       })
     }
     if (path.match(/^\/datasets\/[^/]+\/inject\/preview$/) && method === 'POST') {
