@@ -1262,15 +1262,21 @@ class ExperimentCoordinator:
 
         dataset_mismatch = (
             a_experiment != b_experiment
-            and bool(meta_a["dataset"])
-            and bool(meta_b["dataset"])
             and meta_a["dataset"] != meta_b["dataset"]
         )
         if dataset_mismatch:
-            warnings.append(
-                f"Datasets differ: {meta_a['dataset']} vs {meta_b['dataset']} — "
-                "only findings with identical file paths will match via FindingIdentity"
-            )
+            if meta_a["dataset"] and meta_b["dataset"]:
+                warnings.append(
+                    f"Datasets differ: {meta_a['dataset']} vs {meta_b['dataset']} — "
+                    "only findings with identical file paths will match via FindingIdentity"
+                )
+            else:
+                # One side's dataset is unknown (missing experiment row or config).
+                # Surface the uncertainty rather than silently assuming they match.
+                warnings.append(
+                    "Could not determine dataset for one or both runs — "
+                    "comparison may mix datasets"
+                )
 
         run_a_info: dict = {"id": a_run, **meta_a}
         run_b_info: dict = {"id": b_run, **meta_b}
@@ -1278,9 +1284,9 @@ class ExperimentCoordinator:
         return {
             "run_a": run_a_info,
             "run_b": run_b_info,
-            "both": both,
-            "only_a": only_a,
-            "only_b": only_b,
+            "found_by_both": both,
+            "only_in_a": only_a,
+            "only_in_b": only_b,
             "dataset_mismatch": dataset_mismatch,
             "warnings": warnings,
         }

@@ -224,7 +224,7 @@ export default function RunCompare() {
 
       {!loading && comparison && (
         <>
-          {comparison.dataset_mismatch && comparison.warnings.length > 0 && (
+          {comparison.dataset_mismatch && (
             <DatasetMismatchBanner warnings={comparison.warnings} />
           )}
 

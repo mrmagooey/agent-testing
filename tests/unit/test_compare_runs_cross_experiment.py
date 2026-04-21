@@ -200,9 +200,9 @@ async def test_compare_runs_cross_experiment_happy_path(coordinator_client):
     assert data["run_b"]["experiment_id"] == exp_b
 
     # sqli is in both (same file_path + vuln_class + line_bucket), xss only in A
-    assert len(data["both"]) == 1
-    assert len(data["only_a"]) == 1
-    assert len(data["only_b"]) == 0
+    assert len(data["found_by_both"]) == 1
+    assert len(data["only_in_a"]) == 1
+    assert len(data["only_in_b"]) == 0
 
     assert data["dataset_mismatch"] is False
     assert data["warnings"] == []
@@ -243,6 +243,42 @@ async def test_compare_runs_dataset_mismatch_warning(coordinator_client):
     assert "dataset-python" in warning
     assert "dataset-js" in warning
     assert "FindingIdentity" in warning
+
+
+@pytest.mark.asyncio
+async def test_compare_runs_dataset_unknown_still_flags_mismatch(coordinator_client):
+    """When experiments differ and one has no dataset metadata, mismatch flag is still set
+    and a warning surfaces the uncertainty — rather than silently treating empty as equal."""
+    client, c, tmp_path, db = coordinator_client
+    storage = tmp_path / "storage"
+
+    exp_a = "exp-known"
+    exp_b = "exp-unknown"
+    run_a = "run-known-001"
+    run_b = "run-unknown-001"
+
+    # Only exp_a is registered in the db with dataset metadata.
+    # exp_b's run is registered but the experiment row is absent, so dataset will be "".
+    await _create_experiment(db, exp_a, "dataset-python")
+
+    result_a = _make_run_result(exp_a, run_a, findings=[_sqli_finding(run_a, exp_a)])
+    result_b = _make_run_result(exp_b, run_b, findings=[_sqli_finding(run_b, exp_b)])
+
+    path_a = _write_run_result(storage, exp_a, run_a, result_a)
+    path_b = _write_run_result(storage, exp_b, run_b, result_b)
+
+    await _register_run(db, run_a, exp_a, str(path_a))
+    await _register_run(db, run_b, exp_b, str(path_b))
+
+    resp = client.get(
+        f"/compare-runs?a_experiment={exp_a}&a_run={run_a}&b_experiment={exp_b}&b_run={run_b}"
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+
+    assert data["dataset_mismatch"] is True
+    assert len(data["warnings"]) == 1
+    assert "Could not determine dataset" in data["warnings"][0]
 
 
 @pytest.mark.asyncio
@@ -295,9 +331,9 @@ async def test_legacy_same_experiment_endpoint_still_works(coordinator_client):
     data = resp.json()
 
     # Both runs find the same sqli at same location — should be 1 overlap
-    assert len(data["both"]) == 1
-    assert len(data["only_a"]) == 0
-    assert len(data["only_b"]) == 0
+    assert len(data["found_by_both"]) == 1
+    assert len(data["only_in_a"]) == 0
+    assert len(data["only_in_b"]) == 0
 
     # Legacy endpoint still returns the new fields
     assert "dataset_mismatch" in data
