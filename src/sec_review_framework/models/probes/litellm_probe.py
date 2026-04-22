@@ -8,6 +8,7 @@ enumerate reachable models and filters to the provider prefix.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from datetime import datetime, timezone
@@ -46,8 +47,8 @@ class LiteLLMProbe:
             )
 
         try:
-            all_models: list[str] = litellm.get_valid_models(
-                check_provider_endpoint=True
+            all_models: list[str] = await asyncio.to_thread(
+                litellm.get_valid_models, check_provider_endpoint=True
             )
         except Exception as exc:
             raise RuntimeError(

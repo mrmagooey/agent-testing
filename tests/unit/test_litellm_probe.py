@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
 
 
@@ -123,3 +125,35 @@ async def test_litellm_probe_metadata_populated(monkeypatch):
     snap = await probe.probe()
     assert "gemini/gemini-1.5-pro" in snap.metadata
     assert snap.metadata["gemini/gemini-1.5-pro"].id == "gemini/gemini-1.5-pro"
+
+
+async def test_litellm_probe_uses_asyncio_to_thread(monkeypatch):
+    """probe() must offload get_valid_models to a worker thread via asyncio.to_thread
+    so that the blocking HTTP call does not stall the event loop."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    import litellm
+    import asyncio
+
+    monkeypatch.setattr(
+        litellm,
+        "get_valid_models",
+        lambda check_provider_endpoint=False: ["gpt-4o"],
+    )
+
+    from sec_review_framework.models.probes.litellm_probe import LiteLLMProbe
+
+    probe = LiteLLMProbe("openai", "OPENAI_API_KEY", "gpt")
+
+    to_thread_calls: list = []
+    original_to_thread = asyncio.to_thread
+
+    async def _spy_to_thread(func, *args, **kwargs):
+        to_thread_calls.append(func)
+        return await original_to_thread(func, *args, **kwargs)
+
+    with patch("asyncio.to_thread", side_effect=_spy_to_thread):
+        await probe.probe()
+
+    assert len(to_thread_calls) == 1
+    assert to_thread_calls[0] is litellm.get_valid_models
