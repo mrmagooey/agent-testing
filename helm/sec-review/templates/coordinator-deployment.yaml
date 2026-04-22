@@ -74,6 +74,8 @@ spec:
               value: {{ .Values.providerProbe.enabled | toString | quote }}
             - name: PROVIDER_PROBE_TTL_SECONDS
               value: {{ .Values.providerProbe.ttlSeconds | toString | quote }}
+            - name: PROVIDER_PROBE_MAX_STALE_SECONDS
+              value: {{ .Values.providerProbe.maxStaleSeconds | toString | quote }}
             - name: BEDROCK_PROBE_ENABLED
               value: {{ .Values.providerProbe.bedrock.enabled | toString | quote }}
             - name: BEDROCK_PROBE_REGIONS
