@@ -360,3 +360,61 @@ class TestSerialisationHelpers:
         result = groups_to_dicts(groups)
         model = result[0]["models"][0]
         assert "region" not in model
+
+
+# ---------------------------------------------------------------------------
+# OpenRouter end-to-end: prefixed model_name matches prefixed snapshot entry
+# ---------------------------------------------------------------------------
+
+class TestOpenRouterAvailability:
+    """Registry model_name='openrouter/foo' + snapshot containing 'openrouter/foo'
+    must resolve to 'available'.  This guards against the probe returning
+    un-prefixed IDs that would never match the registry entries.
+    """
+
+    def test_openrouter_available_when_prefixed_id_in_snapshot(self):
+        cfg = ModelProviderConfig(
+            id="llama-8b",
+            model_name="openrouter/meta-llama/llama-3.1-8b-instruct",
+            api_key_env="OPENROUTER_API_KEY",
+            auth="api_key",
+            display_name="Llama 3.1 8B",
+        )
+        snap = ProviderSnapshot(
+            probe_status="fresh",
+            model_ids=frozenset(["openrouter/meta-llama/llama-3.1-8b-instruct"]),
+            metadata={
+                "openrouter/meta-llama/llama-3.1-8b-instruct": ModelMetadata(
+                    id="openrouter/meta-llama/llama-3.1-8b-instruct"
+                )
+            },
+        )
+        groups = compute_availability(
+            [cfg],
+            {"openrouter": snap},
+            {"OPENROUTER_API_KEY": "sk-or-test"},
+        )
+        assert groups[0].models[0].status == "available"
+
+    def test_openrouter_not_listed_when_unprefixed_id_in_snapshot(self):
+        """If the probe (incorrectly) returned un-prefixed IDs the model would
+        appear not_listed.  This documents the expected failure mode."""
+        cfg = ModelProviderConfig(
+            id="llama-8b",
+            model_name="openrouter/meta-llama/llama-3.1-8b-instruct",
+            api_key_env="OPENROUTER_API_KEY",
+            auth="api_key",
+            display_name="Llama 3.1 8B",
+        )
+        snap = ProviderSnapshot(
+            probe_status="fresh",
+            # Simulate the buggy probe that omits the prefix.
+            model_ids=frozenset(["meta-llama/llama-3.1-8b-instruct"]),
+            metadata={},
+        )
+        groups = compute_availability(
+            [cfg],
+            {"openrouter": snap},
+            {"OPENROUTER_API_KEY": "sk-or-test"},
+        )
+        assert groups[0].models[0].status == "not_listed"

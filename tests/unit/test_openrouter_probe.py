@@ -25,6 +25,12 @@ _SAMPLE_RESPONSE = {
             "context_length": 200000,
             "pricing": {"prompt": "0.000003", "completion": "0.000015"},
         },
+        {
+            "id": "meta-llama/llama-3.1-8b-instruct",
+            "name": "Llama 3.1 8B Instruct",
+            "context_length": 131072,
+            "pricing": {"prompt": "0.0000001", "completion": "0.0000001"},
+        },
     ]
 }
 
@@ -73,8 +79,8 @@ async def test_openrouter_probe_parses_response(monkeypatch):
         snap = await probe.probe()
 
     assert snap.probe_status == "fresh"
-    assert "openai/gpt-4o" in snap.model_ids
-    assert "anthropic/claude-3-5-sonnet" in snap.model_ids
+    assert "openrouter/openai/gpt-4o" in snap.model_ids
+    assert "openrouter/anthropic/claude-3-5-sonnet" in snap.model_ids
 
 
 async def test_openrouter_probe_metadata_context_length(monkeypatch):
@@ -98,7 +104,7 @@ async def test_openrouter_probe_metadata_context_length(monkeypatch):
         probe = mod.OpenRouterProbe()
         snap = await probe.probe()
 
-    meta = snap.metadata.get("openai/gpt-4o")
+    meta = snap.metadata.get("openrouter/openai/gpt-4o")
     assert meta is not None
     assert meta.context_length == 128000
     assert meta.pricing is not None
@@ -124,7 +130,7 @@ async def test_openrouter_probe_metadata_pricing(monkeypatch):
         probe = OpenRouterProbe()
         snap = await probe.probe()
 
-    meta = snap.metadata.get("anthropic/claude-3-5-sonnet")
+    meta = snap.metadata.get("openrouter/anthropic/claude-3-5-sonnet")
     assert meta is not None
     assert meta.pricing == {"prompt": "0.000003", "completion": "0.000015"}
 
@@ -150,6 +156,38 @@ async def test_openrouter_probe_http_error_propagates(monkeypatch):
         probe = OpenRouterProbe()
         with pytest.raises(httpx.ConnectError):
             await probe.probe()
+
+
+async def test_openrouter_probe_prefixes_upstream_ids(monkeypatch):
+    """Upstream IDs (e.g. 'meta-llama/llama-3.1-8b-instruct') must be
+    prefixed with 'openrouter/' in both model_ids and metadata keys."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+
+    mock_resp = _make_mock_response(_SAMPLE_RESPONSE)
+
+    mock_client = MagicMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(return_value=mock_resp)
+
+    with patch(
+        "sec_review_framework.models.probes.openrouter_probe.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        from sec_review_framework.models.probes.openrouter_probe import OpenRouterProbe
+
+        probe = OpenRouterProbe()
+        snap = await probe.probe()
+
+    # Verify the Llama model appears with prefix in model_ids
+    assert "openrouter/meta-llama/llama-3.1-8b-instruct" in snap.model_ids
+    # Verify the raw un-prefixed form is NOT in model_ids
+    assert "meta-llama/llama-3.1-8b-instruct" not in snap.model_ids
+    # Verify metadata key also uses prefixed form
+    assert "openrouter/meta-llama/llama-3.1-8b-instruct" in snap.metadata
+    assert snap.metadata["openrouter/meta-llama/llama-3.1-8b-instruct"].id == (
+        "openrouter/meta-llama/llama-3.1-8b-instruct"
+    )
 
 
 async def test_openrouter_probe_empty_data(monkeypatch):

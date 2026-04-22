@@ -40,12 +40,18 @@ class OpenRouterProbe:
             data = resp.json()
 
         models_raw: list[dict] = data.get("data", [])
-        model_ids: frozenset[str] = frozenset(m["id"] for m in models_raw if "id" in m)
+        # OpenRouter's catalog API returns IDs without the "openrouter/" routing
+        # prefix that LiteLLM requires (e.g. "meta-llama/llama-3.1-8b-instruct").
+        # Prefix every id so the snapshot keys match the registry model_name values.
+        model_ids: frozenset[str] = frozenset(
+            f"openrouter/{m['id']}" for m in models_raw if "id" in m
+        )
         metadata: dict[str, ModelMetadata] = {}
         for m in models_raw:
-            mid = m.get("id")
-            if not mid:
+            raw_id = m.get("id")
+            if not raw_id:
                 continue
+            mid = f"openrouter/{raw_id}"
             pricing_raw = m.get("pricing")
             metadata[mid] = ModelMetadata(
                 id=mid,
