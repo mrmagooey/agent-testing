@@ -76,7 +76,7 @@ class ExperimentRun(BaseModel):
     dataset_name: str
     dataset_version: str
     strategy_config: dict = {}
-    model_config: dict = {}
+    provider_kwargs: dict = {}
     parallel: bool = False
     repetition_index: int = 0
     created_at: datetime | None = None
@@ -228,7 +228,7 @@ class ExperimentMatrix(BaseModel):
                                                 dataset_name=self.dataset_name,
                                                 dataset_version=self.dataset_version,
                                                 strategy_config=self.strategy_configs.get(strategy.value, {}),
-                                                model_config=self.model_configs.get(model_id, {}),
+                                                provider_kwargs=self.model_configs.get(model_id, {}),
                                                 tool_extensions=ext_set,
                                             )
                                         )

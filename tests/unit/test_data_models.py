@@ -210,13 +210,12 @@ def test_expand_strategy_configs_passed_to_runs():
     assert run.strategy_config == {"chunk_size": 100}
 
 
-def test_expand_model_configs_stored_on_matrix():
-    """model_configs dict is stored on the matrix and accessible by model_id key."""
+def test_expand_model_configs_propagated_as_provider_kwargs():
     cfg = {"model-a": {"temperature": 0.1}}
     matrix = _minimal_matrix(model_ids=["model-a"], model_configs=cfg)
-    # model_config on ExperimentRun clashes with Pydantic v2's reserved name,
-    # so we verify the matrix holds the config correctly.
     assert matrix.model_configs["model-a"] == {"temperature": 0.1}
+    run = matrix.expand()[0]
+    assert run.provider_kwargs == {"temperature": 0.1}
 
 
 def test_expand_verifier_model_id_propagated():

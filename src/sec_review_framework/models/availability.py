@@ -15,6 +15,7 @@ from typing import Mapping
 
 from sec_review_framework.config import ModelProviderConfig
 from sec_review_framework.models.catalog import ProviderSnapshot
+from sec_review_framework.models.synthesized import synthesize_configs_from_snapshot
 
 ModelStatus = str  # "available" | "key_missing" | "not_listed" | "probe_failed"
 ProbeStatus = str  # "fresh" | "stale" | "failed" | "disabled"
@@ -71,7 +72,23 @@ def _compute_model_status(
         return "not_listed"
 
     # auth == "api_key"
-    api_key_env = cfg.api_key_env  # guaranteed non-None by validator
+    # A probed local endpoint that returned the model id is self-evidencing —
+    # no key check needed even if api_key_env is set.
+    if cfg.api_base and snapshot is not None and snapshot.probe_status in ("fresh", "stale"):
+        if cfg.model_name in snapshot.model_ids:
+            return "available"
+
+    # Validator permits api_key_env=None when api_base is set (keyless local
+    # endpoints). Decide status purely on snapshot state in that case — falling
+    # through to env.get(None) would raise TypeError on real os.environ.
+    if cfg.api_key_env is None:
+        if snapshot is None or snapshot.probe_status == "disabled":
+            return "available"
+        if snapshot.probe_status == "failed":
+            return "probe_failed"
+        return "not_listed"
+
+    api_key_env = cfg.api_key_env
     if not env.get(api_key_env):
         return "key_missing"
     if snapshot is None or snapshot.probe_status == "disabled":
@@ -114,6 +131,30 @@ def _enrich_entry(
     )
 
 
+def _effective_registry(
+    registry: list[ModelProviderConfig],
+    snapshots: dict[str, ProviderSnapshot],
+) -> list[ModelProviderConfig]:
+    """Return registry extended with synthesized local-LLM configs.
+
+    Registry entries win on id collision so hand-written YAML always takes
+    precedence over probe-synthesized entries.
+    """
+    synthesized: list[ModelProviderConfig] = []
+    if "local_llm" in snapshots and snapshots["local_llm"].probe_status in ("fresh", "stale"):
+        synthesized.extend(
+            synthesize_configs_from_snapshot(
+                provider_key="local_llm",
+                snapshot=snapshots["local_llm"],
+                api_key_env="LOCAL_LLM_API_KEY",
+                api_base_env="LOCAL_LLM_BASE_URL",
+            )
+        )
+
+    existing_ids = {r.id for r in registry}
+    return [*registry, *(c for c in synthesized if c.id not in existing_ids)]
+
+
 def compute_availability(
     registry: list[ModelProviderConfig],
     snapshots: dict[str, ProviderSnapshot],
@@ -138,7 +179,7 @@ def compute_availability(
     provider_order: list[str] = []
     groups: dict[str, list[ModelEntry]] = {}
 
-    for cfg in registry:
+    for cfg in _effective_registry(registry, snapshots):
         provider_key = _derive_provider_key(cfg)
         if provider_key not in groups:
             provider_order.append(provider_key)

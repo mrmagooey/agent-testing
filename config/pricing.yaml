@@ -1,3 +1,6 @@
+# Override layer for litellm.model_cost. The coordinator falls back to
+# litellm.model_cost[model_id] when an entry is absent here, so list a model
+# ONLY when LiteLLM's pricing is missing, stale, or wrong.
 models:
   gpt-4o:
     input_per_million: 5.00

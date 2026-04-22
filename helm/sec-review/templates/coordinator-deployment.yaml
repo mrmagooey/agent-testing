@@ -80,6 +80,10 @@ spec:
               value: {{ .Values.providerProbe.bedrock.enabled | toString | quote }}
             - name: BEDROCK_PROBE_REGIONS
               value: {{ .Values.providerProbe.bedrock.regions | join "," | quote }}
+            {{- with .Values.providerEndpoints.localLlm.baseUrl }}
+            - name: LOCAL_LLM_BASE_URL
+              value: {{ . | quote }}
+            {{- end }}
             - name: DEVDOCS_ROOT
               value: {{ .Values.workerTools.devdocs.docsetsPath | quote }}
             - name: DEVDOCS_ALLOW_DOCSETS

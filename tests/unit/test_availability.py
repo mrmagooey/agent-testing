@@ -418,3 +418,88 @@ class TestOpenRouterAvailability:
             {"OPENROUTER_API_KEY": "sk-or-test"},
         )
         assert groups[0].models[0].status == "not_listed"
+
+
+# ---------------------------------------------------------------------------
+# Synthesized local-LLM integration
+# ---------------------------------------------------------------------------
+
+class TestSynthesizedLocalLLM:
+    """compute_availability layers probe-discovered local models onto the registry."""
+
+    def _local_snap(self, *model_ids: str, status: str = "fresh") -> ProviderSnapshot:
+        return ProviderSnapshot(
+            probe_status=status,  # type: ignore[arg-type]
+            model_ids=frozenset(model_ids),
+        )
+
+    def test_compute_availability_emits_synthesized_local_models(self, monkeypatch):
+        monkeypatch.setenv("LOCAL_LLM_BASE_URL", "http://x")
+        monkeypatch.delenv("LOCAL_LLM_API_KEY", raising=False)
+
+        snap = self._local_snap("openai/foo", "openai/bar")
+        groups = compute_availability([], {"local_llm": snap}, {})
+
+        local_group = next((g for g in groups if g.provider == "local_llm"), None)
+        assert local_group is not None, "expected a local_llm provider group"
+        ids = {m.id for m in local_group.models}
+        assert "local_llm-foo" in ids
+        assert "local_llm-bar" in ids
+        assert all(m.status == "available" for m in local_group.models)
+
+    def test_registry_entry_wins_over_synthesized_same_id(self, monkeypatch):
+        monkeypatch.setenv("LOCAL_LLM_BASE_URL", "http://x")
+
+        # Registry has an entry whose id would collide with the synthesized one.
+        registry_cfg = ModelProviderConfig.model_construct(
+            id="local_llm-foo",
+            model_name="openai/foo",
+            api_base="http://registry-override",
+            api_key_env="LOCAL_LLM_API_KEY",
+            auth="api_key",
+            display_name="registry-foo",
+        )
+        snap = self._local_snap("openai/foo")
+        groups = compute_availability([registry_cfg], {"local_llm": snap}, {})
+
+        local_group = next(g for g in groups if g.provider == "local_llm")
+        foo_entries = [m for m in local_group.models if m.id == "local_llm-foo"]
+        assert len(foo_entries) == 1
+        # Registry display_name must win, not the synthesized raw id.
+        assert foo_entries[0].display_name == "registry-foo"
+
+    def test_synthesized_available_without_api_key_env_set_in_os_environ(self, monkeypatch):
+        """Synthesized config has api_key_env set but the key is absent from env —
+        api_base presence proves the endpoint is reachable, so status is still available."""
+        monkeypatch.setenv("LOCAL_LLM_BASE_URL", "http://x")
+        monkeypatch.delenv("LOCAL_LLM_API_KEY", raising=False)
+
+        snap = self._local_snap("openai/mymodel")
+        groups = compute_availability([], {"local_llm": snap}, {})
+
+        local_group = next(g for g in groups if g.provider == "local_llm")
+        assert local_group.models[0].status == "available"
+
+    def test_synthesized_skipped_when_snapshot_disabled(self, monkeypatch):
+        monkeypatch.setenv("LOCAL_LLM_BASE_URL", "http://x")
+
+        snap = ProviderSnapshot(probe_status="disabled")
+        groups = compute_availability([], {"local_llm": snap}, {})
+
+        provider_keys = {g.provider for g in groups}
+        assert "local_llm" not in provider_keys
+
+    def test_hand_written_api_base_entry_without_api_key_env_does_not_crash(self):
+        cfg = ModelProviderConfig(
+            id="local-hand",
+            model_name="openai/hand-model",
+            auth="api_key",
+            api_base="http://x",
+        )
+        snap = ProviderSnapshot(probe_status="failed", last_error="boom")
+        import os as _os
+
+        groups = compute_availability([cfg], {"local": snap}, _os.environ)
+
+        assert len(groups) == 1
+        assert groups[0].models[0].status == "probe_failed"

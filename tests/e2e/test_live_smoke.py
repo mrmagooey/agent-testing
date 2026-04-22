@@ -138,7 +138,7 @@ def live_run(live_dirs) -> ExperimentRun:
         verification_variant=VerificationVariant.NONE,
         dataset_name=live_dirs["dataset_name"],
         dataset_version=live_dirs["dataset_version"],
-        model_config=MODEL_CONFIG,
+        provider_kwargs=MODEL_CONFIG,
         strategy_config={"max_turns": 5},
         created_at=datetime(2026, 4, 17, tzinfo=timezone.utc),
     )

@@ -120,6 +120,7 @@ secrets:
     gemini: ""
     mistral: ""
     cohere: ""
+    local: ""
     openrouter: ""
   baseUrls:
     openai: ""
@@ -144,6 +145,14 @@ providerProbe:
     enabled: false
     regions:
       - us-east-1
+
+# -----------------------------------------------------------------------------
+# Provider endpoints — base URLs for self-hosted / LAN inference endpoints.
+# These are configuration, not secrets. Leave blank to disable probing.
+# -----------------------------------------------------------------------------
+providerEndpoints:
+  localLlm:
+    baseUrl: ""   # e.g. http://192.168.7.100:8080
 
 # -----------------------------------------------------------------------------
 # Network policies

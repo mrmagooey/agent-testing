@@ -3,9 +3,31 @@
 import logging
 from pathlib import Path
 
+import litellm
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
+
+
+def _from_model_cost(mid: str) -> tuple[float, float] | None:
+    """Return (input_per_token, output_per_token) from litellm.model_cost, or None.
+
+    litellm.model_cost values are already USD-per-token (e.g. 2.5e-06),
+    so no conversion is needed — unlike pricing.yaml which uses per-million.
+    Returns None when either field is absent or non-numeric (LiteLLM
+    occasionally ships placeholder strings).
+    """
+    entry = litellm.model_cost.get(mid, {})
+    input_cost = entry.get("input_cost_per_token")
+    output_cost = entry.get("output_cost_per_token")
+    if (
+        not isinstance(input_cost, (int, float))
+        or isinstance(input_cost, bool)
+        or not isinstance(output_cost, (int, float))
+        or isinstance(output_cost, bool)
+    ):
+        return None
+    return (float(input_cost), float(output_cost))
 
 
 class ModelPricing(BaseModel):
@@ -26,20 +48,33 @@ class CostCalculator:
     def __init__(self, pricing: dict[str, ModelPricing]) -> None:
         self.pricing = pricing
 
+    def price_per_token(self, model_id: str) -> tuple[float, float]:
+        """Return (input_cost_per_token, output_cost_per_token) in USD.
+
+        Resolution order:
+        1. pricing.yaml entry (YAML is the authoritative override).
+        2. litellm.model_cost entry (broadens coverage without YAML maintenance).
+        3. Log warning and return (0.0, 0.0) — same behaviour as before fallback existed.
+        """
+        p = self.pricing.get(model_id)
+        if p is not None:
+            return (p.input_per_million / 1_000_000, p.output_per_million / 1_000_000)
+
+        litellm_result = _from_model_cost(model_id)
+        if litellm_result is not None:
+            return litellm_result
+
+        logger.warning("Unknown model %r — cost recorded as $0.00", model_id)
+        return (0.0, 0.0)
+
     def compute(self, model_id: str, input_tokens: int, output_tokens: int) -> float:
         """
         Compute cost in USD for a single model call.
 
         Returns 0.0 for unknown models (logs a warning rather than crashing).
         """
-        p = self.pricing.get(model_id)
-        if p is None:
-            logger.warning("Unknown model %r — cost recorded as $0.00", model_id)
-            return 0.0
-        return (
-            input_tokens / 1_000_000 * p.input_per_million
-            + output_tokens / 1_000_000 * p.output_per_million
-        )
+        input_per_token, output_per_token = self.price_per_token(model_id)
+        return input_tokens * input_per_token + output_tokens * output_per_token
 
     def cost_per_true_positive(self, cost: float, true_positives: int) -> float | None:
         """

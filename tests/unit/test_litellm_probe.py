@@ -1,10 +1,22 @@
-"""Unit tests for LiteLLMProbe."""
+"""Unit tests for LiteLLMMultiProviderProbe."""
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
-
 import pytest
+
+_ALL_ENVS = {
+    "OPENAI_API_KEY": "sk-openai-test",
+    "ANTHROPIC_API_KEY": "sk-ant-test",
+    "GEMINI_API_KEY": "gemini-test",
+    "MISTRAL_API_KEY": "mistral-test",
+    "COHERE_API_KEY": "cohere-test",
+}
+
+_SAMPLE_MODELS = [
+    "gpt-4o",
+    "claude-3-5-sonnet-latest",
+    "gemini-2.0-flash",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -12,148 +24,166 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-async def test_litellm_probe_disabled_when_key_missing(monkeypatch):
-    """Probe returns disabled when API key env var is absent."""
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    from sec_review_framework.models.probes.litellm_probe import LiteLLMProbe
-
-    probe = LiteLLMProbe("openai", "OPENAI_API_KEY", "gpt")
-    snap = await probe.probe()
-    assert snap.probe_status == "disabled"
-    assert snap.last_error is not None
-    assert len(snap.model_ids) == 0
-
-
-async def test_litellm_probe_partitions_by_prefix(monkeypatch):
-    """Probe filters get_valid_models results to its own prefix."""
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+async def test_multi_probe_partitions_by_prefix(monkeypatch):
+    """probe_many partitions one get_valid_models result into per-provider snapshots."""
+    for k, v in _ALL_ENVS.items():
+        monkeypatch.setenv(k, v)
 
     import litellm
 
     monkeypatch.setattr(
         litellm,
         "get_valid_models",
-        lambda check_provider_endpoint=False: [
-            "gpt-4o",
-            "gpt-4-turbo",
-            "claude-3-5-sonnet-20241022",
-            "gemini/gemini-1.5-pro",
-        ],
+        lambda check_provider_endpoint=False: _SAMPLE_MODELS,
     )
 
-    from sec_review_framework.models.probes.litellm_probe import LiteLLMProbe
+    from sec_review_framework.models.probes.litellm_probe import LiteLLMMultiProviderProbe
 
-    openai_probe = LiteLLMProbe("openai", "OPENAI_API_KEY", "gpt")
-    snap = await openai_probe.probe()
-    assert snap.probe_status == "fresh"
-    assert "gpt-4o" in snap.model_ids
-    assert "gpt-4-turbo" in snap.model_ids
-    assert "claude-3-5-sonnet-20241022" not in snap.model_ids
-    assert "gemini/gemini-1.5-pro" not in snap.model_ids
+    probe = LiteLLMMultiProviderProbe()
+    result = await probe.probe_many()
+
+    assert result["openai"].probe_status == "fresh"
+    assert "gpt-4o" in result["openai"].model_ids
+
+    assert result["anthropic"].probe_status == "fresh"
+    assert "claude-3-5-sonnet-latest" in result["anthropic"].model_ids
+
+    assert result["gemini"].probe_status == "fresh"
+    assert "gemini-2.0-flash" in result["gemini"].model_ids
+
+    # Keys are set → fresh even if no models matched the prefix.
+    assert result["mistral"].probe_status == "fresh"
+    assert result["mistral"].model_ids == frozenset()
+
+    assert result["cohere"].probe_status == "fresh"
+    assert result["cohere"].model_ids == frozenset()
 
 
-async def test_litellm_probe_anthropic_prefix(monkeypatch):
-    """Anthropic probe picks up claude-prefixed models."""
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+async def test_multi_probe_disables_missing_env_vars(monkeypatch):
+    """Providers whose env var is absent are disabled; others are fresh."""
+    for k, v in _ALL_ENVS.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.delenv("ANTHROPIC_API_KEY")
 
     import litellm
 
     monkeypatch.setattr(
         litellm,
         "get_valid_models",
-        lambda check_provider_endpoint=False: [
-            "claude-3-opus-20240229",
-            "claude-3-5-sonnet-20241022",
-            "gpt-4o",
-        ],
+        lambda check_provider_endpoint=False: _SAMPLE_MODELS,
     )
 
-    from sec_review_framework.models.probes.litellm_probe import LiteLLMProbe
+    from sec_review_framework.models.probes.litellm_probe import LiteLLMMultiProviderProbe
 
-    probe = LiteLLMProbe("anthropic", "ANTHROPIC_API_KEY", "claude")
-    snap = await probe.probe()
-    assert snap.probe_status == "fresh"
-    assert "claude-3-opus-20240229" in snap.model_ids
-    assert "gpt-4o" not in snap.model_ids
+    probe = LiteLLMMultiProviderProbe()
+    result = await probe.probe_many()
+
+    assert result["anthropic"].probe_status == "disabled"
+    assert result["anthropic"].last_error is not None
+
+    # All other keys were set → fresh.
+    for pk in ("openai", "gemini", "mistral", "cohere"):
+        assert result[pk].probe_status == "fresh", f"{pk} should be fresh"
 
 
-async def test_litellm_probe_raises_on_api_error(monkeypatch):
-    """Probe propagates when get_valid_models raises."""
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+async def test_multi_probe_single_litellm_call(monkeypatch):
+    """probe_many makes exactly one get_valid_models call regardless of provider count."""
+    for k, v in _ALL_ENVS.items():
+        monkeypatch.setenv(k, v)
+
+    import litellm
+
+    call_count = 0
+
+    def _counting_get_valid_models(**kwargs):
+        nonlocal call_count
+        call_count += 1
+        return _SAMPLE_MODELS
+
+    monkeypatch.setattr(litellm, "get_valid_models", _counting_get_valid_models)
+
+    from sec_review_framework.models.probes.litellm_probe import LiteLLMMultiProviderProbe
+
+    probe = LiteLLMMultiProviderProbe()
+    await probe.probe_many()
+
+    assert call_count == 1
+
+
+async def test_multi_probe_no_call_when_all_disabled(monkeypatch):
+    """When no env vars are set, get_valid_models is never called."""
+    for k in _ALL_ENVS:
+        monkeypatch.delenv(k, raising=False)
+
+    import litellm
+
+    call_count = 0
+
+    def _should_not_be_called(**kwargs):
+        nonlocal call_count
+        call_count += 1
+        return []
+
+    monkeypatch.setattr(litellm, "get_valid_models", _should_not_be_called)
+
+    from sec_review_framework.models.probes.litellm_probe import LiteLLMMultiProviderProbe
+
+    probe = LiteLLMMultiProviderProbe()
+    result = await probe.probe_many()
+
+    assert call_count == 0
+    for snap in result.values():
+        assert snap.probe_status == "disabled"
+
+
+async def test_multi_probe_raises_on_litellm_error(monkeypatch):
+    """probe_many lets exceptions from get_valid_models propagate."""
+    for k, v in _ALL_ENVS.items():
+        monkeypatch.setenv(k, v)
 
     import litellm
 
     def _fail(**kwargs):
-        raise ConnectionError("network down")
+        raise RuntimeError("network down")
 
     monkeypatch.setattr(litellm, "get_valid_models", _fail)
 
-    from sec_review_framework.models.probes.litellm_probe import LiteLLMProbe
+    from sec_review_framework.models.probes.litellm_probe import LiteLLMMultiProviderProbe
 
-    probe = LiteLLMProbe("openai", "OPENAI_API_KEY", "gpt")
-    with pytest.raises(RuntimeError, match="litellm.get_valid_models failed"):
-        await probe.probe()
+    probe = LiteLLMMultiProviderProbe()
+    with pytest.raises(RuntimeError, match="network down"):
+        await probe.probe_many()
 
 
-async def test_build_litellm_probes_returns_all_providers():
-    """build_litellm_probes returns one probe per known provider."""
+async def test_build_litellm_probes_returns_single_multi_probe():
+    """build_litellm_probes returns exactly one LiteLLMMultiProviderProbe."""
     from sec_review_framework.models.probes.litellm_probe import (
-        _PROVIDER_SPEC,
+        LiteLLMMultiProviderProbe,
         build_litellm_probes,
     )
 
     probes = build_litellm_probes()
-    probe_keys = {p.provider_key for p in probes}
-    assert probe_keys == set(_PROVIDER_SPEC.keys())
+    assert len(probes) == 1
+    assert isinstance(probes[0], LiteLLMMultiProviderProbe)
 
 
-async def test_litellm_probe_metadata_populated(monkeypatch):
-    """Each matched model gets a ModelMetadata entry."""
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+async def test_multi_probe_dispatches_get_valid_models_to_thread(monkeypatch):
+    import asyncio as _asyncio
 
-    import litellm
+    import litellm as _litellm
 
-    monkeypatch.setattr(
-        litellm,
-        "get_valid_models",
-        lambda check_provider_endpoint=False: ["gemini/gemini-1.5-pro", "gemini/gemini-pro"],
-    )
+    monkeypatch.setenv("OPENAI_API_KEY", "k")
+    monkeypatch.setattr(_litellm, "get_valid_models", lambda **kw: [])
 
-    from sec_review_framework.models.probes.litellm_probe import LiteLLMProbe
+    seen = {}
+    real_to_thread = _asyncio.to_thread
 
-    probe = LiteLLMProbe("gemini", "GEMINI_API_KEY", "gemini")
-    snap = await probe.probe()
-    assert "gemini/gemini-1.5-pro" in snap.metadata
-    assert snap.metadata["gemini/gemini-1.5-pro"].id == "gemini/gemini-1.5-pro"
+    async def _spy(func, *args, **kwargs):
+        seen["func"] = func
+        return await real_to_thread(func, *args, **kwargs)
 
+    monkeypatch.setattr(_asyncio, "to_thread", _spy)
+    from sec_review_framework.models.probes.litellm_probe import LiteLLMMultiProviderProbe
 
-async def test_litellm_probe_uses_asyncio_to_thread(monkeypatch):
-    """probe() must offload get_valid_models to a worker thread via asyncio.to_thread
-    so that the blocking HTTP call does not stall the event loop."""
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-
-    import litellm
-    import asyncio
-
-    monkeypatch.setattr(
-        litellm,
-        "get_valid_models",
-        lambda check_provider_endpoint=False: ["gpt-4o"],
-    )
-
-    from sec_review_framework.models.probes.litellm_probe import LiteLLMProbe
-
-    probe = LiteLLMProbe("openai", "OPENAI_API_KEY", "gpt")
-
-    to_thread_calls: list = []
-    original_to_thread = asyncio.to_thread
-
-    async def _spy_to_thread(func, *args, **kwargs):
-        to_thread_calls.append(func)
-        return await original_to_thread(func, *args, **kwargs)
-
-    with patch("asyncio.to_thread", side_effect=_spy_to_thread):
-        await probe.probe()
-
-    assert len(to_thread_calls) == 1
-    assert to_thread_calls[0] is litellm.get_valid_models
+    await LiteLLMMultiProviderProbe().probe_many()
+    assert seen.get("func") is _litellm.get_valid_models

@@ -206,9 +206,9 @@ test.describe('RunCompare Venn and cost delta', () => {
   })
 
   test('delta badge shows red when B is more expensive than A', async ({ page }) => {
-    // Override comparison to make B more expensive
-    // Frontend calls /api/experiments/{id}/compare (not compare-runs)
-    await page.route(`**/api/experiments/${EXPERIMENT_ID}/compare**`, (route) => {
+    // Override comparison to make B more expensive. RunCompare calls
+    // GET /api/compare-runs?a_experiment=&a_run=&b_experiment=&b_run=.
+    await page.route('**/api/compare-runs**', (route) => {
       route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -290,8 +290,12 @@ test.describe('ExperimentDetail sticky action bar', () => {
     if (count >= 1) {
       await checkboxes.nth(0).check()
       await expect(page.getByText(/1 run selected/)).toBeVisible()
-      await page.getByRole('button', { name: 'Clear' }).click()
-      await expect(page.getByText(/run.*selected/i)).not.toBeVisible()
+      await page.getByRole('button', { name: 'Clear', exact: true }).click()
+      // The sticky bar uses "N run(s) selected" without parens; MatrixTable
+      // has its own internal "N run(s) selected" counter (with parens) that is
+      // independent of page-level state. The Clear button dismisses the sticky
+      // bar, so assert specifically on that text.
+      await expect(page.getByText(/\d+ runs? selected$/)).not.toBeVisible()
     }
   })
 

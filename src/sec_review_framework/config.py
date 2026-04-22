@@ -28,12 +28,15 @@ class ModelProviderConfig(BaseModel):
     api_key_env: str | None = None
     auth: Literal["api_key", "aws"] = "api_key"
     region: str | None = None
+    api_base: str | None = None
     display_name: str | None = None
 
     @model_validator(mode="after")
     def _validate_auth(self) -> "ModelProviderConfig":
-        if self.auth == "api_key" and not self.api_key_env:
-            raise ValueError(f"model {self.id}: api_key_env required when auth='api_key'")
+        if self.auth == "api_key" and not self.api_key_env and self.api_base is None:
+            raise ValueError(
+                f"model {self.id}: api_key_env required when auth='api_key' and api_base is not set"
+            )
         if self.auth == "aws" and not self.region:
             raise ValueError(f"model {self.id}: region required when auth='aws'")
         return self

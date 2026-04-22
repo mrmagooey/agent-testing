@@ -1,78 +1,78 @@
-"""LiteLLM-backed probes for OpenAI, Anthropic, Gemini, Mistral, Cohere.
+"""LiteLLM multi-provider probe: one call, multiple ProviderSnapshots.
 
-Each provider is instantiated as a separate probe so the catalog has
-per-provider snapshots.  A probe is ``disabled`` when its required API-key
-env var is absent; otherwise it calls ``litellm.get_valid_models`` to
-enumerate reachable models and filters to the provider prefix.
+A single ``litellm.get_valid_models`` call is partitioned by prefix to produce
+one ``ProviderSnapshot`` per configured provider.  Providers whose API-key env
+var is absent receive a ``disabled`` snapshot without triggering the call at all
+if none are set.
 """
 
 from __future__ import annotations
 
 import asyncio
-import logging
 import os
 from datetime import datetime, timezone
 
 import litellm
 
-from sec_review_framework.models.catalog import ModelMetadata, ProviderSnapshot
-
-logger = logging.getLogger(__name__)
-
+from sec_review_framework.models.catalog import (
+    ModelMetadata,
+    MultiProviderProbe,
+    ProviderSnapshot,
+)
 
 # Maps catalog provider_key → (env-var name, litellm model-name prefix).
-# The prefix is used to filter the full list returned by get_valid_models.
-_PROVIDER_SPEC: dict[str, tuple[str, str]] = {
-    "openai": ("OPENAI_API_KEY", "gpt"),
+_PROVIDER_PREFIXES: dict[str, tuple[str, str]] = {
+    "openai":    ("OPENAI_API_KEY",    "gpt"),
     "anthropic": ("ANTHROPIC_API_KEY", "claude"),
-    "gemini": ("GEMINI_API_KEY", "gemini"),
-    "mistral": ("MISTRAL_API_KEY", "mistral"),
-    "cohere": ("COHERE_API_KEY", "command"),
+    "gemini":    ("GEMINI_API_KEY",    "gemini"),
+    "mistral":   ("MISTRAL_API_KEY",   "mistral"),
+    "cohere":    ("COHERE_API_KEY",    "command"),
 }
 
 
-class LiteLLMProbe:
-    """Probe one LiteLLM-supported provider."""
+class LiteLLMMultiProviderProbe:
+    provider_keys: tuple[str, ...] = tuple(_PROVIDER_PREFIXES.keys())
 
-    def __init__(self, provider_key: str, api_key_env: str, model_prefix: str) -> None:
-        self.provider_key = provider_key
-        self._api_key_env = api_key_env
-        self._model_prefix = model_prefix
-
-    async def probe(self) -> ProviderSnapshot:
-        if not os.environ.get(self._api_key_env):
-            return ProviderSnapshot(
-                probe_status="disabled",
-                last_error=f"{self._api_key_env} not set",
-            )
-
-        try:
-            all_models: list[str] = await asyncio.to_thread(
-                litellm.get_valid_models, check_provider_endpoint=True
-            )
-        except Exception as exc:
-            raise RuntimeError(
-                f"litellm.get_valid_models failed for {self.provider_key}: {exc}"
-            ) from exc
-
-        matched = frozenset(
-            m for m in all_models if m.startswith(self._model_prefix)
-        )
-        metadata = {
-            m: ModelMetadata(id=m)
-            for m in matched
+    async def probe_many(self) -> dict[str, ProviderSnapshot]:
+        enabled_keys = {
+            pk
+            for pk, (env_var, _) in _PROVIDER_PREFIXES.items()
+            if os.environ.get(env_var)
         }
-        return ProviderSnapshot(
-            probe_status="fresh",
-            model_ids=matched,
-            metadata=metadata,
-            fetched_at=datetime.now(timezone.utc),
+
+        if not enabled_keys:
+            return {
+                pk: ProviderSnapshot(
+                    probe_status="disabled",
+                    last_error=f"{_PROVIDER_PREFIXES[pk][0]} not set",
+                )
+                for pk in self.provider_keys
+            }
+
+        raw: list[str] = await asyncio.to_thread(
+            litellm.get_valid_models, check_provider_endpoint=True
         )
 
+        now = datetime.now(timezone.utc)  # noqa: UP017
+        result: dict[str, ProviderSnapshot] = {}
+        for pk in self.provider_keys:
+            env_var, prefix = _PROVIDER_PREFIXES[pk]
+            if pk in enabled_keys:
+                matched = frozenset(m for m in raw if m.startswith(prefix))
+                result[pk] = ProviderSnapshot(
+                    probe_status="fresh",
+                    model_ids=matched,
+                    metadata={m: ModelMetadata(id=m) for m in matched},
+                    fetched_at=now,
+                )
+            else:
+                result[pk] = ProviderSnapshot(
+                    probe_status="disabled",
+                    last_error=f"{env_var} not set",
+                )
+        return result
 
-def build_litellm_probes() -> list[LiteLLMProbe]:
-    """Return one probe per configured LiteLLM provider."""
-    return [
-        LiteLLMProbe(key, env_var, prefix)
-        for key, (env_var, prefix) in _PROVIDER_SPEC.items()
-    ]
+
+def build_litellm_probes() -> list[MultiProviderProbe]:
+    """Return the consolidated multi-provider LiteLLM probe."""
+    return [LiteLLMMultiProviderProbe()]

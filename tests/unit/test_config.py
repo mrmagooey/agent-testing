@@ -86,6 +86,24 @@ def test_model_provider_config_aws_auth_missing_region_raises():
         ModelProviderConfig(id="m4", model_name="bedrock-claude", auth="aws")
 
 
+def test_model_provider_config_api_base_allows_no_api_key_env():
+    cfg = ModelProviderConfig(
+        id="local-model",
+        model_name="openai/local-model",
+        auth="api_key",
+        api_base="http://localhost:8080",
+    )
+    assert cfg.api_base == "http://localhost:8080"
+    assert cfg.api_key_env is None
+
+
+def test_model_provider_config_api_base_defaults_to_none():
+    cfg = ModelProviderConfig(
+        id="m5", model_name="gpt-4o", auth="api_key", api_key_env="OPENAI_API_KEY"
+    )
+    assert cfg.api_base is None
+
+
 # ---------------------------------------------------------------------------
 # ModelsConfig defaults merging
 # ---------------------------------------------------------------------------

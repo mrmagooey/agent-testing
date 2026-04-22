@@ -32,8 +32,8 @@ from sec_review_framework.strategies.diff_review import DiffReviewStrategy
 
 
 class ModelProviderFactory:
-    def create(self, model_id: str, model_config: dict) -> LiteLLMProvider:
-        return LiteLLMProvider(model_name=model_id, **model_config)
+    def create(self, model_id: str, provider_kwargs: dict) -> LiteLLMProvider:
+        return LiteLLMProvider(model_name=model_id, **provider_kwargs)
 
 
 class StrategyFactory:
@@ -60,7 +60,7 @@ class ExperimentWorker:
     def run(self, run: ExperimentRun, output_dir: Path, datasets_dir: Path) -> None:
         target = TargetCodebase(datasets_dir / "targets" / run.dataset_name / "repo")
         labels = LabelStore(datasets_dir).load(run.dataset_name, run.dataset_version)
-        model = ModelProviderFactory().create(run.model_id, run.model_config)
+        model = ModelProviderFactory().create(run.model_id, run.provider_kwargs)
         strategy = StrategyFactory().create(run.strategy)
         tools = ToolRegistryFactory().create(
             run.tool_variant, target, tool_extensions=run.tool_extensions

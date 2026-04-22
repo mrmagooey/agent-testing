@@ -85,8 +85,8 @@ test.describe('RunDetail error state', () => {
 test.describe('RunCompare error state', () => {
   test('shows error when compare-runs returns 500', async ({ page }) => {
     await mockApi(page)
-    // Frontend calls /api/experiments/{id}/compare?a=...&b=... (not compare-runs)
-    await page.route(`**/api/experiments/${EXPERIMENT_ID}/compare**`, (route) => {
+    // RunCompare calls GET /api/compare-runs?a_experiment=&a_run=&b_experiment=&b_run=.
+    await page.route('**/api/compare-runs**', (route) => {
       route.fulfill({ status: 500, contentType: 'application/json', body: '{"detail":"server error"}' })
     })
     await page.goto(`/experiments/${EXPERIMENT_ID}/compare?a=run-001-aaa&b=run-002-bbb`)

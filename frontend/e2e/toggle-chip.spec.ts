@@ -11,41 +11,30 @@ test.describe('ToggleChip on /experiments/new', () => {
     await page.goto('/experiments/new')
   })
 
-  test('checking a model chip marks the checkbox as checked', async ({ page }) => {
-    // gpt-4o is rendered as a Command.Item in the ModelSearchPicker
-    const gpt4oItem = page.getByRole('option', { name: /gpt-4o/i })
+  // The ModelSearchPicker renders Command.Items with a deterministic data-value
+  // of "{provider} {id} {display_name}"; we address gpt-4o via that attribute
+  // so the locator doesn't also resolve to gpt-4o-mini. Selection state is
+  // verified via the Pill tray (a "Remove GPT-4o" button appears when selected)
+  // and the text-indigo-700 class the component adds to selected items — cmdk
+  // owns data-selected/aria-selected for keyboard highlighting so those are
+  // unreliable signals for application state.
+  const GPT4O_ITEM = '[cmdk-item][data-value="openai gpt-4o GPT-4o"]'
+  const REMOVE_GPT4O_PILL = { name: 'Remove GPT-4o' } as const
 
-    // Initially, the item should not be selected
-    await expect(gpt4oItem).toHaveAttribute('data-selected', 'false')
-
-    // Click to select
-    await gpt4oItem.click()
-
-    // After selection, the item should have data-selected='true'
-    await expect(gpt4oItem).toHaveAttribute('data-selected', 'true')
+  test('selecting a model from the picker adds it to the pill tray', async ({ page }) => {
+    await expect(page.getByRole('button', REMOVE_GPT4O_PILL)).toHaveCount(0)
+    await page.locator(GPT4O_ITEM).click()
+    await expect(page.getByRole('button', REMOVE_GPT4O_PILL)).toBeVisible()
   })
 
-  test('checked model chip label has indigo background class', async ({ page }) => {
-    // gpt-4o is rendered as a Command.Item in the ModelSearchPicker
-    const gpt4oItem = page.getByRole('option', { name: /gpt-4o/i })
-
-    // Click to select
+  test('selected model command item has indigo text styling', async ({ page }) => {
+    const gpt4oItem = page.locator(GPT4O_ITEM)
     await gpt4oItem.click()
-
-    // After selection, the item shows indigo text styling (text-indigo-700)
-    // This is the visual indicator of selection in the new UI
     await expect(gpt4oItem).toHaveClass(/text-indigo-/)
   })
 
-  test('unchecked model chip label does not have indigo background', async ({ page }) => {
-    // gpt-4o is rendered as a Command.Item in the ModelSearchPicker
-    const gpt4oItem = page.getByRole('option', { name: /gpt-4o/i })
-
-    // Before any interaction, the item should not be selected
-    await expect(gpt4oItem).not.toHaveAttribute('data-selected', 'true')
-
-    // An unselected item should not have indigo text styling
-    await expect(gpt4oItem).not.toHaveClass(/text-indigo-/)
+  test('unselected model command item does not have indigo text styling', async ({ page }) => {
+    await expect(page.locator(GPT4O_ITEM)).not.toHaveClass(/text-indigo-/)
   })
 
   test('disabled chip (DevDocs) cannot be toggled', async ({ page }) => {

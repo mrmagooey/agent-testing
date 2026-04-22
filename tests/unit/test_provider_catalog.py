@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
-
-import pytest
+from datetime import UTC, datetime
 
 from sec_review_framework.models.catalog import (
     ModelMetadata,
     ProviderCatalog,
     ProviderSnapshot,
 )
-
 
 # ---------------------------------------------------------------------------
 # Stub probes
@@ -24,7 +21,7 @@ def _fresh_snapshot(provider_key: str) -> ProviderSnapshot:
         probe_status="fresh",
         model_ids=frozenset([f"{provider_key}/model-1"]),
         metadata={f"{provider_key}/model-1": ModelMetadata(id=f"{provider_key}/model-1")},
-        fetched_at=datetime.now(timezone.utc),
+        fetched_at=datetime.now(UTC),
     )
 
 
@@ -237,3 +234,141 @@ async def test_stale_snapshot_expires_after_max_stale_seconds():
     assert snap_failed.last_error is not None
 
     await catalog.stop()
+
+
+# ---------------------------------------------------------------------------
+# MultiProviderProbe tests
+# ---------------------------------------------------------------------------
+
+
+class _OkMultiProbe:
+    provider_keys = ("x", "y")
+
+    def __init__(self, snapshots: dict[str, ProviderSnapshot]) -> None:
+        self._snapshots = snapshots
+        self.call_count = 0
+
+    async def probe_many(self) -> dict[str, ProviderSnapshot]:
+        self.call_count += 1
+        return self._snapshots
+
+
+class _FailingMultiProbe:
+    provider_keys = ("x", "y")
+
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    async def probe_many(self) -> dict[str, ProviderSnapshot]:
+        self.call_count += 1
+        raise RuntimeError("multi probe error")
+
+
+async def test_catalog_handles_multi_provider_probe():
+    """A multi-provider probe's results land in catalog.snapshot() under their keys."""
+    fresh_x = _fresh_snapshot("x")
+    failed_y = ProviderSnapshot(probe_status="failed", last_error="boom")
+    probe = _OkMultiProbe({"x": fresh_x, "y": failed_y})
+
+    catalog = ProviderCatalog(probes=[probe], ttl_seconds=60, probe_enabled=True)
+    await catalog.start()
+    try:
+        snap = catalog.snapshot()
+        assert snap["x"].probe_status == "fresh"
+        assert snap["y"].probe_status == "failed"
+    finally:
+        await catalog.stop()
+
+
+async def test_catalog_mixes_single_and_multi_probes():
+    """Single and multi probes coexist; all keys appear in snapshot()."""
+    single = _OkProbe("anthropic")
+    multi = _OkMultiProbe({"x": _fresh_snapshot("x"), "y": _fresh_snapshot("y")})
+
+    catalog = ProviderCatalog(probes=[single, multi], ttl_seconds=60, probe_enabled=True)
+    await catalog.start()
+    try:
+        snap = catalog.snapshot()
+        assert set(snap.keys()) == {"anthropic", "x", "y"}
+        for key, s in snap.items():
+            assert s.probe_status == "fresh", f"{key} not fresh"
+    finally:
+        await catalog.stop()
+
+
+async def test_multi_probe_exception_marks_all_keys_failed():
+    """When a multi probe raises with no prior state, all its keys become failed."""
+    probe = _FailingMultiProbe()
+
+    catalog = ProviderCatalog(probes=[probe], ttl_seconds=60, probe_enabled=True)
+    await catalog.start()
+    try:
+        snap = catalog.snapshot()
+        assert snap["x"].probe_status == "failed"
+        assert snap["y"].probe_status == "failed"
+        assert snap["x"].last_error is not None
+    finally:
+        await catalog.stop()
+
+
+async def test_multi_probe_per_key_stale_downgrade():
+    """After a success, a subsequent multi-probe exception marks each key stale per-key.
+
+    Both keys share the same fetched_at from the first call, so both become
+    stale.  The test verifies per-key prior data is preserved independently.
+    """
+
+    class _FlipMultiProbe:
+        provider_keys = ("x", "y")
+        _calls = 0
+
+        async def probe_many(self) -> dict[str, ProviderSnapshot]:
+            self._calls += 1
+            if self._calls == 1:
+                return {
+                    "x": _fresh_snapshot("x"),
+                    "y": _fresh_snapshot("y"),
+                }
+            raise RuntimeError("transient error")
+
+    probe = _FlipMultiProbe()
+    catalog = ProviderCatalog(probes=[probe], ttl_seconds=1, probe_enabled=True)
+    await catalog.start()
+
+    snap_fresh = catalog.snapshot()
+    assert snap_fresh["x"].probe_status == "fresh"
+    assert snap_fresh["y"].probe_status == "fresh"
+
+    # Wait for the refresh cycle to trigger the failure.
+    await asyncio.sleep(1.3)
+    await catalog.stop()
+
+    snap = catalog.snapshot()
+    assert snap["x"].probe_status == "stale"
+    assert snap["y"].probe_status == "stale"
+    # Prior model_ids preserved per key.
+    assert "x/model-1" in snap["x"].model_ids
+    assert "y/model-1" in snap["y"].model_ids
+    assert snap["x"].last_error is not None
+    assert snap["y"].last_error is not None
+
+
+async def test_multi_probe_undeclared_key_is_dropped():
+    class _RogueMultiProbe:
+        provider_keys = ("x",)
+
+        async def probe_many(self) -> dict[str, ProviderSnapshot]:
+            return {
+                "x": _fresh_snapshot("x"),
+                "undeclared": _fresh_snapshot("undeclared"),
+            }
+
+    probe = _RogueMultiProbe()
+    catalog = ProviderCatalog(probes=[probe], ttl_seconds=60, probe_enabled=True)
+    await catalog.start()
+    try:
+        snap = catalog.snapshot()
+        assert "x" in snap
+        assert "undeclared" not in snap
+    finally:
+        await catalog.stop()

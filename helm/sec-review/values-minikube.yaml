@@ -58,3 +58,8 @@ fluentd:
 workerTools:
   devdocs:
     enabled: false
+
+# Example: point the local_llm probe at a LAN inference endpoint.
+# providerEndpoints:
+#   localLlm:
+#     baseUrl: "http://192.168.49.1:8080"

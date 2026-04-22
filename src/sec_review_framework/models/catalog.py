@@ -52,6 +52,12 @@ class ProviderProbe(Protocol):
     async def probe(self) -> ProviderSnapshot: ...
 
 
+class MultiProviderProbe(Protocol):
+    provider_keys: tuple[str, ...]  # all keys this probe will write
+
+    async def probe_many(self) -> dict[str, ProviderSnapshot]: ...
+
+
 class ProviderCatalog:
     """In-process cache of reachable models per provider.
 
@@ -70,7 +76,7 @@ class ProviderCatalog:
     def __init__(
         self,
         *,
-        probes: list[ProviderProbe],
+        probes: list[ProviderProbe | MultiProviderProbe],
         ttl_seconds: int = 600,
         probe_enabled: bool = True,
         max_stale_seconds: int | None = None,
@@ -84,10 +90,14 @@ class ProviderCatalog:
             max_stale_seconds if max_stale_seconds is not None else ttl_seconds * 6
         )
         # Initialise every probe to "disabled" so snapshot() is always safe.
-        self._snapshots: dict[str, ProviderSnapshot] = {
-            p.provider_key: ProviderSnapshot(probe_status="disabled")
-            for p in probes
-        }
+        # Single probes contribute one key; multi probes contribute one per provider_keys entry.
+        self._snapshots: dict[str, ProviderSnapshot] = {}
+        for p in probes:
+            if hasattr(p, "probe_many"):
+                for key in p.provider_keys:
+                    self._snapshots[key] = ProviderSnapshot(probe_status="disabled")
+            else:
+                self._snapshots[p.provider_key] = ProviderSnapshot(probe_status="disabled")
         self._task: asyncio.Task | None = None
 
     # ------------------------------------------------------------------
@@ -137,11 +147,14 @@ class ProviderCatalog:
 
     async def _run_probes(self) -> None:
         """Run all probes concurrently; update snapshots; swallow errors."""
-        results = await asyncio.gather(
-            *[self._safe_probe(p) for p in self._probes],
+        singles = [p for p in self._probes if not hasattr(p, "probe_many")]
+        multis = [p for p in self._probes if hasattr(p, "probe_many")]
+
+        single_results = await asyncio.gather(
+            *[self._safe_probe(p) for p in singles],
             return_exceptions=True,
         )
-        for probe, result in zip(self._probes, results):
+        for probe, result in zip(singles, single_results):
             if isinstance(result, BaseException):
                 # Should not happen because _safe_probe swallows, but guard.
                 logger.warning(
@@ -151,6 +164,28 @@ class ProviderCatalog:
                 )
             else:
                 self._snapshots[probe.provider_key] = result
+
+        multi_results = await asyncio.gather(
+            *[self._safe_probe_many(p) for p in multis],
+            return_exceptions=True,
+        )
+        for probe, result in zip(multis, multi_results):
+            if isinstance(result, BaseException):
+                # Should not happen because _safe_probe_many swallows, but guard.
+                logger.warning(
+                    "Unexpected exception from _safe_probe_many for %s: %s",
+                    probe.provider_keys,
+                    result,
+                )
+            else:
+                declared = set(probe.provider_keys)
+                for key, snap in result.items():
+                    if key not in declared:
+                        logger.warning(
+                            "Multi-probe returned undeclared key %r; dropping", key
+                        )
+                        continue
+                    self._snapshots[key] = snap
 
     async def _safe_probe(self, probe: ProviderProbe) -> ProviderSnapshot:
         """Run probe; handle errors without propagating."""
@@ -194,3 +229,54 @@ class ProviderCatalog:
                 probe_status="failed",
                 last_error=err_msg,
             )
+
+    async def _safe_probe_many(
+        self, probe: MultiProviderProbe
+    ) -> dict[str, ProviderSnapshot]:
+        """Run a multi-provider probe; handle errors per-key without propagating.
+
+        On success, returns the probe's own dict.  On failure, each key's prior
+        snapshot is downgraded individually using the same stale-expiry logic as
+        _safe_probe, so per-key staleness is tracked independently.
+        """
+        try:
+            return await probe.probe_many()
+        except Exception as exc:
+            err_msg = str(exc)
+            logger.warning(
+                "Multi-probe %s failed: %s", probe.provider_keys, err_msg
+            )
+            result: dict[str, ProviderSnapshot] = {}
+            for key in probe.provider_keys:
+                prior = self._snapshots.get(key)
+                if prior is not None and prior.probe_status not in ("disabled", "failed"):
+                    if prior.fetched_at is not None:
+                        age = (
+                            datetime.now(timezone.utc) - prior.fetched_at  # noqa: UP017
+                        ).total_seconds()
+                        if age > self._max_stale_seconds:
+                            logger.warning(
+                                "Stale snapshot for %s is %.0f s old (max %d s) — "
+                                "discarding and returning failed",
+                                key,
+                                age,
+                                self._max_stale_seconds,
+                            )
+                            result[key] = ProviderSnapshot(
+                                probe_status="failed",
+                                last_error=err_msg,
+                            )
+                            continue
+                    result[key] = ProviderSnapshot(
+                        probe_status="stale",
+                        model_ids=prior.model_ids,
+                        metadata=prior.metadata,
+                        fetched_at=prior.fetched_at,
+                        last_error=err_msg,
+                    )
+                else:
+                    result[key] = ProviderSnapshot(
+                        probe_status="failed",
+                        last_error=err_msg,
+                    )
+            return result

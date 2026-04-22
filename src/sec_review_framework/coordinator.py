@@ -64,6 +64,7 @@ from sec_review_framework.models.availability import (
     flat_model_list,
     groups_to_dicts,
     build_id_to_status,
+    _effective_registry,
 )
 from sec_review_framework.data.evaluation import GroundTruthLabel
 from sec_review_framework.ground_truth.cve_importer import (
@@ -1926,6 +1927,41 @@ class ExperimentCoordinator:
 
         return problems
 
+    def enrich_model_configs(self, matrix: "ExperimentMatrix") -> None:
+        """Inject api_base/api_key into matrix.model_configs for probe-discovered models.
+
+        Called after availability validation so synthesized local-LLM models
+        carry the endpoint url and key into the worker run config.
+        """
+        import os as _os
+
+        if self.config_dir is None:
+            return
+        config_file = self.config_dir / "models.yaml"
+        try:
+            models_cfg = ModelsConfig.from_yaml(config_file)
+        except Exception:
+            return
+
+        registry = list(models_cfg.providers.values())
+        snapshots = self.catalog.snapshot() if self.catalog is not None else {}
+        effective = _effective_registry(registry, snapshots)
+
+        ids_to_enrich: set[str] = set(matrix.model_ids)
+        if matrix.verifier_model_id is not None:
+            ids_to_enrich.add(matrix.verifier_model_id)
+
+        for cfg in effective:
+            if cfg.id not in ids_to_enrich:
+                continue
+            api_base = cfg.api_base
+            if api_base is None:
+                continue
+            api_key = _os.environ.get(cfg.api_key_env, "") if cfg.api_key_env else ""
+            matrix.model_configs.setdefault(cfg.id, {}).update(
+                {"api_base": api_base, "api_key": api_key}
+            )
+
     def list_strategies(self) -> list[dict]:
         return [
             {"name": s.value, "description": f"{s.value} scan strategy"}
@@ -2397,6 +2433,7 @@ async def submit_experiment(matrix: ExperimentMatrix) -> dict:
                     "models": problems,
                 },
             )
+    coordinator.enrich_model_configs(matrix)
     experiment_id = await coordinator.submit_experiment(matrix)
     return {"experiment_id": experiment_id, "total_runs": len(matrix.expand())}
 

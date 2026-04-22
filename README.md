@@ -145,12 +145,12 @@ src/sec_review_framework/
   profiles/             Review profile registry
   feedback/             Experiment comparison, FP pattern mining
   data/                 Pydantic models (experiment, findings, evaluation)
+  prompts/              System + user prompt templates (loader, registry)
   config.py             YAML config loaders
 
-config/                 Pricing, concurrency, prompts, profiles, vuln_classes
-datasets/               CVE imports, injection templates, target repos
+config/                 models, pricing, concurrency, retry, profiles, vuln_classes, experiments, coordinator
 frontend/               React 19 + Vite SPA (served by coordinator)
-helm/sec-review/        Helm chart: Chart.yaml, values{,-minikube,-prod}.yaml, templates/
+helm/sec-review/        Chart.yaml, values{,-minikube,-prod,-e2e}.yaml, templates/, grafana-dashboard.json
 tests/                  unit / integration / e2e / infra / performance
 ```
 
@@ -221,7 +221,8 @@ All config lives under `config/` as YAML, loaded via Pydantic:
 - `vuln_classes.yaml` — vulnerability taxonomy with CWE mappings
 - `experiments.yaml` — default experiment matrix presets
 - `coordinator.yaml` — namespace, storage paths, spend caps
-- `prompts/` — finding output format, verification prompt
+
+Prompt templates (system / user / verification) live alongside the code at `src/sec_review_framework/prompts/`, not under `config/`.
 
 ### Tool Extensions Configuration
 
@@ -249,8 +250,8 @@ The framework ships with 29 LiteLLM-backed models across 7 major providers. Enab
 
 | Provider | Models | Auth | API Key Env |
 |---|---|---|---|
-| **OpenAI** | GPT-4o, GPT-4o mini, GPT-4.1, o1, o3, o3-mini, o4-mini | API key | `OPENAI_API_KEY` |
-| **Anthropic** | Claude Opus 4.7, Sonnet 4.6, Haiku 4.5, 3.5 Sonnet/Haiku (latest) | API key | `ANTHROPIC_API_KEY` |
+| **OpenAI** | GPT-4o, GPT-4o mini, GPT-4.1, GPT-4.1 mini, o1, o3, o3-mini, o4-mini | API key | `OPENAI_API_KEY` |
+| **Anthropic** | Claude Opus 4.7, Sonnet 4.6, Haiku 4.5, Claude 3.5 Sonnet (latest), Claude 3.5 Haiku (latest) | API key | `ANTHROPIC_API_KEY` |
 | **Google Gemini** | Gemini 2.5 Pro, 2.0 Pro, 2.0 Flash, 1.5 Pro | API key | `GEMINI_API_KEY` |
 | **Mistral** | Large, Small, Codestral | API key | `MISTRAL_API_KEY` |
 | **Cohere** | Command R+, Command R | API key | `COHERE_API_KEY` |
@@ -261,28 +262,49 @@ For AWS Bedrock, prefer IRSA (IAM Roles for Service Accounts): annotate the coor
 
 Models inherit defaults from `config/models.yaml`: `temperature: 0.2`, `max_tokens: 8192`. Override per-model in the YAML or via the frontend picker.
 
+### Provider availability probing
+
+The coordinator probes each provider's live model catalog (via `litellm.get_valid_models`, plus a Bedrock-specific path) and caches the snapshot. Experiment submissions that reference a model the latest probe reports as unavailable are rejected upfront — set `allow_unavailable_models: true` on the experiment to bypass the check (e.g. for offline replay or when targeting a model the probe cannot see).
+
+Helm knobs in `values.yaml` under `providerProbe`:
+
+- `enabled` — turn the whole probe loop on/off (default `true`).
+- `ttlSeconds` — how often each provider is re-probed (default `600`).
+- `maxStaleSeconds` — how long a stale cached snapshot is still served before the probe is reported `failed`. Defaults to `ttlSeconds * 6` (≈1 h).
+- `bedrock.enabled` + `bedrock.regions` — opt-in Bedrock probing per region.
+
+`PROVIDER_PROBE_MAX_STALE_SECONDS` on the coordinator deployment overrides `maxStaleSeconds` at runtime without a chart redeploy.
+
 ---
 
 ## Makefile targets
 
 ```
-make minikube-start           Start minikube profile 'agent-testing'
-make docker-build-all         Build worker + coordinator images in minikube's daemon
-make helm-lint                Lint the chart
-make helm-template            Render the chart with values-minikube.yaml (stdout)
-make helm-install-minikube    helm upgrade --install using values-minikube.yaml
-make helm-uninstall           helm uninstall the release
-make dev-coordinator          Run coordinator locally with --reload
-make dev-frontend             Run the Vite dev server
-make test                     Run pytest (fails fast with -x)
-make lint                     ruff check
-make format                   ruff format
-make sync                     uv sync --all-extras
-make kind-e2e-up              Bootstrap kind cluster + helm install + seed
-make kind-e2e-pytest          Run backend live tests against the kind cluster
-make kind-e2e-playwright      Run @live Playwright specs (assumes port-forward :8080)
-make kind-e2e-playwright-all  One-shot: bootstrap (if needed) + port-forward + @live specs
-make kind-e2e-down            Delete the kind cluster
+make minikube-start             Start minikube profile 'agent-testing'
+make minikube-stop              Stop the minikube profile
+make minikube-delete            Delete the minikube profile
+make minikube-dashboard         Open the minikube dashboard
+make docker-build-all           Build worker + coordinator images in minikube's daemon
+make docker-build-worker        Build only the worker image
+make docker-build-coordinator   Build only the coordinator image
+make helm-lint                  Lint the chart
+make helm-template              Render the chart with values-minikube.yaml (stdout)
+make helm-install-minikube      helm upgrade --install using values-minikube.yaml
+make helm-upgrade-minikube      Alias for helm-install-minikube (idempotent upgrade)
+make helm-uninstall             helm uninstall the release
+make redeploy                   Rebuild only changed images and helm upgrade if needed (stamp-driven)
+make redeploy-clean             Clear .build-stamps/ to force a full rebuild on the next redeploy
+make dev-coordinator            Run coordinator locally with --reload
+make dev-frontend               Run the Vite dev server
+make test                       Run pytest (fails fast with -x)
+make lint                       ruff check
+make format                     ruff format
+make sync                       uv sync --all-extras
+make kind-e2e-up                Bootstrap kind cluster + helm install + seed
+make kind-e2e-pytest            Run backend live tests against the kind cluster
+make kind-e2e-playwright        Run @live Playwright specs (assumes port-forward :8080)
+make kind-e2e-playwright-all    One-shot: bootstrap (if needed) + port-forward + @live specs
+make kind-e2e-down              Delete the kind cluster
 ```
 
 ---
