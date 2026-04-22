@@ -243,6 +243,24 @@ workerTools:
 
 See `helm/sec-review/values.yaml` for the full `workerTools` block. When enabled, each extension is spawned as a subprocess MCP server within the worker pod. The coordinator exposes a `GET /api/tool-extensions` endpoint listing available extensions and their capabilities.
 
+### Models
+
+The framework ships with 29 LiteLLM-backed models across 7 major providers. Enable each via its required environment variable:
+
+| Provider | Models | Auth | API Key Env |
+|---|---|---|---|
+| **OpenAI** | GPT-4o, GPT-4o mini, GPT-4.1, o1, o3, o3-mini, o4-mini | API key | `OPENAI_API_KEY` |
+| **Anthropic** | Claude Opus 4.7, Sonnet 4.6, Haiku 4.5, 3.5 Sonnet/Haiku (latest) | API key | `ANTHROPIC_API_KEY` |
+| **Google Gemini** | Gemini 2.5 Pro, 2.0 Pro, 2.0 Flash, 1.5 Pro | API key | `GEMINI_API_KEY` |
+| **Mistral** | Large, Small, Codestral | API key | `MISTRAL_API_KEY` |
+| **Cohere** | Command R+, Command R | API key | `COHERE_API_KEY` |
+| **OpenRouter** | Llama 3.1 8B, Llama 3.2 3B | API key | `OPENROUTER_API_KEY` |
+| **AWS Bedrock** | Claude 3.5 Sonnet/Haiku, Amazon Nova Pro/Lite, Llama 3.1 70B | IAM + region | See below |
+
+For AWS Bedrock, prefer IRSA (IAM Roles for Service Accounts): annotate the coordinator's ServiceAccount with `eks.amazonaws.com/role-arn: arn:aws:iam::...`. For development, set static credentials via `secrets.aws.accessKeyId` and `secrets.aws.secretAccessKey` in Helm values, but this is not recommended in production. All Bedrock models default to `us-east-1`; override via `helm/sec-review/values.yaml` (`providerConfig.bedrock.region`).
+
+Models inherit defaults from `config/models.yaml`: `temperature: 0.2`, `max_tokens: 8192`. Override per-model in the YAML or via the frontend picker.
+
 ---
 
 ## Makefile targets

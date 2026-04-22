@@ -51,6 +51,9 @@ class ModelsConfig(BaseModel):
         merged_providers: dict[str, dict] = {}
         for name, entry in providers_raw.items():
             merged = {**defaults, **entry}
+            # Inject id from key if not already present
+            if "id" not in merged:
+                merged["id"] = name
             merged_providers[name] = merged
         return cls.model_validate({"providers": merged_providers})
 

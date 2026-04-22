@@ -1,35 +1,156 @@
+# Curated registry of models available to experiments. The coordinator reads
+# this file at startup; the frontend picker shows each entry, gated by whether
+# the required API key (or AWS credentials, for Bedrock) is set.
+#
+# Schema:
+#   defaults:  optional; merged under every entry, per-entry fields win
+#   providers: mapping of stable_id -> entry
+#
+# Entry fields:
+#   model_name      provider-specific identifier passed to LiteLLM
+#   temperature     default inherited from defaults
+#   max_tokens      default inherited from defaults
+#   api_key_env     env var holding the key (required when auth=api_key)
+#   auth            "api_key" (default) or "aws"
+#   region          AWS region (required when auth=aws)
+#   display_name    human label shown in UI
+
+defaults:
+  temperature: 0.2
+  max_tokens: 8192
+
 providers:
+  # --- OpenAI ---
   gpt-4o:
-    provider_class: "OpenAIProvider"
     model_name: "gpt-4o"
-    temperature: 0.2
-    max_tokens: 8192
     api_key_env: "OPENAI_API_KEY"
+    display_name: "GPT-4o"
+  gpt-4o-mini:
+    model_name: "gpt-4o-mini"
+    api_key_env: "OPENAI_API_KEY"
+    display_name: "GPT-4o mini"
+  gpt-4.1:
+    model_name: "gpt-4.1"
+    api_key_env: "OPENAI_API_KEY"
+    display_name: "GPT-4.1"
+  gpt-4.1-mini:
+    model_name: "gpt-4.1-mini"
+    api_key_env: "OPENAI_API_KEY"
+    display_name: "GPT-4.1 mini"
+  o1:
+    model_name: "o1"
+    api_key_env: "OPENAI_API_KEY"
+    display_name: "o1"
+  o3:
+    model_name: "o3"
+    api_key_env: "OPENAI_API_KEY"
+    display_name: "o3"
+  o3-mini:
+    model_name: "o3-mini"
+    api_key_env: "OPENAI_API_KEY"
+    display_name: "o3 mini"
+  o4-mini:
+    model_name: "o4-mini"
+    api_key_env: "OPENAI_API_KEY"
+    display_name: "o4 mini"
 
-  claude-opus-4:
-    provider_class: "AnthropicProvider"
-    model_name: "claude-opus-4"
-    temperature: 0.2
-    max_tokens: 8192
+  # --- Anthropic ---
+  claude-opus-4-7:
+    model_name: "claude-opus-4-7"
     api_key_env: "ANTHROPIC_API_KEY"
+    display_name: "Claude Opus 4.7"
+  claude-sonnet-4-6:
+    model_name: "claude-sonnet-4-6"
+    api_key_env: "ANTHROPIC_API_KEY"
+    display_name: "Claude Sonnet 4.6"
+  claude-haiku-4-5:
+    model_name: "claude-haiku-4-5"
+    api_key_env: "ANTHROPIC_API_KEY"
+    display_name: "Claude Haiku 4.5"
+  claude-3-5-sonnet-latest:
+    model_name: "claude-3-5-sonnet-latest"
+    api_key_env: "ANTHROPIC_API_KEY"
+    display_name: "Claude 3.5 Sonnet (latest)"
+  claude-3-5-haiku-latest:
+    model_name: "claude-3-5-haiku-latest"
+    api_key_env: "ANTHROPIC_API_KEY"
+    display_name: "Claude 3.5 Haiku (latest)"
 
-  gemini-2.0-pro:
-    provider_class: "GeminiProvider"
-    model_name: "gemini-2.0-pro"
-    temperature: 0.2
-    max_tokens: 8192
+  # --- Google Gemini ---
+  gemini-2.5-pro:
+    model_name: "gemini-2.5-pro"
     api_key_env: "GEMINI_API_KEY"
+    display_name: "Gemini 2.5 Pro"
+  gemini-2.0-pro:
+    model_name: "gemini-2.0-pro"
+    api_key_env: "GEMINI_API_KEY"
+    display_name: "Gemini 2.0 Pro"
+  gemini-2.0-flash:
+    model_name: "gemini-2.0-flash"
+    api_key_env: "GEMINI_API_KEY"
+    display_name: "Gemini 2.0 Flash"
+  gemini-1.5-pro:
+    model_name: "gemini-1.5-pro"
+    api_key_env: "GEMINI_API_KEY"
+    display_name: "Gemini 1.5 Pro"
 
+  # --- Mistral ---
   mistral-large:
-    provider_class: "MistralProvider"
     model_name: "mistral-large-latest"
-    temperature: 0.2
-    max_tokens: 8192
     api_key_env: "MISTRAL_API_KEY"
+    display_name: "Mistral Large"
+  mistral-small:
+    model_name: "mistral-small-latest"
+    api_key_env: "MISTRAL_API_KEY"
+    display_name: "Mistral Small"
+  codestral:
+    model_name: "codestral-latest"
+    api_key_env: "MISTRAL_API_KEY"
+    display_name: "Codestral"
 
+  # --- Cohere ---
   command-r-plus:
-    provider_class: "CohereProvider"
     model_name: "command-r-plus"
-    temperature: 0.2
-    max_tokens: 8192
     api_key_env: "COHERE_API_KEY"
+    display_name: "Command R+"
+  command-r:
+    model_name: "command-r"
+    api_key_env: "COHERE_API_KEY"
+    display_name: "Command R"
+
+  # --- OpenRouter (curated; full catalog via live probe in Phase 1) ---
+  openrouter-llama-3.1-8b:
+    model_name: "openrouter/meta-llama/llama-3.1-8b-instruct"
+    api_key_env: "OPENROUTER_API_KEY"
+    display_name: "Llama 3.1 8B (OpenRouter)"
+  openrouter-llama-3.2-3b:
+    model_name: "openrouter/meta-llama/llama-3.2-3b-instruct"
+    api_key_env: "OPENROUTER_API_KEY"
+    display_name: "Llama 3.2 3B (OpenRouter)"
+
+  # --- AWS Bedrock ---
+  bedrock-claude-3-5-sonnet:
+    model_name: "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0"
+    auth: "aws"
+    region: "us-east-1"
+    display_name: "Claude 3.5 Sonnet (Bedrock)"
+  bedrock-claude-3-5-haiku:
+    model_name: "bedrock/anthropic.claude-3-5-haiku-20241022-v1:0"
+    auth: "aws"
+    region: "us-east-1"
+    display_name: "Claude 3.5 Haiku (Bedrock)"
+  bedrock-nova-pro:
+    model_name: "bedrock/amazon.nova-pro-v1:0"
+    auth: "aws"
+    region: "us-east-1"
+    display_name: "Amazon Nova Pro (Bedrock)"
+  bedrock-nova-lite:
+    model_name: "bedrock/amazon.nova-lite-v1:0"
+    auth: "aws"
+    region: "us-east-1"
+    display_name: "Amazon Nova Lite (Bedrock)"
+  bedrock-llama-3-1-70b:
+    model_name: "bedrock/meta.llama3-1-70b-instruct-v1:0"
+    auth: "aws"
+    region: "us-east-1"
+    display_name: "Llama 3.1 70B (Bedrock)"
