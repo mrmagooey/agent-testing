@@ -40,21 +40,31 @@ def test_list_models_reads_from_config_dir(temp_coordinator):
     """list_models() should read models.yaml from config_dir, not storage_root.parent."""
     coordinator, config_dir = temp_coordinator
 
-    # Write a models.yaml file with one provider
+    # Write a models.yaml file with valid provider entries (Phase 2 schema).
     models_yaml = config_dir / "models.yaml"
     models_data = {
+        "defaults": {"temperature": 0.2, "max_tokens": 8192},
         "providers": {
-            "gpt-4o": {"display_name": "GPT-4 Optimized", "cost": 0.05},
-            "claude-opus": {"display_name": "Claude Opus", "cost": 0.15},
-        }
+            "gpt-4o": {
+                "model_name": "gpt-4o",
+                "api_key_env": "OPENAI_API_KEY",
+                "display_name": "GPT-4o",
+            },
+            "claude-opus": {
+                "model_name": "claude-opus-4",
+                "api_key_env": "ANTHROPIC_API_KEY",
+                "display_name": "Claude Opus",
+            },
+        },
     }
     models_yaml.write_text(yaml.dump(models_data))
 
-    # Call list_models and verify it reads from config_dir
-    models = coordinator.list_models()
-    assert len(models) == 2
-    model_ids = {m["id"] for m in models}
-    assert model_ids == {"gpt-4o", "claude-opus"}
+    # Call list_models and verify it reads from config_dir.
+    # The new response shape is a grouped list; extract ids from models within groups.
+    groups = coordinator.list_models()
+    all_model_ids = {m["id"] for g in groups for m in g["models"]}
+    assert len(all_model_ids) == 2
+    assert all_model_ids == {"gpt-4o", "claude-opus"}
 
 
 def test_list_models_uses_env_var_config_dir(tmp_path, monkeypatch):
@@ -84,19 +94,26 @@ def test_list_models_uses_env_var_config_dir(tmp_path, monkeypatch):
         default_cap=1,
     )
 
-    # Write models.yaml to the env var location
+    # Write models.yaml to the env var location (valid Phase 2 schema).
     models_yaml = config_dir / "models.yaml"
     models_data = {
+        "defaults": {"temperature": 0.2, "max_tokens": 8192},
         "providers": {
-            "test-model": {"display_name": "Test", "cost": 0.01},
-        }
+            "test-model": {
+                "model_name": "gpt-4o",
+                "api_key_env": "OPENAI_API_KEY",
+                "display_name": "Test Model",
+            }
+        },
     }
     models_yaml.write_text(yaml.dump(models_data))
 
-    # Verify list_models reads from the env var location
-    models = coordinator.list_models()
-    assert len(models) == 1
-    assert models[0]["id"] == "test-model"
+    # Verify list_models reads from the env var location.
+    # New shape is grouped; extract all model ids.
+    groups = coordinator.list_models()
+    all_model_ids = [m["id"] for g in groups for m in g["models"]]
+    assert len(all_model_ids) == 1
+    assert all_model_ids[0] == "test-model"
 
 
 def test_list_models_returns_empty_when_file_missing(temp_coordinator):

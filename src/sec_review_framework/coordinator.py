@@ -37,7 +37,7 @@ def _resolve_frontend_dist() -> Path:
 
 FRONTEND_DIST_DIR = _resolve_frontend_dist()
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError
@@ -56,9 +56,15 @@ from sec_review_framework.db import Database
 from sec_review_framework.profiles.review_profiles import BUILTIN_PROFILES, ProfileRegistry
 from sec_review_framework.feedback.tracker import FeedbackTracker
 from sec_review_framework.cost.calculator import CostCalculator
-from sec_review_framework.config import ToolExtensionAvailability
+from sec_review_framework.config import ModelsConfig, ToolExtensionAvailability
 from sec_review_framework.models.catalog import ProviderCatalog
 from sec_review_framework.models.probes import build_probes
+from sec_review_framework.models.availability import (
+    compute_availability,
+    flat_model_list,
+    groups_to_dicts,
+    build_id_to_status,
+)
 from sec_review_framework.data.evaluation import GroundTruthLabel
 from sec_review_framework.ground_truth.cve_importer import (
     CVECandidate as _CVECandidate,
@@ -1823,19 +1829,102 @@ class ExperimentCoordinator:
                     zf.write(f, f.relative_to(output_dir))
         return zip_path
 
-    def list_models(self) -> list[dict]:
+    def list_models(
+        self,
+        *,
+        flat: bool = False,
+    ) -> list[dict]:
+        """Return availability-enriched model list.
+
+        Parameters
+        ----------
+        flat:
+            When True return the legacy flat list ``[{id, display_name}]``
+            instead of the grouped shape.
+        """
+        import os as _os
+
         if self.config_dir is None:
             return []
         config_file = self.config_dir / "models.yaml"
         if not config_file.exists():
             return []
         try:
-            import yaml
-            data = yaml.safe_load(config_file.read_text())
-            providers = data.get("providers", {})
-            return [{"id": k, **v} for k, v in providers.items()]
+            models_cfg = ModelsConfig.from_yaml(config_file)
         except Exception:
             return []
+
+        registry = list(models_cfg.providers.values())
+        snapshots = self.catalog.snapshot() if self.catalog is not None else {}
+        groups = compute_availability(registry, snapshots, _os.environ)
+
+        if flat:
+            return flat_model_list(groups)
+        return groups_to_dicts(groups)
+
+    def validate_model_availability(
+        self,
+        model_ids: list[str],
+        *,
+        verifier_model_id: str | None = None,
+    ) -> list[dict]:
+        """Validate that every requested model id is available.
+
+        Returns a (possibly empty) list of problem dicts:
+            [{"id": ..., "status": ..., "reason": ...}]
+
+        An empty list means all models are fine.
+        """
+        import os as _os
+
+        if self.config_dir is None:
+            return []
+        config_file = self.config_dir / "models.yaml"
+        if not config_file.exists():
+            return []
+        try:
+            models_cfg = ModelsConfig.from_yaml(config_file)
+        except Exception:
+            return []
+
+        registry = list(models_cfg.providers.values())
+        snapshots = self.catalog.snapshot() if self.catalog is not None else {}
+        groups = compute_availability(registry, snapshots, _os.environ)
+        id_to_status = build_id_to_status(groups)
+        known_ids = set(id_to_status.keys())
+
+        problems: list[dict] = []
+        all_requested = list(model_ids)
+        if verifier_model_id:
+            all_requested.append(verifier_model_id)
+
+        _reason_map = {
+            "key_missing": "API key or AWS credentials not configured",
+            "not_listed": "Model not returned by provider probe",
+            "probe_failed": "Provider probe failed; model status unknown",
+            "unknown": "Model id not in registry",
+        }
+
+        seen: set[str] = set()
+        for mid in all_requested:
+            if mid in seen:
+                continue
+            seen.add(mid)
+            if mid not in known_ids:
+                problems.append({
+                    "id": mid,
+                    "status": "unknown",
+                    "reason": _reason_map["unknown"],
+                })
+            elif id_to_status[mid] != "available":
+                status = id_to_status[mid]
+                problems.append({
+                    "id": mid,
+                    "status": status,
+                    "reason": _reason_map.get(status, status),
+                })
+
+        return problems
 
     def list_strategies(self) -> list[dict]:
         return [
@@ -2229,8 +2318,10 @@ async def run_smoke_test() -> dict:
     if coordinator is None:
         raise HTTPException(status_code=503, detail="Coordinator not initialised")
 
-    # Pick the first configured model; require at least one to be present
-    configured_models = coordinator.list_models()
+    # Pick the first configured model; require at least one to be present.
+    # list_models() returns the grouped shape [{provider, models: [{id, status}]}].
+    # Use the flat form to get a simple [{id}] list for backward-compatible selection.
+    configured_models = coordinator.list_models(flat=True)
     if not configured_models:
         raise HTTPException(
             status_code=412,
@@ -2285,7 +2376,24 @@ async def run_smoke_test() -> dict:
 
 @app.post("/experiments", status_code=201)
 async def submit_experiment(matrix: ExperimentMatrix) -> dict:
-    """Submit a new experiment. Returns experiment_id."""
+    """Submit a new experiment. Returns experiment_id.
+
+    Rejects unavailable models (key_missing, not_listed, probe_failed, unknown)
+    unless the request body contains ``allow_unavailable_models: true``.
+    """
+    if not matrix.allow_unavailable_models:
+        problems = coordinator.validate_model_availability(
+            matrix.model_ids,
+            verifier_model_id=matrix.verifier_model_id,
+        )
+        if problems:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "unavailable_models",
+                    "models": problems,
+                },
+            )
     experiment_id = await coordinator.submit_experiment(matrix)
     return {"experiment_id": experiment_id, "total_runs": len(matrix.expand())}
 
@@ -2603,9 +2711,23 @@ def get_accuracy_matrix() -> dict:
 # --- Reference ---
 
 @app.get("/models")
-def list_models() -> list[dict]:
-    """List configured model providers."""
-    return coordinator.list_models()
+def list_models(
+    format: str | None = None,
+    request: Request = None,  # type: ignore[assignment]
+) -> list[dict]:
+    """List configured model providers.
+
+    Default response is the grouped-by-provider shape.
+    Pass ``?format=flat`` or ``Accept: application/vnd.sec-review.v0+json`` for
+    the legacy flat list ``[{id, display_name}]`` — used by Phase 3 frontend
+    until Phase 4+ updates the client.
+    """
+    use_flat = format == "flat"
+    if not use_flat and request is not None:
+        accept = request.headers.get("accept", "")
+        if "application/vnd.sec-review.v0+json" in accept:
+            use_flat = True
+    return coordinator.list_models(flat=use_flat)
 
 
 @app.get("/strategies")

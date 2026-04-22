@@ -28,7 +28,16 @@ def _seed_coordinator_prerequisites(tmp_path: Path) -> None:
     config_dir = tmp_path / "config"
     config_dir.mkdir(parents=True, exist_ok=True)
     models_yaml = config_dir / "models.yaml"
-    models_yaml.write_text(yaml.dump({"providers": {"gpt-4o-mini": {"label": "GPT-4o mini"}}}))
+    models_yaml.write_text(yaml.dump({
+        "defaults": {"temperature": 0.2, "max_tokens": 8192},
+        "providers": {
+            "gpt-4o-mini": {
+                "model_name": "gpt-4o-mini",
+                "api_key_env": "OPENAI_API_KEY",
+                "display_name": "GPT-4o mini",
+            }
+        },
+    }))
 
     dataset_dir = tmp_path / "storage" / "datasets" / "smoke-test-dataset"
     dataset_dir.mkdir(parents=True, exist_ok=True)

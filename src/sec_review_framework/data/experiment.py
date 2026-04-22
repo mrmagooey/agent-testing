@@ -169,6 +169,10 @@ class ExperimentMatrix(BaseModel):
     max_experiment_cost_usd: float | None = None
     verifier_model_id: str | None = None
 
+    # Submit-time override: when True, skip availability validation for models
+    # that are key_missing, not_listed, or probe_failed.  Not persisted.
+    allow_unavailable_models: bool = False
+
     @classmethod
     def tool_extension_sets_powerset(
         cls, enabled: set[ToolExtension]
