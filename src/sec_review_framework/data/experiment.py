@@ -170,8 +170,9 @@ class ExperimentMatrix(BaseModel):
     verifier_model_id: str | None = None
 
     # Submit-time override: when True, skip availability validation for models
-    # that are key_missing, not_listed, or probe_failed.  Not persisted.
-    allow_unavailable_models: bool = False
+    # that are key_missing, not_listed, or probe_failed.  Excluded from
+    # serialisation so it never reaches the DB or on-disk config JSON.
+    allow_unavailable_models: bool = Field(default=False, exclude=True)
 
     @classmethod
     def tool_extension_sets_powerset(

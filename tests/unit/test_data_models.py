@@ -425,3 +425,25 @@ def test_experiment_run_tool_extensions_round_trips():
     )
     restored = ExperimentRun.model_validate_json(run.model_dump_json())
     assert restored.tool_extensions == frozenset({ToolExtension.LSP, ToolExtension.DEVDOCS})
+
+
+# ---------------------------------------------------------------------------
+# allow_unavailable_models must not appear in serialised output
+# ---------------------------------------------------------------------------
+
+def test_allow_unavailable_models_excluded_from_dump():
+    """allow_unavailable_models is a submit-time flag and must not be
+    persisted.  Verify model_dump_json() does not include the key."""
+    import json
+
+    matrix = _minimal_matrix(allow_unavailable_models=True)
+    assert matrix.allow_unavailable_models is True  # attribute readable
+    dumped = json.loads(matrix.model_dump_json())
+    assert "allow_unavailable_models" not in dumped
+
+
+def test_allow_unavailable_models_excluded_from_model_dump():
+    """model_dump() (dict form) must also exclude the key."""
+    matrix = _minimal_matrix(allow_unavailable_models=True)
+    dumped = matrix.model_dump()
+    assert "allow_unavailable_models" not in dumped

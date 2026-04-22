@@ -217,6 +217,54 @@ def test_allows_unavailable_when_override_set(_setup, monkeypatch):
     assert resp.json()["experiment_id"] == "exp-123"
 
 
+def test_allow_unavailable_not_in_persisted_json(_setup, monkeypatch):
+    """allow_unavailable_models must NOT appear in the persisted experiment
+    config JSON.  It is a submit-time flag only and must never reach the DB
+    or on-disk worker config files.
+    """
+    import json
+
+    client, c, config_dir = _setup
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    _write_models_yaml(config_dir, {
+        "gpt-4o": {
+            "model_name": "gpt-4o",
+            "api_key_env": "OPENAI_API_KEY",
+            "display_name": "GPT-4o",
+        }
+    })
+    snap = ProviderSnapshot(
+        probe_status="fresh",
+        model_ids=frozenset(["gpt-4o"]),
+        metadata={"gpt-4o": ModelMetadata(id="gpt-4o")},
+    )
+    c.catalog = _fake_catalog({"openai": snap})
+
+    # Capture the matrix passed to submit_experiment so we can inspect its
+    # serialised form without touching K8s.
+    captured: list = []
+
+    async def _capture(matrix):
+        captured.append(matrix)
+        return "exp-persist-test"
+
+    with patch.object(c, "submit_experiment", side_effect=_capture):
+        resp = client.post(
+            "/experiments",
+            json=_submit_payload(["gpt-4o"], allow_unavailable_models=True),
+        )
+    assert resp.status_code == 201
+
+    # The matrix was received and the flag is accessible as attribute (used by
+    # the validation bypass), but must not appear in serialised output.
+    assert len(captured) == 1
+    matrix = captured[0]
+    assert matrix.allow_unavailable_models is True  # attribute still set
+    serialised = json.loads(matrix.model_dump_json())
+    assert "allow_unavailable_models" not in serialised
+
+
 # ---------------------------------------------------------------------------
 # Accepts available models
 # ---------------------------------------------------------------------------
