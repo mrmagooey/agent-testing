@@ -262,7 +262,7 @@ test.describe('ExperimentDetail sticky action bar', () => {
   })
 
   test('sticky action bar appears when one run is selected', async ({ page }) => {
-    const matrixSection = page.locator('section').filter({ hasText: 'Comparative Matrix' })
+    const matrixSection = page.locator('section').filter({ hasText: 'Experiment Matrix' })
     const checkboxes = matrixSection.locator('input[type="checkbox"]')
     const count = await checkboxes.count()
     if (count >= 1) {
@@ -272,7 +272,7 @@ test.describe('ExperimentDetail sticky action bar', () => {
   })
 
   test('sticky action bar shows Compare Selected when two runs selected', async ({ page }) => {
-    const matrixSection = page.locator('section').filter({ hasText: 'Comparative Matrix' })
+    const matrixSection = page.locator('section').filter({ hasText: 'Experiment Matrix' })
     const checkboxes = matrixSection.locator('input[type="checkbox"]')
     const count = await checkboxes.count()
     if (count >= 2) {
@@ -284,7 +284,7 @@ test.describe('ExperimentDetail sticky action bar', () => {
   })
 
   test('Clear button in sticky bar deselects all runs', async ({ page }) => {
-    const matrixSection = page.locator('section').filter({ hasText: 'Comparative Matrix' })
+    const matrixSection = page.locator('section').filter({ hasText: 'Experiment Matrix' })
     const checkboxes = matrixSection.locator('input[type="checkbox"]')
     const count = await checkboxes.count()
     if (count >= 1) {
@@ -296,7 +296,7 @@ test.describe('ExperimentDetail sticky action bar', () => {
   })
 
   test('Compare Selected navigates to compare page', async ({ page }) => {
-    const matrixSection = page.locator('section').filter({ hasText: 'Comparative Matrix' })
+    const matrixSection = page.locator('section').filter({ hasText: 'Experiment Matrix' })
     const checkboxes = matrixSection.locator('input[type="checkbox"]')
     const count = await checkboxes.count()
     if (count >= 2) {
@@ -308,7 +308,7 @@ test.describe('ExperimentDetail sticky action bar', () => {
   })
 
   test('Download Experiment button visible in sticky action bar when run selected', async ({ page }) => {
-    const matrixSection = page.locator('section').filter({ hasText: 'Comparative Matrix' })
+    const matrixSection = page.locator('section').filter({ hasText: 'Experiment Matrix' })
     const checkboxes = matrixSection.locator('input[type="checkbox"]')
     const count = await checkboxes.count()
     if (count >= 1) {
