@@ -57,6 +57,8 @@ from sec_review_framework.profiles.review_profiles import BUILTIN_PROFILES, Prof
 from sec_review_framework.feedback.tracker import FeedbackTracker
 from sec_review_framework.cost.calculator import CostCalculator
 from sec_review_framework.config import ToolExtensionAvailability
+from sec_review_framework.models.catalog import ProviderCatalog
+from sec_review_framework.models.probes import build_probes
 from sec_review_framework.data.evaluation import GroundTruthLabel
 from sec_review_framework.ground_truth.cve_importer import (
     CVECandidate as _CVECandidate,
@@ -166,6 +168,8 @@ class ExperimentCoordinator:
         self._feedback_tracker = FeedbackTracker()
         # Per-instance TTL cache for get_trends (class-level dict would be shared across instances).
         self._trends_cache: dict[tuple, tuple[dict, float]] = {}
+        # ProviderCatalog — set by the lifespan handler; None until startup completes.
+        self.catalog: "ProviderCatalog | None" = None  # type: ignore[name-defined]
 
     # ------------------------------------------------------------------
     # Experiment lifecycle
@@ -2150,6 +2154,19 @@ async def startup() -> None:
         coordinator = build_coordinator_from_env()
         await coordinator.db.init()
     await coordinator.reconcile()
+
+    # --- ProviderCatalog ---
+    _probe_enabled_env = os.environ.get("PROVIDER_PROBE_ENABLED", "true").strip().lower()
+    _probe_enabled = _probe_enabled_env != "false"
+    _ttl_seconds = int(os.environ.get("PROVIDER_PROBE_TTL_SECONDS", "600"))
+    catalog = ProviderCatalog(
+        probes=build_probes(),
+        ttl_seconds=_ttl_seconds,
+        probe_enabled=_probe_enabled,
+    )
+    await catalog.start()
+    coordinator.catalog = catalog
+
     _background_tasks.add(asyncio.create_task(
         retention_cleanup_loop(coordinator.storage_root, retention_days=30)
     ))
@@ -2180,6 +2197,9 @@ async def startup() -> None:
 
 @app.on_event("shutdown")
 async def shutdown() -> None:
+    # Stop ProviderCatalog background task.
+    if coordinator is not None and coordinator.catalog is not None:
+        await coordinator.catalog.stop()
     # Cancel all tracked tasks so TestClient teardown (and real SIGTERM) doesn't
     # leave behind coroutines holding closures over per-test storage roots.
     for task in _background_tasks:
