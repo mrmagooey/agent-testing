@@ -103,8 +103,8 @@ test.describe('Cancel and Download on completed experiment', () => {
 
   test('Download button is present for a completed experiment', async ({ page }) => {
     await page.goto(`/experiments/${COMPLETED_EXPERIMENT_ID}`)
-    // DownloadButton renders a <button> with label "Download Results" (default)
-    await expect(page.getByRole('button', { name: 'Download Results' })).toBeVisible()
+    // DownloadButton renders a <button> with label "Download Reports" (default)
+    await expect(page.getByRole('button', { name: 'Download Reports' })).toBeVisible()
   })
 
   test('Download button click triggers a download with the expected filename', async ({
@@ -124,7 +124,7 @@ test.describe('Cancel and Download on completed experiment', () => {
     await page.goto(`/experiments/${COMPLETED_EXPERIMENT_ID}`)
 
     const downloadPromise = page.waitForEvent('download')
-    await page.getByRole('button', { name: 'Download Results' }).click()
+    await page.getByRole('button', { name: 'Download Reports' }).click()
     const download = await downloadPromise
 
     expect(download.suggestedFilename()).toBe(`experiment-${COMPLETED_EXPERIMENT_ID}-reports.zip`)

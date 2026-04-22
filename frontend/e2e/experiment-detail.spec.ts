@@ -27,9 +27,9 @@ test('shows cost information', async ({ page }) => {
   await expect(page.getByText('$12.45')).toBeVisible()
 })
 
-test('shows comparative matrix section', async ({ page }) => {
+test('shows experiment matrix section', async ({ page }) => {
   await page.goto(`/experiments/${EXPERIMENT_ID}`)
-  await expect(page.getByRole('heading', { name: 'Comparative Matrix' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Experiment Matrix' })).toBeVisible()
 })
 
 test('shows cost analysis section', async ({ page }) => {
@@ -61,7 +61,7 @@ test('shows model names in cost table', async ({ page }) => {
 
 test('compare selected button appears when two runs are selected', async ({ page }) => {
   await page.goto(`/experiments/${EXPERIMENT_ID}`)
-  const matrixSection = page.locator('section').filter({ hasText: 'Comparative Matrix' })
+  const matrixSection = page.locator('section').filter({ hasText: 'Experiment Matrix' })
   const checkboxes = matrixSection.locator('input[type="checkbox"]')
   const count = await checkboxes.count()
   if (count >= 2) {

@@ -194,11 +194,11 @@ test.describe('Download button functionality', () => {
     await expect(page.getByRole('button', { name: /Download Run/i })).toBeVisible()
   })
 
-  test('ExperimentDetail shows Download Results button for completed experiment', async ({ page }) => {
+  test('ExperimentDetail shows Download Reports button for completed experiment', async ({ page }) => {
     await mockApi(page)
     await page.goto(`/experiments/${EXPERIMENT_ID}`)
     // DownloadButton renders for terminal (completed) experiments
-    await expect(page.getByRole('button', { name: /Download Results/i })).toBeVisible()
+    await expect(page.getByRole('button', { name: /Download Reports/i })).toBeVisible()
   })
 
   test('Download button triggers file download link creation', async ({ page }) => {
