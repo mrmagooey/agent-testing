@@ -113,6 +113,46 @@ export interface ExperimentConfig {
   verification: string[]
   repetitions: number
   spend_cap_usd?: number
+  allow_unavailable_models?: boolean
+}
+
+// ─── Model Availability Types ──────────────────────────────────────────────
+
+export type ModelStatus = 'available' | 'key_missing' | 'not_listed' | 'probe_failed'
+export type ProviderProbeStatus = 'fresh' | 'stale' | 'failed' | 'disabled'
+
+export interface Model {
+  id: string
+  display_name: string | null
+  status: ModelStatus
+  context_length?: number | null
+  region?: string | null
+}
+
+export interface ModelProviderGroup {
+  provider: string
+  probe_status: ProviderProbeStatus
+  models: Model[]
+}
+
+// ─── Unavailable Models Error ──────────────────────────────────────────────
+
+export interface UnavailableModelsError {
+  error: 'unavailable_models'
+  models: Array<{ id: string; status: ModelStatus; reason?: string }>
+}
+
+/**
+ * Inspect a thrown error for the Phase 2 unavailable_models error shape.
+ * Returns the structured payload when matched, or null otherwise.
+ */
+export function parseUnavailableModelsError(err: unknown): UnavailableModelsError | null {
+  if (!(err instanceof ApiError)) return null
+  const body = err.body as Record<string, unknown> | null | undefined
+  if (!body) return null
+  const detail = body.detail as Record<string, unknown> | null | undefined
+  if (!detail || detail.error !== 'unavailable_models') return null
+  return detail as unknown as UnavailableModelsError
 }
 
 export interface ToolCall {
@@ -189,6 +229,20 @@ export interface PromptSnapshot {
 
 // ─── Fetch Helper ──────────────────────────────────────────────────────────
 
+// Extended Error that carries the parsed API response body for structured
+// error handling (e.g. parseUnavailableModelsError).
+export class ApiError extends Error {
+  readonly status: number
+  readonly body: unknown
+
+  constructor(message: string, status: number, body: unknown) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.body = body
+  }
+}
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE_URL}${path}`, {
     headers: { 'Content-Type': 'application/json', ...init?.headers },
@@ -196,13 +250,18 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   })
   if (!res.ok) {
     let message = `API error ${res.status}`
+    let body: unknown
     try {
-      const body = await res.json()
-      message = body.detail ?? body.message ?? message
+      body = await res.json()
+      const b = body as Record<string, unknown>
+      const detail = b.detail ?? b.message
+      if (typeof detail === 'string') {
+        message = detail
+      }
     } catch {
       // ignore parse failure
     }
-    throw new Error(message)
+    throw new ApiError(message, res.status, body)
   }
   // 204 No Content
   if (res.status === 204) return undefined as unknown as T
@@ -474,8 +533,21 @@ async function fetchConfigList(path: string): Promise<string[]> {
   return raw.map(normalizeConfigItem).filter((s): s is string => s !== null)
 }
 
-export function listModels(): Promise<string[]> {
-  return fetchConfigList('/models')
+/**
+ * Fetch the grouped-by-provider model availability list (Phase 2 shape).
+ */
+export function listModels(): Promise<ModelProviderGroup[]> {
+  return apiFetch<ModelProviderGroup[]>('/models')
+}
+
+/**
+ * Legacy helper: returns the flat list of IDs for models whose status is
+ * 'available'. Use this wherever the old Promise<string[]> return was consumed
+ * and the caller only needs usable model IDs.
+ */
+export async function listAvailableModelIds(): Promise<string[]> {
+  const groups = await listModels()
+  return groups.flatMap((g) => g.models.filter((m) => m.status === 'available').map((m) => m.id))
 }
 
 export function listStrategies(): Promise<string[]> {

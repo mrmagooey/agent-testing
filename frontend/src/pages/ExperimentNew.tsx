@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   listDatasets,
-  listModels,
+  listAvailableModelIds, // TODO(phase-6): switch to listModels() + ModelProviderGroup[] for the rich picker
   listStrategies,
   listProfiles,
   submitExperiment,
@@ -136,7 +136,7 @@ export default function ExperimentNew() {
   const { estimate, loading: estimateLoading } = useEstimate(config)
 
   useEffect(() => {
-    Promise.all([listDatasets(), listModels(), listStrategies(), listProfiles(), listToolExtensions()])
+    Promise.all([listDatasets(), listAvailableModelIds(), listStrategies(), listProfiles(), listToolExtensions()])
       .then(([ds, ms, ss, ps, te]) => {
         setDatasets(ds)
         setModels(ms)

@@ -27,11 +27,19 @@ function makeResponse(body: unknown, status = 200): Response {
 function mockRealCoordinatorFetch() {
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const url = typeof input === 'string' ? input : input.toString()
-    // Object-shape responses matching coordinator.py list_models/strategies/profiles
+    // Phase 2 grouped-by-provider shape from /api/models
     if (url.endsWith('/api/models')) {
       return makeResponse([
-        { id: 'gpt-4o', provider: 'openai' },
-        { id: 'claude-3-5-sonnet-20241022', provider: 'anthropic' },
+        {
+          provider: 'openai',
+          probe_status: 'fresh',
+          models: [{ id: 'gpt-4o', display_name: 'GPT-4o', status: 'available' }],
+        },
+        {
+          provider: 'anthropic',
+          probe_status: 'fresh',
+          models: [{ id: 'claude-3-5-sonnet-20241022', display_name: 'Claude 3.5 Sonnet', status: 'available' }],
+        },
       ])
     }
     if (url.endsWith('/api/strategies')) {

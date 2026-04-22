@@ -8,7 +8,7 @@ import {
   estimateExperiment,
   downloadReports,
   cancelExperiment,
-  listModels,
+  listAvailableModelIds,
   listStrategies,
   listProfiles,
   listDatasets,
@@ -275,28 +275,32 @@ describe('downloadReports', () => {
 // children triggers React error #31 on /experiments/new. The client must
 // normalize them to plain string IDs so the UI never sees a raw object.
 describe('config endpoint normalization (regression for React error #31)', () => {
-  it('listModels flattens object responses to their id', async () => {
+  it('listAvailableModelIds returns only available model ids from grouped response', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       makeFetchResponse([
-        { id: 'gpt-4o', provider: 'openai', cost_per_1k_input: 0.0025 },
-        { id: 'claude-3-5-sonnet-20241022', provider: 'anthropic' },
+        {
+          provider: 'openai',
+          probe_status: 'fresh',
+          models: [
+            { id: 'gpt-4o', display_name: 'GPT-4o', status: 'available' },
+            { id: 'gpt-4o-mini', display_name: 'GPT-4o Mini', status: 'key_missing' },
+          ],
+        },
+        {
+          provider: 'anthropic',
+          probe_status: 'fresh',
+          models: [
+            { id: 'claude-3-5-sonnet-20241022', display_name: 'Claude 3.5 Sonnet', status: 'available' },
+          ],
+        },
       ]),
     )
     vi.stubGlobal('fetch', fetchMock)
 
-    const models = await listModels()
+    const models = await listAvailableModelIds()
 
     expect(models).toEqual(['gpt-4o', 'claude-3-5-sonnet-20241022'])
     for (const m of models) expect(typeof m).toBe('string')
-  })
-
-  it('listModels still accepts legacy string[] responses', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      makeFetchResponse(['gpt-4o', 'gemini-1.5-pro']),
-    )
-    vi.stubGlobal('fetch', fetchMock)
-
-    expect(await listModels()).toEqual(['gpt-4o', 'gemini-1.5-pro'])
   })
 
   it('listStrategies flattens {name, description} objects to the name', async () => {
