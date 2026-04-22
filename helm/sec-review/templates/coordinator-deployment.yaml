@@ -38,6 +38,11 @@ spec:
               mountPath: {{ .Values.coordinator.storageRoot }}
             - name: config
               mountPath: /app/config
+          {{- if .Values.secrets.create }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.secrets.name }}
+          {{- end }}
           env:
             - name: STORAGE_ROOT
               value: {{ .Values.coordinator.storageRoot | quote }}
@@ -64,6 +69,15 @@ spec:
               value: {{ .Values.workerTools.treeSitter.enabled | toString | quote }}
             - name: TOOL_EXT_DEVDOCS_AVAILABLE
               value: {{ .Values.workerTools.devdocs.enabled | toString | quote }}
+            # Provider-probe flags — consumed by the coordinator's catalog probing logic.
+            - name: PROVIDER_PROBE_ENABLED
+              value: {{ .Values.providerProbe.enabled | toString | quote }}
+            - name: PROVIDER_PROBE_TTL_SECONDS
+              value: {{ .Values.providerProbe.ttlSeconds | toString | quote }}
+            - name: BEDROCK_PROBE_ENABLED
+              value: {{ .Values.providerProbe.bedrock.enabled | toString | quote }}
+            - name: BEDROCK_PROBE_REGIONS
+              value: {{ .Values.providerProbe.bedrock.regions | join "," | quote }}
             - name: DEVDOCS_ROOT
               value: {{ .Values.workerTools.devdocs.docsetsPath | quote }}
             - name: DEVDOCS_ALLOW_DOCSETS

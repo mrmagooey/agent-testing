@@ -123,6 +123,24 @@ secrets:
     openrouter: ""
   baseUrls:
     openai: ""
+  # AWS credentials for Bedrock. Prefer IRSA (set serviceAccount.annotations) in production.
+  aws:
+    enabled: false
+    accessKeyId: ""
+    secretAccessKey: ""
+    sessionToken: ""
+    region: "us-east-1"
+
+# -----------------------------------------------------------------------------
+# Controls live upstream model-catalog probing from the coordinator.
+# -----------------------------------------------------------------------------
+providerProbe:
+  enabled: true
+  ttlSeconds: 600
+  bedrock:
+    enabled: false
+    regions:
+      - us-east-1
 
 # -----------------------------------------------------------------------------
 # Network policies
@@ -263,6 +281,8 @@ workerTools:
 serviceAccount:
   create: true
   name: coordinator-sa
+  # add an `annotations: {}` block, e.g. eks.amazonaws.com/role-arn for IRSA
+  annotations: {}
 
 rbac:
   create: true

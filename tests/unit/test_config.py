@@ -6,10 +6,12 @@ from pathlib import Path
 
 import pytest
 import yaml
+from pydantic import ValidationError
 
 from sec_review_framework.config import (
     ConcurrencyConfig,
     ExperimentFileConfig,
+    ModelProviderConfig,
     ModelsConfig,
     PricingConfig,
     RetryConfig,
@@ -41,6 +43,7 @@ def test_models_config_from_yaml_loads_correctly(tmp_path: Path):
                     "model_name": "gpt-4o",
                     "temperature": 0.2,
                     "max_tokens": 4096,
+                    "api_key_env": "OPENAI_API_KEY",
                 }
             }
         },
@@ -48,6 +51,98 @@ def test_models_config_from_yaml_loads_correctly(tmp_path: Path):
     cfg = ModelsConfig.from_yaml(cfg_path)
     assert "gpt4o" in cfg.providers
     assert cfg.providers["gpt4o"].model_name == "gpt-4o"
+
+
+# ---------------------------------------------------------------------------
+# ModelProviderConfig validators
+# ---------------------------------------------------------------------------
+
+
+def test_model_provider_config_api_key_auth_valid():
+    """auth=api_key + api_key_env is accepted."""
+    cfg = ModelProviderConfig(
+        id="m1", model_name="gpt-4o", auth="api_key", api_key_env="OPENAI_API_KEY"
+    )
+    assert cfg.api_key_env == "OPENAI_API_KEY"
+
+
+def test_model_provider_config_aws_auth_valid():
+    """auth=aws + region is accepted."""
+    cfg = ModelProviderConfig(
+        id="m2", model_name="bedrock-claude", auth="aws", region="us-east-1"
+    )
+    assert cfg.region == "us-east-1"
+
+
+def test_model_provider_config_api_key_auth_missing_env_raises():
+    """auth=api_key without api_key_env raises ValueError."""
+    with pytest.raises(ValidationError, match="api_key_env required"):
+        ModelProviderConfig(id="m3", model_name="gpt-4o", auth="api_key")
+
+
+def test_model_provider_config_aws_auth_missing_region_raises():
+    """auth=aws without region raises ValueError."""
+    with pytest.raises(ValidationError, match="region required"):
+        ModelProviderConfig(id="m4", model_name="bedrock-claude", auth="aws")
+
+
+# ---------------------------------------------------------------------------
+# ModelsConfig defaults merging
+# ---------------------------------------------------------------------------
+
+
+def test_models_config_defaults_merging(tmp_path: Path):
+    """A YAML with 'defaults' merges correctly; per-entry fields override."""
+    cfg_path = _write_yaml(
+        tmp_path / "models.yaml",
+        {
+            "defaults": {
+                "temperature": 0.1,
+                "max_tokens": 4096,
+            },
+            "providers": {
+                "m1": {
+                    "id": "m1",
+                    "model_name": "gpt-4o",
+                    "api_key_env": "OPENAI_API_KEY",
+                    # temperature not set — should inherit default 0.1
+                    "max_tokens": 2048,  # override default
+                },
+                "m2": {
+                    "id": "m2",
+                    "model_name": "claude",
+                    "api_key_env": "ANTHROPIC_API_KEY",
+                    # both temperature and max_tokens inherited from defaults
+                },
+            },
+        },
+    )
+    cfg = ModelsConfig.from_yaml(cfg_path)
+    assert cfg.providers["m1"].temperature == 0.1
+    assert cfg.providers["m1"].max_tokens == 2048  # per-entry override
+    assert cfg.providers["m2"].temperature == 0.1
+    assert cfg.providers["m2"].max_tokens == 4096  # from defaults
+
+
+def test_models_config_no_defaults_backwards_compat(tmp_path: Path):
+    """A YAML without 'defaults' still loads correctly."""
+    cfg_path = _write_yaml(
+        tmp_path / "models.yaml",
+        {
+            "providers": {
+                "gpt4o": {
+                    "id": "gpt-4o",
+                    "model_name": "gpt-4o",
+                    "api_key_env": "OPENAI_API_KEY",
+                }
+            }
+        },
+    )
+    cfg = ModelsConfig.from_yaml(cfg_path)
+    assert cfg.providers["gpt4o"].model_name == "gpt-4o"
+    # defaults from ModelProviderConfig field defaults apply
+    assert cfg.providers["gpt4o"].temperature == 0.2
+    assert cfg.providers["gpt4o"].max_tokens == 8192
 
 
 # ---------------------------------------------------------------------------
@@ -137,7 +232,7 @@ def test_experiment_file_config_from_yaml_loads(tmp_path: Path):
             "experiment_id": "test-experiment",
             "dataset": {"name": "mydata", "version": "1.0.0"},
             "models": [
-                {"id": "gpt-4o", "model_name": "gpt-4o"}
+                {"id": "gpt-4o", "model_name": "gpt-4o", "api_key_env": "OPENAI_API_KEY"}
             ],
             "strategies": [
                 {"name": "single_agent"}

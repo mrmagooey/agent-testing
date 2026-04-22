@@ -2,9 +2,10 @@
 
 import os
 from pathlib import Path
+from typing import Literal
 
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 
 # --- Shared ---
@@ -24,7 +25,18 @@ class ModelProviderConfig(BaseModel):
     model_name: str
     temperature: float = 0.2
     max_tokens: int = 8192
-    api_key_env: str = ""
+    api_key_env: str | None = None
+    auth: Literal["api_key", "aws"] = "api_key"
+    region: str | None = None
+    display_name: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_auth(self) -> "ModelProviderConfig":
+        if self.auth == "api_key" and not self.api_key_env:
+            raise ValueError(f"model {self.id}: api_key_env required when auth='api_key'")
+        if self.auth == "aws" and not self.region:
+            raise ValueError(f"model {self.id}: region required when auth='aws'")
+        return self
 
 
 class ModelsConfig(BaseModel):
@@ -32,7 +44,15 @@ class ModelsConfig(BaseModel):
 
     @classmethod
     def from_yaml(cls, path: Path) -> "ModelsConfig":
-        return cls.model_validate(load_yaml(path))
+        raw = load_yaml(path)
+        defaults: dict = raw.get("defaults", {})
+        providers_raw: dict = raw.get("providers", {})
+        # Merge defaults under each provider entry; per-entry fields take priority.
+        merged_providers: dict[str, dict] = {}
+        for name, entry in providers_raw.items():
+            merged = {**defaults, **entry}
+            merged_providers[name] = merged
+        return cls.model_validate({"providers": merged_providers})
 
 
 # --- Retry Config ---

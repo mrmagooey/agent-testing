@@ -15,6 +15,7 @@ import yaml
 
 REPO_ROOT = Path(__file__).parent.parent.parent
 CHART_DIR = REPO_ROOT / "helm" / "sec-review"
+# helm/sec-review/files is a symlink -> ../../config, so config/ is canonical.
 CONFIG_DIR = REPO_ROOT / "config"
 
 requires_helm = pytest.mark.skipif(
