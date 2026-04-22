@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback, useMemo } from 'react'
+import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react'
 import { Command } from 'cmdk'
 import { AlertTriangle, Clock, X } from 'lucide-react'
 import type { ModelProviderGroup, ModelStatus, ProviderProbeStatus } from '../api/client'
@@ -151,6 +151,15 @@ export default function ModelSearchPicker({
   const [search, setSearch] = useState('')
   const [showUnavailable, setShowUnavailable] = useState(allowUnavailableDefault)
   const inputRef = useRef<HTMLInputElement>(null)
+
+  // Sync showUnavailable when the parent flips allowUnavailableDefault from false → true.
+  // Only ratchet upward: once the user manually hides unavailables we don't force them
+  // back, but if the parent enables the override we surface them automatically.
+  useEffect(() => {
+    if (allowUnavailableDefault) {
+      setShowUnavailable(true)
+    }
+  }, [allowUnavailableDefault])
 
   const modelMap = useMemo(() => buildModelMap(groups), [groups])
   const selectedSet = useMemo(() => new Set(selected), [selected])

@@ -247,8 +247,8 @@ describe('ExperimentNew — unavailable_models submit error + override', () => {
     })
 
     // Fill required fields - select dataset (use the <select> element directly)
-    const select = screen.getByRole('listbox', { hidden: true }) ?? screen.getAllByRole('combobox')[0]
-    // The dataset select is the only <select> element
+    // getByRole('combobox') is ambiguous (matches both <select> and the cmdk input);
+    // use document.querySelector('select') to target the dataset dropdown unambiguously.
     const datasetSelect = document.querySelector('select')!
     fireEvent.change(datasetSelect, { target: { value: 'cve-2024-python' } })
 

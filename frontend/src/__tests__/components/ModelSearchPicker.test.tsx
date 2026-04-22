@@ -280,3 +280,27 @@ describe('error state', () => {
     expect(screen.getByText('Select at least one model')).toBeInTheDocument()
   })
 })
+
+// ─── allowUnavailableDefault reactivity ───────────────────────────────────────
+
+describe('allowUnavailableDefault reactivity', () => {
+  it('syncs showUnavailable when allowUnavailableDefault flips from false to true', () => {
+    const onChange = vi.fn()
+    const props = {
+      groups: GROUPS,
+      selected: [] as string[],
+      onChange,
+      allowUnavailableDefault: false,
+    }
+    const { rerender } = render(<ModelSearchPicker {...props} />)
+
+    // Initially, unavailable (probe_failed) model should be hidden
+    expect(screen.queryByText('Mistral Large')).not.toBeInTheDocument()
+
+    // Parent sets allowUnavailableDefault → true
+    rerender(<ModelSearchPicker {...props} allowUnavailableDefault={true} />)
+
+    // Now unavailable model should be visible
+    expect(screen.getByText('Mistral Large')).toBeInTheDocument()
+  })
+})
