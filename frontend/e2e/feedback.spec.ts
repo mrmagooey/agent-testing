@@ -18,7 +18,7 @@ test('shows experiment A and experiment B selects', async ({ page }) => {
   await expect(page.getByText('Experiment A (baseline)')).toBeVisible()
   await expect(page.getByText('Experiment B (new)')).toBeVisible()
   const selects = page.locator('select')
-  await expect(selects).toHaveCount(3)
+  await expect(selects).toHaveCount(5)
 })
 
 test('shows compare button initially disabled', async ({ page }) => {
@@ -27,8 +27,8 @@ test('shows compare button initially disabled', async ({ page }) => {
 
 test('compare button enabled when both experiments selected', async ({ page }) => {
   const selects = page.locator('select')
-  await selects.nth(0).selectOption({ index: 1 })
-  await selects.nth(1).selectOption({ index: 2 })
+  await selects.nth(2).selectOption({ index: 1 })
+  await selects.nth(3).selectOption({ index: 2 })
   await expect(page.getByRole('button', { name: 'Compare' })).toBeEnabled()
 })
 
@@ -41,15 +41,15 @@ test('FP pattern load button disabled with no experiment selected', async ({ pag
 })
 
 test('completed experiments appear in selects', async ({ page }) => {
-  const firstSelect = page.locator('select').first()
-  await expect(firstSelect.locator('option').nth(1)).toContainText('aaaaaaaa')
-  await expect(firstSelect.locator('option').nth(1)).toContainText('cve-2024-python')
+  const experimentASelect = page.locator('select').nth(2)
+  await expect(experimentASelect.locator('option').nth(1)).toContainText('aaaaaaaa')
+  await expect(experimentASelect.locator('option').nth(1)).toContainText('cve-2024-python')
 })
 
 test('comparing two experiments shows metric deltas table', async ({ page }) => {
   const selects = page.locator('select')
-  await selects.nth(0).selectOption({ index: 1 })
-  await selects.nth(1).selectOption({ index: 2 })
+  await selects.nth(2).selectOption({ index: 1 })
+  await selects.nth(3).selectOption({ index: 2 })
   await page.getByRole('button', { name: 'Compare' }).click()
   await expect(page.getByText('Metric Deltas')).toBeVisible()
   await expect(page.getByRole('columnheader', { name: 'Experiment' })).toBeVisible()
@@ -59,7 +59,7 @@ test('comparing two experiments shows metric deltas table', async ({ page }) => 
 })
 
 test('load patterns shows FP patterns table', async ({ page }) => {
-  const fpSelect = page.locator('select').nth(2)
+  const fpSelect = page.locator('select').nth(4)
   await fpSelect.selectOption({ index: 1 })
   await page.getByRole('button', { name: 'Load Patterns' }).click()
   await expect(page.getByRole('columnheader', { name: 'Model' })).toBeVisible()
@@ -70,7 +70,7 @@ test('load patterns shows FP patterns table', async ({ page }) => {
 })
 
 test('FP patterns table shows data rows', async ({ page }) => {
-  const fpSelect = page.locator('select').nth(2)
+  const fpSelect = page.locator('select').nth(4)
   await fpSelect.selectOption({ index: 1 })
   await page.getByRole('button', { name: 'Load Patterns' }).click()
   await expect(page.getByText('Template engine auto-escaping misidentified as XSS')).toBeVisible()

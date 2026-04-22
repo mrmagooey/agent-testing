@@ -14,7 +14,7 @@ test.beforeEach(async ({ page }) => {
 // ─── Experiment select population ──────────────────────────────────────────────
 
 test('experiment A select contains only completed experiments', async ({ page }) => {
-  const experimentASelect = page.locator('select').nth(0)
+  const experimentASelect = page.locator('select').nth(2)
   const options = experimentASelect.locator('option')
   // placeholder + 2 completed experiments (aaaaaaaa, cccccccc); bbbbbbbb is running
   await expect(options).toHaveCount(3)
@@ -23,7 +23,7 @@ test('experiment A select contains only completed experiments', async ({ page })
 })
 
 test('experiment B select contains only completed experiments', async ({ page }) => {
-  const experimentBSelect = page.locator('select').nth(1)
+  const experimentBSelect = page.locator('select').nth(3)
   const options = experimentBSelect.locator('option')
   await expect(options).toHaveCount(3)
   await expect(options.nth(1)).toHaveAttribute('value', EXPERIMENT_A_ID)
@@ -32,7 +32,8 @@ test('experiment B select contains only completed experiments', async ({ page })
 
 test('running experiment does not appear in any select', async ({ page }) => {
   const allSelects = page.locator('select')
-  for (let i = 0; i < 3; i++) {
+  // Check experiment selects: A (nth(2)), B (nth(3)), and FP (nth(4))
+  for (let i = 2; i <= 4; i++) {
     const opts = allSelects.nth(i).locator('option')
     const count = await opts.count()
     for (let j = 0; j < count; j++) {
@@ -45,25 +46,25 @@ test('running experiment does not appear in any select', async ({ page }) => {
 // ─── Compare button enabled / disabled state ──────────────────────────────────
 
 test('compare button remains disabled when only experiment A is set', async ({ page }) => {
-  await page.locator('select').nth(0).selectOption(EXPERIMENT_A_ID)
+  await page.locator('select').nth(2).selectOption(EXPERIMENT_A_ID)
   await expect(page.getByRole('button', { name: 'Compare' })).toBeDisabled()
 })
 
 test('compare button remains disabled when only experiment B is set', async ({ page }) => {
-  await page.locator('select').nth(1).selectOption(EXPERIMENT_B_ID)
+  await page.locator('select').nth(3).selectOption(EXPERIMENT_B_ID)
   await expect(page.getByRole('button', { name: 'Compare' })).toBeDisabled()
 })
 
 test('compare button becomes enabled when both A and B are set to different experiments', async ({ page }) => {
-  await page.locator('select').nth(0).selectOption(EXPERIMENT_A_ID)
-  await page.locator('select').nth(1).selectOption(EXPERIMENT_B_ID)
+  await page.locator('select').nth(2).selectOption(EXPERIMENT_A_ID)
+  await page.locator('select').nth(3).selectOption(EXPERIMENT_B_ID)
   await expect(page.getByRole('button', { name: 'Compare' })).toBeEnabled()
 })
 
 test('compare button becomes enabled when both A and B are set to the same experiment', async ({ page }) => {
   // The UI does not prevent comparing an experiment with itself — just both must be non-empty
-  await page.locator('select').nth(0).selectOption(EXPERIMENT_A_ID)
-  await page.locator('select').nth(1).selectOption(EXPERIMENT_A_ID)
+  await page.locator('select').nth(2).selectOption(EXPERIMENT_A_ID)
+  await page.locator('select').nth(3).selectOption(EXPERIMENT_A_ID)
   await expect(page.getByRole('button', { name: 'Compare' })).toBeEnabled()
 })
 
@@ -78,8 +79,8 @@ test('clicking Compare fires GET /api/experiments/compare with correct a and b p
       req.url().includes(`b=${encodeURIComponent(EXPERIMENT_B_ID)}`)
   )
 
-  await page.locator('select').nth(0).selectOption(EXPERIMENT_A_ID)
-  await page.locator('select').nth(1).selectOption(EXPERIMENT_B_ID)
+  await page.locator('select').nth(2).selectOption(EXPERIMENT_A_ID)
+  await page.locator('select').nth(3).selectOption(EXPERIMENT_B_ID)
   await page.getByRole('button', { name: 'Compare' }).click()
 
   const req = await requestPromise
@@ -96,8 +97,8 @@ test('compare does NOT fire a POST — only GET', async ({ page }) => {
     }
   })
 
-  await page.locator('select').nth(0).selectOption(EXPERIMENT_A_ID)
-  await page.locator('select').nth(1).selectOption(EXPERIMENT_B_ID)
+  await page.locator('select').nth(2).selectOption(EXPERIMENT_A_ID)
+  await page.locator('select').nth(3).selectOption(EXPERIMENT_B_ID)
   await page.getByRole('button', { name: 'Compare' }).click()
 
   // Wait for the comparison results to render so we know the GET completed
@@ -108,8 +109,8 @@ test('compare does NOT fire a POST — only GET', async ({ page }) => {
 // ─── Compare results rendering ────────────────────────────────────────────────
 
 test('comparison result shows experiment ID from mock response', async ({ page }) => {
-  await page.locator('select').nth(0).selectOption(EXPERIMENT_A_ID)
-  await page.locator('select').nth(1).selectOption(EXPERIMENT_B_ID)
+  await page.locator('select').nth(2).selectOption(EXPERIMENT_A_ID)
+  await page.locator('select').nth(3).selectOption(EXPERIMENT_B_ID)
   await page.getByRole('button', { name: 'Compare' }).click()
 
   // The mock returns experiment_id: 'gpt-4o__zero_shot__with_tools' for /experiments/compare
@@ -117,8 +118,8 @@ test('comparison result shows experiment ID from mock response', async ({ page }
 })
 
 test('comparison result renders positive delta values with + prefix', async ({ page }) => {
-  await page.locator('select').nth(0).selectOption(EXPERIMENT_A_ID)
-  await page.locator('select').nth(1).selectOption(EXPERIMENT_B_ID)
+  await page.locator('select').nth(2).selectOption(EXPERIMENT_A_ID)
+  await page.locator('select').nth(3).selectOption(EXPERIMENT_B_ID)
   await page.getByRole('button', { name: 'Compare' }).click()
 
   // Mock returns precision_delta: 0.056 — DeltaCell renders "+0.056"
@@ -126,8 +127,8 @@ test('comparison result renders positive delta values with + prefix', async ({ p
 })
 
 test('comparison result includes FP patterns section from compare response', async ({ page }) => {
-  await page.locator('select').nth(0).selectOption(EXPERIMENT_A_ID)
-  await page.locator('select').nth(1).selectOption(EXPERIMENT_B_ID)
+  await page.locator('select').nth(2).selectOption(EXPERIMENT_A_ID)
+  await page.locator('select').nth(3).selectOption(EXPERIMENT_B_ID)
   await page.getByRole('button', { name: 'Compare' }).click()
 
   await expect(page.getByText('FP Patterns').first()).toBeVisible()
@@ -142,12 +143,12 @@ test('Load Patterns button is disabled before any FP experiment is selected', as
 })
 
 test('Load Patterns button becomes enabled after selecting an experiment', async ({ page }) => {
-  await page.locator('select').nth(2).selectOption(EXPERIMENT_A_ID)
+  await page.locator('select').nth(4).selectOption(EXPERIMENT_A_ID)
   await expect(page.getByRole('button', { name: 'Load Patterns' })).toBeEnabled()
 })
 
 test('Load Patterns button goes back to disabled when select is reset to placeholder', async ({ page }) => {
-  const fpSelect = page.locator('select').nth(2)
+  const fpSelect = page.locator('select').nth(4)
   await fpSelect.selectOption(EXPERIMENT_A_ID)
   await expect(page.getByRole('button', { name: 'Load Patterns' })).toBeEnabled()
 
@@ -164,7 +165,7 @@ test('clicking Load Patterns fires GET /api/experiments/{id}/fp-patterns with th
       req.url().includes(`/api/experiments/${EXPERIMENT_A_ID}/fp-patterns`)
   )
 
-  await page.locator('select').nth(2).selectOption(EXPERIMENT_A_ID)
+  await page.locator('select').nth(4).selectOption(EXPERIMENT_A_ID)
   await page.getByRole('button', { name: 'Load Patterns' }).click()
 
   const req = await requestPromise
@@ -178,7 +179,7 @@ test('clicking Load Patterns with experiment B ID calls the correct experiment e
       req.url().includes(`/api/experiments/${EXPERIMENT_B_ID}/fp-patterns`)
   )
 
-  await page.locator('select').nth(2).selectOption(EXPERIMENT_B_ID)
+  await page.locator('select').nth(4).selectOption(EXPERIMENT_B_ID)
   await page.getByRole('button', { name: 'Load Patterns' }).click()
 
   const req = await requestPromise
@@ -188,7 +189,7 @@ test('clicking Load Patterns with experiment B ID calls the correct experiment e
 // ─── FP Pattern Browser: results rendering ───────────────────────────────────
 
 test('FP patterns table shows all rows from fixture', async ({ page }) => {
-  await page.locator('select').nth(2).selectOption(EXPERIMENT_A_ID)
+  await page.locator('select').nth(4).selectOption(EXPERIMENT_A_ID)
   await page.getByRole('button', { name: 'Load Patterns' }).click()
 
   // fp-patterns.json has 2 entries
@@ -197,7 +198,7 @@ test('FP patterns table shows all rows from fixture', async ({ page }) => {
 })
 
 test('FP patterns table shows model, vuln class, count and suggested action columns', async ({ page }) => {
-  await page.locator('select').nth(2).selectOption(EXPERIMENT_A_ID)
+  await page.locator('select').nth(4).selectOption(EXPERIMENT_A_ID)
   await page.getByRole('button', { name: 'Load Patterns' }).click()
 
   await expect(page.getByText('gpt-4o').first()).toBeVisible()
@@ -206,7 +207,7 @@ test('FP patterns table shows model, vuln class, count and suggested action colu
 })
 
 test('FP patterns count cell shows numeric value', async ({ page }) => {
-  await page.locator('select').nth(2).selectOption(EXPERIMENT_A_ID)
+  await page.locator('select').nth(4).selectOption(EXPERIMENT_A_ID)
   await page.getByRole('button', { name: 'Load Patterns' }).click()
 
   // fixture has count: 5 and count: 3
@@ -215,7 +216,7 @@ test('FP patterns count cell shows numeric value', async ({ page }) => {
 })
 
 test('"No FP patterns found" message does not appear when patterns are loaded', async ({ page }) => {
-  await page.locator('select').nth(2).selectOption(EXPERIMENT_A_ID)
+  await page.locator('select').nth(4).selectOption(EXPERIMENT_A_ID)
   await page.getByRole('button', { name: 'Load Patterns' }).click()
 
   await expect(page.getByText('No FP patterns found.')).not.toBeVisible()
