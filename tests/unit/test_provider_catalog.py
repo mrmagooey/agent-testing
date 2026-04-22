@@ -191,3 +191,49 @@ async def test_multiple_probes_independent_failure():
         assert snap["openai"].probe_status == "failed"
     finally:
         await catalog.stop()
+
+
+async def test_stale_snapshot_expires_after_max_stale_seconds():
+    """Sequence: fresh → stale → failed once max_stale_seconds is exceeded.
+
+    Uses ttl_seconds=0.01 and max_stale_seconds=0.05 so the full cycle
+    completes in under a second.
+    """
+
+    class _FlipProbe:
+        provider_key = "openai"
+        _calls = 0
+
+        async def probe(self) -> ProviderSnapshot:
+            self._calls += 1
+            if self._calls == 1:
+                return _fresh_snapshot("openai")
+            raise RuntimeError("downstream error")
+
+    probe = _FlipProbe()
+    catalog = ProviderCatalog(
+        probes=[probe],
+        ttl_seconds=1,
+        probe_enabled=True,
+        max_stale_seconds=2,
+    )
+    await catalog.start()
+
+    # After first probe the snapshot should be fresh.
+    snap_fresh = catalog.snapshot()["openai"]
+    assert snap_fresh.probe_status == "fresh"
+
+    # Wait for one TTL to trigger a failure → stale transition.
+    await asyncio.sleep(1.3)
+    snap_stale = catalog.snapshot()["openai"]
+    assert snap_stale.probe_status == "stale"
+    assert snap_stale.last_error is not None
+
+    # Wait until past max_stale_seconds from the original fetch.
+    # The next refresh cycle will discard the stale snapshot.
+    await asyncio.sleep(1.5)  # total ~2.8 s > max_stale_seconds=2
+    snap_failed = catalog.snapshot()["openai"]
+    assert snap_failed.probe_status == "failed"
+    assert snap_failed.last_error is not None
+
+    await catalog.stop()

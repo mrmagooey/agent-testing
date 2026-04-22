@@ -137,6 +137,9 @@ secrets:
 providerProbe:
   enabled: true
   ttlSeconds: 600
+  # Maximum age (seconds) a stale snapshot is returned before the catalog
+  # gives up and reports probe_status=failed.  Defaults to ttlSeconds*6.
+  maxStaleSeconds: 3600
   bedrock:
     enabled: false
     regions:

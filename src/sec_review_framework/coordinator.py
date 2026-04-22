@@ -2248,10 +2248,13 @@ async def startup() -> None:
     _probe_enabled_env = os.environ.get("PROVIDER_PROBE_ENABLED", "true").strip().lower()
     _probe_enabled = _probe_enabled_env != "false"
     _ttl_seconds = int(os.environ.get("PROVIDER_PROBE_TTL_SECONDS", "600"))
+    _max_stale_env = os.environ.get("PROVIDER_PROBE_MAX_STALE_SECONDS")
+    _max_stale_seconds = int(_max_stale_env) if _max_stale_env is not None else None
     catalog = ProviderCatalog(
         probes=build_probes(),
         ttl_seconds=_ttl_seconds,
         probe_enabled=_probe_enabled,
+        max_stale_seconds=_max_stale_seconds,
     )
     await catalog.start()
     coordinator.catalog = catalog
