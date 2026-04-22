@@ -12,28 +12,40 @@ test.describe('ToggleChip on /experiments/new', () => {
   })
 
   test('checking a model chip marks the checkbox as checked', async ({ page }) => {
-    const gpt4oCheckbox = page
-      .locator('label')
-      .filter({ hasText: 'gpt-4o' })
-      .first()
-      .locator('input[type="checkbox"]')
+    // gpt-4o is rendered as a Command.Item in the ModelSearchPicker
+    const gpt4oItem = page.getByRole('option', { name: /gpt-4o/i })
 
-    await expect(gpt4oCheckbox).not.toBeChecked()
-    await gpt4oCheckbox.check()
-    await expect(gpt4oCheckbox).toBeChecked()
+    // Initially, the item should not be selected
+    await expect(gpt4oItem).toHaveAttribute('data-selected', 'false')
+
+    // Click to select
+    await gpt4oItem.click()
+
+    // After selection, the item should have data-selected='true'
+    await expect(gpt4oItem).toHaveAttribute('data-selected', 'true')
   })
 
   test('checked model chip label has indigo background class', async ({ page }) => {
-    const gpt4oLabel = page.locator('label').filter({ hasText: 'gpt-4o' }).first()
-    const gpt4oCheckbox = gpt4oLabel.locator('input[type="checkbox"]')
+    // gpt-4o is rendered as a Command.Item in the ModelSearchPicker
+    const gpt4oItem = page.getByRole('option', { name: /gpt-4o/i })
 
-    await gpt4oCheckbox.check()
-    await expect(gpt4oLabel).toHaveClass(/bg-indigo-600/)
+    // Click to select
+    await gpt4oItem.click()
+
+    // After selection, the item shows indigo text styling (text-indigo-700)
+    // This is the visual indicator of selection in the new UI
+    await expect(gpt4oItem).toHaveClass(/text-indigo-/)
   })
 
   test('unchecked model chip label does not have indigo background', async ({ page }) => {
-    const gpt4oLabel = page.locator('label').filter({ hasText: 'gpt-4o' }).first()
-    await expect(gpt4oLabel).not.toHaveClass(/bg-indigo-600/)
+    // gpt-4o is rendered as a Command.Item in the ModelSearchPicker
+    const gpt4oItem = page.getByRole('option', { name: /gpt-4o/i })
+
+    // Before any interaction, the item should not be selected
+    await expect(gpt4oItem).not.toHaveAttribute('data-selected', 'true')
+
+    // An unselected item should not have indigo text styling
+    await expect(gpt4oItem).not.toHaveClass(/text-indigo-/)
   })
 
   test('disabled chip (DevDocs) cannot be toggled', async ({ page }) => {
