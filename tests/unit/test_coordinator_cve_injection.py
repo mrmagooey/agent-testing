@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -61,7 +61,7 @@ def _make_label(idx: int = 0) -> GroundTruthLabel:
         source=GroundTruthSource.CVE_PATCH,
         source_ref="CVE-2023-00001",
         confidence="confirmed",
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(timezone.utc),
     )
 
 

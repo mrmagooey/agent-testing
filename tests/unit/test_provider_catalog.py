@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 
@@ -24,7 +24,7 @@ def _fresh_snapshot(provider_key: str) -> ProviderSnapshot:
         probe_status="fresh",
         model_ids=frozenset([f"{provider_key}/model-1"]),
         metadata={f"{provider_key}/model-1": ModelMetadata(id=f"{provider_key}/model-1")},
-        fetched_at=datetime.utcnow(),
+        fetched_at=datetime.now(timezone.utc),
     )
 
 
