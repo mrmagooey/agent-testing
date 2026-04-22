@@ -135,6 +135,9 @@ export async function mockApi(page: Page) {
         stability: {},
       })
     }
+    if (path === '/compare-runs' && method === 'GET') {
+      return json(route, comparison)
+    }
     if (path.match(/^\/experiments\/[^/]+$/) && method === 'GET') {
       const experimentId = path.split('/')[2]
       const experiment = (experiments as Array<Record<string, unknown>>).find((e) => e.experiment_id === experimentId) ?? experiments[0]
