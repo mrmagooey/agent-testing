@@ -190,7 +190,7 @@ test.describe('Breadcrumbs rendering and navigation', () => {
     await expect(nav.getByRole('link', { name: 'Dashboard' })).toBeVisible()
     await expect(nav.getByRole('link', { name: EXPERIMENT_ID })).toBeVisible()
     // The last crumb (run_id) is plain text, not a link
-    await expect(nav.getByText('gpt-4o__zero_shot__with_tools__default__none')).toBeVisible()
+    await expect(nav.getByText(RUN_ID)).toBeVisible()
   })
 
   test('RunDetail breadcrumb Dashboard link navigates to /', async ({ page }) => {

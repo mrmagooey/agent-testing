@@ -9,12 +9,12 @@ test.beforeEach(async ({ page }) => {
   await page.goto(`/experiments/${EXPERIMENT_ID}/runs/${RUN_ID}`)
 })
 
-test('shows experiment id in header', async ({ page }) => {
-  await expect(page.getByRole('heading', { name: 'gpt-4o__zero_shot__with_tools__default__none' })).toBeVisible()
+test('shows run id as heading', async ({ page }) => {
+  await expect(page.getByRole('heading', { name: RUN_ID })).toBeVisible()
 })
 
-test('shows run id', async ({ page }) => {
-  await expect(page.getByText(`Run ID: ${RUN_ID}`)).toBeVisible()
+test('shows experiment id below heading', async ({ page }) => {
+  await expect(page.getByText(`Experiment ID: ${EXPERIMENT_ID}`)).toBeVisible()
 })
 
 test('shows model metadata', async ({ page }) => {
