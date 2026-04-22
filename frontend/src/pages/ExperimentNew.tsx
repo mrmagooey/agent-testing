@@ -2,19 +2,22 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   listDatasets,
-  listAvailableModelIds, // TODO(phase-6): switch to listModels() + ModelProviderGroup[] for the rich picker
+  listModels,
   listStrategies,
   listProfiles,
   submitExperiment,
   listToolExtensions,
+  parseUnavailableModelsError,
   type Dataset,
   type ExperimentConfig,
   type ToolExtension,
+  type ModelProviderGroup,
 } from '../api/client'
 import { useEstimate } from '../hooks/useEstimate'
 import CostEstimate from '../components/CostEstimate'
 import PageDescription from '../components/PageDescription'
 import ToggleChip from '../components/ToggleChip'
+import ModelSearchPicker from '../components/ModelSearchPicker'
 
 /**
  * Generate the power-set of a list of strings.
@@ -94,7 +97,7 @@ function ChipGroup({
 export default function ExperimentNew() {
   const navigate = useNavigate()
   const [datasets, setDatasets] = useState<Dataset[]>([])
-  const [models, setModels] = useState<string[]>([])
+  const [models, setModels] = useState<ModelProviderGroup[]>([])
   const [strategies, setStrategies] = useState<string[]>([])
   const [profiles, setProfiles] = useState<string[]>([])
   const [toolExtensions, setToolExtensions] = useState<ToolExtension[]>([])
@@ -102,6 +105,9 @@ export default function ExperimentNew() {
   const [submitting, setSubmitting] = useState(false)
   const [submitAttempted, setSubmitAttempted] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [unavailableError, setUnavailableError] = useState<Array<{ id: string; status: string; reason?: string }> | null>(null)
+  const [allowUnavailable, setAllowUnavailable] = useState(false)
+  const [droppedModels, setDroppedModels] = useState<string[]>([])
 
   const [selectedDataset, setSelectedDataset] = useState('')
   const [selectedModels, setSelectedModels] = useState<string[]>([])
@@ -136,7 +142,7 @@ export default function ExperimentNew() {
   const { estimate, loading: estimateLoading } = useEstimate(config)
 
   useEffect(() => {
-    Promise.all([listDatasets(), listAvailableModelIds(), listStrategies(), listProfiles(), listToolExtensions()])
+    Promise.all([listDatasets(), listModels(), listStrategies(), listProfiles(), listToolExtensions()])
       .then(([ds, ms, ss, ps, te]) => {
         setDatasets(ds)
         setModels(ms)
@@ -144,9 +150,26 @@ export default function ExperimentNew() {
         setProfiles(ps)
         setToolExtensions(te)
         if (ps.length > 0) setSelectedProfile(ps[0])
+
+        // Check if any initially-selected models are now unavailable
+        // (This handles URL query params / saved drafts — currently no such path,
+        // but the handling is correct for any future caller.)
+        if (selectedModels.length > 0) {
+          const allModelIds = new Set(ms.flatMap((g) => g.models.map((m) => m.id)))
+          const availableIds = new Set(
+            ms.flatMap((g) => g.models.filter((m) => m.status === 'available').map((m) => m.id))
+          )
+          const dropped = selectedModels.filter((id) => allModelIds.has(id) && !availableIds.has(id))
+          if (dropped.length > 0) {
+            setDroppedModels(dropped)
+            setSelectedModels((prev) => prev.filter((id) => availableIds.has(id)))
+          }
+        }
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false))
+    // intentionally run once on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const datasetError = submitAttempted && !selectedDataset ? 'Please select a dataset' : undefined
@@ -162,14 +185,11 @@ export default function ExperimentNew() {
     toolVariants.length > 0 &&
     verification.length > 0
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setSubmitAttempted(true)
-
-    if (!isValid) return
-
+  const doSubmit = async (overrideAllowUnavailable?: boolean) => {
     setSubmitting(true)
     setError(null)
+    setUnavailableError(null)
+    const shouldAllow = overrideAllowUnavailable ?? allowUnavailable
     try {
       const experimentConfig: ExperimentConfig = {
         dataset: selectedDataset,
@@ -181,14 +201,32 @@ export default function ExperimentNew() {
         verification,
         repetitions,
         spend_cap_usd: spendCapInput ? parseFloat(spendCapInput) : undefined,
+        ...(shouldAllow ? { allow_unavailable_models: true } : {}),
       }
       const experiment = await submitExperiment(experimentConfig)
       navigate(`/experiments/${experiment.experiment_id}`)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Submission failed')
+      const parsed = parseUnavailableModelsError(err)
+      if (parsed) {
+        setUnavailableError(parsed.models)
+      } else {
+        setError(err instanceof Error ? err.message : 'Submission failed')
+      }
     } finally {
       setSubmitting(false)
     }
+  }
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setSubmitAttempted(true)
+    if (!isValid) return
+    await doSubmit()
+  }
+
+  const handleSubmitWithOverride = async () => {
+    setAllowUnavailable(true)
+    await doSubmit(true)
   }
 
   if (loading) {
@@ -240,13 +278,66 @@ export default function ExperimentNew() {
               modelsError ? 'border-red-400 dark:border-red-600' : 'border-gray-200 dark:border-gray-700'
             }`}>
               <h2 className="font-semibold mb-3">Models</h2>
-              <ChipGroup
-                label=""
-                options={models}
+
+              {droppedModels.length > 0 && (
+                <div
+                  className="mb-3 p-2 rounded-md bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-300 text-xs"
+                  data-testid="dropped-models-notice"
+                >
+                  Dropped {droppedModels.length} unavailable model{droppedModels.length !== 1 ? 's' : ''} from your selection:{' '}
+                  {droppedModels.join(', ')}
+                </div>
+              )}
+
+              <ModelSearchPicker
+                groups={models}
                 selected={selectedModels}
                 onChange={setSelectedModels}
                 error={modelsError}
+                label="Models"
+                allowUnavailableDefault={allowUnavailable}
               />
+
+              <div className="mt-3">
+                <label className="flex items-center gap-2 cursor-pointer" data-testid="allow-unavailable-label">
+                  <input
+                    type="checkbox"
+                    checked={allowUnavailable}
+                    onChange={(e) => setAllowUnavailable(e.target.checked)}
+                    className="rounded"
+                    data-testid="allow-unavailable-checkbox"
+                  />
+                  <span className="text-sm text-gray-700 dark:text-gray-300">
+                    Allow unavailable models (override submit check)
+                  </span>
+                </label>
+              </div>
+
+              {unavailableError && (
+                <div
+                  className="mt-3 p-3 rounded-lg bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-300 text-sm"
+                  data-testid="unavailable-models-error"
+                >
+                  <p className="font-semibold mb-1">Some selected models are unavailable:</p>
+                  <ul className="list-disc list-inside text-xs space-y-0.5 mb-3">
+                    {unavailableError.map((m) => (
+                      <li key={m.id}>
+                        <span className="font-mono">{m.id}</span> — {m.status}
+                        {m.reason ? ` (${m.reason})` : ''}
+                      </li>
+                    ))}
+                  </ul>
+                  <button
+                    type="button"
+                    onClick={handleSubmitWithOverride}
+                    disabled={submitting}
+                    className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold transition-colors disabled:opacity-50"
+                    data-testid="submit-with-override-btn"
+                  >
+                    {submitting ? 'Submitting…' : 'Submit with override'}
+                  </button>
+                </div>
+              )}
             </div>
 
             <div className={`bg-white dark:bg-gray-800 rounded-xl border p-5 ${

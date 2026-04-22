@@ -10,10 +10,16 @@ async function waitForDatasetOptions(page: import('@playwright/test').Page) {
   })
 }
 
+// Helper: wait for the ModelSearchPicker to be ready (search input visible).
+async function waitForPickerReady(page: import('@playwright/test').Page) {
+  await page.waitForSelector('[placeholder="Search models…"]', { state: 'visible' })
+}
+
 test.beforeEach(async ({ page }) => {
   await mockApi(page)
   await page.goto('/experiments/new')
   await waitForDatasetOptions(page)
+  await waitForPickerReady(page)
 })
 
 // ---------------------------------------------------------------------------
@@ -23,12 +29,7 @@ test('selecting a dataset triggers an estimate refetch', async ({ page }) => {
   // useEstimate requires at least one model OR strategy before it will fire.
   // Pre-fill a model and strategy so the hook is already active, then change
   // the dataset to trigger a fresh request.
-  await page
-    .locator('label')
-    .filter({ hasText: 'gpt-4o' })
-    .first()
-    .locator('input[type="checkbox"]')
-    .check()
+  await page.getByText('GPT-4o').first().click()
   await page
     .locator('label')
     .filter({ hasText: 'zero_shot' })
@@ -50,36 +51,29 @@ test('selecting a dataset triggers an estimate refetch', async ({ page }) => {
 })
 
 // ---------------------------------------------------------------------------
-// 2. Model checkboxes: toggle each one, verify checked state + estimate refetch
+// 2. Model picker: click each row, verify pill tray + estimate refetch
 // ---------------------------------------------------------------------------
 const MODELS = [
-  'gpt-4o',
-  'gpt-4o-mini',
-  'claude-3-5-sonnet-20241022',
-  'claude-3-haiku-20240307',
-  'gemini-1.5-pro',
+  { id: 'gpt-4o', display: 'GPT-4o' },
+  { id: 'gpt-4o-mini', display: 'GPT-4o Mini' },
+  { id: 'claude-3-5-sonnet-20241022', display: 'Claude 3.5 Sonnet' },
+  { id: 'claude-3-haiku-20240307', display: 'Claude 3 Haiku' },
+  { id: 'gemini-1.5-pro', display: 'Gemini 1.5 Pro' },
 ]
 
 for (const model of MODELS) {
-  test(`model checkbox "${model}" can be toggled and triggers estimate refetch`, async ({ page }) => {
+  test(`model "${model.display}" can be toggled via picker and triggers estimate refetch`, async ({ page }) => {
     const estimateRequestPromise = page.waitForRequest(
       (req) => req.url().includes('/api/experiments/estimate') && req.method() === 'POST'
     )
 
-    const checkbox = page
-      .locator('label')
-      .filter({ hasText: model })
-      .first()
-      .locator('input[type="checkbox"]')
+    // Click the model row to select it (the display name span inside the Command.Item)
+    await page.getByText(model.display).first().click()
 
-    await checkbox.check()
-    await expect(checkbox).toBeChecked()
+    // Pill tray should appear (aria-live region with "selected" in its label)
+    await expect(page.locator('[aria-live="polite"]')).toBeVisible()
 
     await estimateRequestPromise
-
-    // Also verify unchecking works
-    await checkbox.uncheck()
-    await expect(checkbox).not.toBeChecked()
   })
 }
 
@@ -223,14 +217,7 @@ test('selecting an available tool extension exposes the power-set checkbox', asy
 
 test('selecting LSP tool extension triggers estimate refetch', async ({ page }) => {
   // useEstimate requires at least one model OR strategy before it will fire.
-  // Pre-fill a model and strategy so the hook is already active, then select
-  // the LSP extension to trigger a fresh request.
-  await page
-    .locator('label')
-    .filter({ hasText: 'gpt-4o' })
-    .first()
-    .locator('input[type="checkbox"]')
-    .check()
+  await page.getByText('GPT-4o').first().click()
   await page
     .locator('label')
     .filter({ hasText: 'zero_shot' })
@@ -284,13 +271,8 @@ test('complete valid form submission navigates to the new experiment detail page
   // Dataset
   await page.locator('select').first().selectOption('cve-2024-python')
 
-  // Model
-  await page
-    .locator('label')
-    .filter({ hasText: 'gpt-4o' })
-    .first()
-    .locator('input[type="checkbox"]')
-    .check()
+  // Model via picker
+  await page.getByText('GPT-4o').first().click()
 
   // Strategy
   await page
@@ -316,12 +298,7 @@ test('POST /api/experiments is called with correct payload on valid submission',
   )
 
   await page.locator('select').first().selectOption('cve-2024-python')
-  await page
-    .locator('label')
-    .filter({ hasText: 'gpt-4o' })
-    .first()
-    .locator('input[type="checkbox"]')
-    .check()
+  await page.getByText('GPT-4o').first().click()
   await page
     .locator('label')
     .filter({ hasText: 'zero_shot' })

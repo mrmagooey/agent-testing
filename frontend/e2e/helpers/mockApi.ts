@@ -60,6 +60,20 @@ export async function mockApi(page: Page) {
       if (!body.dataset) {
         return json(route, { detail: 'dataset is required' }, 422)
       }
+      // Simulate unavailable_models error unless override is set
+      if (!body.allow_unavailable_models) {
+        const models = body.models as string[]
+        const unavailableInFixture = ['gpt-4o-mini-unavailable', 'claude-3-unavailable']
+        const unavailable = models.filter((m) => unavailableInFixture.includes(m))
+        if (unavailable.length > 0) {
+          return json(route, {
+            detail: {
+              error: 'unavailable_models',
+              models: unavailable.map((id) => ({ id, status: 'key_missing' })),
+            },
+          }, 400)
+        }
+      }
       const newExperiment = {
         ...(experiments[0] as Record<string, unknown>),
         experiment_id: 'newexperiment-1111-1111-1111-111111111111',
@@ -175,11 +189,29 @@ export async function mockApi(page: Page) {
     // --- Config ---
     if (path === '/models' && method === 'GET') {
       return json(route, [
-        'gpt-4o',
-        'gpt-4o-mini',
-        'claude-3-5-sonnet-20241022',
-        'claude-3-haiku-20240307',
-        'gemini-1.5-pro',
+        {
+          provider: 'openai',
+          probe_status: 'fresh',
+          models: [
+            { id: 'gpt-4o', display_name: 'GPT-4o', status: 'available' },
+            { id: 'gpt-4o-mini', display_name: 'GPT-4o Mini', status: 'available' },
+          ],
+        },
+        {
+          provider: 'anthropic',
+          probe_status: 'fresh',
+          models: [
+            { id: 'claude-3-5-sonnet-20241022', display_name: 'Claude 3.5 Sonnet', status: 'available' },
+            { id: 'claude-3-haiku-20240307', display_name: 'Claude 3 Haiku', status: 'available' },
+          ],
+        },
+        {
+          provider: 'google',
+          probe_status: 'fresh',
+          models: [
+            { id: 'gemini-1.5-pro', display_name: 'Gemini 1.5 Pro', status: 'available' },
+          ],
+        },
       ])
     }
     if (path === '/strategies' && method === 'GET') {

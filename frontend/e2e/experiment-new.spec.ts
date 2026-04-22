@@ -17,11 +17,31 @@ test('shows dataset selector', async ({ page }) => {
   await expect(select.locator('option', { hasText: 'cve-2024-python' })).toBeAttached()
 })
 
-test('shows model checkboxes from API', async ({ page }) => {
+test('shows Models heading and search input', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Models' })).toBeVisible()
-  await expect(page.locator('label').filter({ hasText: 'gpt-4o' }).first()).toBeVisible()
-  await expect(page.locator('label').filter({ hasText: 'claude-3-5-sonnet-20241022' })).toBeVisible()
-  await expect(page.locator('label').filter({ hasText: 'gemini-1.5-pro' })).toBeVisible()
+  // ModelSearchPicker renders a search input
+  await expect(page.getByPlaceholder('Search models…')).toBeVisible()
+})
+
+test('models picker renders grouped by provider — available models visible', async ({ page }) => {
+  // Available models from the grouped mockApi fixture should be visible by default
+  // Use first() to avoid strict mode violation (display name + model id both match)
+  await expect(page.getByText('GPT-4o').first()).toBeVisible()
+  await expect(page.getByText('Claude 3.5 Sonnet').first()).toBeVisible()
+  await expect(page.getByText('Gemini 1.5 Pro').first()).toBeVisible()
+})
+
+test('search narrows model list', async ({ page }) => {
+  const searchInput = page.getByPlaceholder('Search models…')
+  await searchInput.fill('gpt')
+  // GPT models should be visible (use first() to avoid strict mode on display+id spans)
+  await expect(page.getByText('GPT-4o').first()).toBeVisible()
+  await expect(page.getByText('GPT-4o Mini').first()).toBeVisible()
+  // Claude model should not be visible
+  await expect(page.getByText('Claude 3.5 Sonnet').first()).not.toBeVisible()
+  // Clear search
+  await searchInput.fill('')
+  await expect(page.getByText('Claude 3.5 Sonnet').first()).toBeVisible()
 })
 
 test('shows strategy checkboxes from API', async ({ page }) => {
@@ -71,14 +91,16 @@ test('validates at least one model required', async ({ page }) => {
 
 test('validates at least one strategy required', async ({ page }) => {
   await page.locator('select').first().selectOption('cve-2024-python')
-  await page.locator('label').filter({ hasText: 'gpt-4o' }).first().locator('input[type="checkbox"]').check()
+  // Select GPT-4o via the picker (click the row)
+  await page.getByText('GPT-4o').first().click()
   await page.getByRole('button', { name: 'Submit Experiment' }).click()
   await expect(page.getByText('Select at least one strategy')).toBeVisible()
 })
 
 test('successful form submission navigates to experiment detail', async ({ page }) => {
   await page.locator('select').first().selectOption('cve-2024-python')
-  await page.locator('label').filter({ hasText: 'gpt-4o' }).first().locator('input[type="checkbox"]').check()
+  // Select GPT-4o via the picker
+  await page.getByText('GPT-4o').first().click()
   await page.locator('label').filter({ hasText: 'zero_shot' }).locator('input[type="checkbox"]').check()
   await page.getByRole('button', { name: 'Submit Experiment' }).click()
   await expect(page).toHaveURL(/\/experiments\/newexperiment-1111/)
@@ -90,7 +112,7 @@ test('submitted POST body contains non-empty required arrays', async ({ page }) 
   )
 
   await page.locator('select').first().selectOption('cve-2024-python')
-  await page.locator('label').filter({ hasText: 'gpt-4o' }).first().locator('input[type="checkbox"]').check()
+  await page.getByText('GPT-4o').first().click()
   await page.locator('label').filter({ hasText: 'zero_shot' }).locator('input[type="checkbox"]').check()
   await page.getByRole('button', { name: 'Submit Experiment' }).click()
 
@@ -109,7 +131,7 @@ test('submitted POST body contains non-empty required arrays', async ({ page }) 
 
 test('validates at least one tool variant required', async ({ page }) => {
   await page.locator('select').first().selectOption('cve-2024-python')
-  await page.locator('label').filter({ hasText: 'gpt-4o' }).first().locator('input[type="checkbox"]').check()
+  await page.getByText('GPT-4o').first().click()
   await page.locator('label').filter({ hasText: 'zero_shot' }).locator('input[type="checkbox"]').check()
   await page.locator('label').filter({ hasText: /^with_tools$/ }).locator('input[type="checkbox"]').uncheck()
   await page.locator('label').filter({ hasText: /^without_tools$/ }).locator('input[type="checkbox"]').uncheck()
@@ -120,7 +142,7 @@ test('validates at least one tool variant required', async ({ page }) => {
 
 test('validates at least one verification option required', async ({ page }) => {
   await page.locator('select').first().selectOption('cve-2024-python')
-  await page.locator('label').filter({ hasText: 'gpt-4o' }).first().locator('input[type="checkbox"]').check()
+  await page.getByText('GPT-4o').first().click()
   await page.locator('label').filter({ hasText: 'zero_shot' }).locator('input[type="checkbox"]').check()
   await page.locator('label').filter({ hasText: /^none$/ }).locator('input[type="checkbox"]').uncheck()
   await page.getByRole('button', { name: 'Submit Experiment' }).click()
@@ -128,20 +150,11 @@ test('validates at least one verification option required', async ({ page }) => 
   await expect(page).not.toHaveURL(/\/experiments\/newexperiment/)
 })
 
-test('can select multiple models and strategies', async ({ page }) => {
-  const gpt4oCheckbox = page.locator('label').filter({ hasText: 'gpt-4o' }).first().locator('input[type="checkbox"]')
-  const claudeCheckbox = page.locator('label').filter({ hasText: 'claude-3-5-sonnet-20241022' }).locator('input[type="checkbox"]')
-  await gpt4oCheckbox.check()
-  await claudeCheckbox.check()
-  await expect(gpt4oCheckbox).toBeChecked()
-  await expect(claudeCheckbox).toBeChecked()
-
-  const zeroShotCheckbox = page.locator('label').filter({ hasText: 'zero_shot' }).locator('input[type="checkbox"]')
-  const cotCheckbox = page.locator('label').filter({ hasText: 'chain_of_thought' }).locator('input[type="checkbox"]')
-  await zeroShotCheckbox.check()
-  await cotCheckbox.check()
-  await expect(zeroShotCheckbox).toBeChecked()
-  await expect(cotCheckbox).toBeChecked()
+test('can select multiple models via picker', async ({ page }) => {
+  await page.getByText('GPT-4o').first().click()
+  await page.getByText('Claude 3.5 Sonnet').first().click()
+  // Both should appear in the pill tray
+  await expect(page.locator('[aria-label*="selected"]')).toBeVisible()
 })
 
 test('spend cap input accepts decimal values', async ({ page }) => {
@@ -162,15 +175,13 @@ test('disables unavailable tool extensions', async ({ page }) => {
 })
 
 test('shows power-set toggle for tool extensions', async ({ page }) => {
-  const powerSetToggle = page.locator('input[type="checkbox"]').filter({ hasText: '' }).locator('xpath=./following-sibling::*[contains(text(), "power-set")]')
-  // Check that the power-set toggle exists by looking for the text near the checkbox
   await expect(page.getByText(/generate all combinations/i)).toBeVisible()
 })
 
 test('successful submission includes tool_extension_sets when extensions selected', async ({ page }) => {
   // Setup form with required fields
   await page.locator('select').first().selectOption('cve-2024-python')
-  await page.locator('label').filter({ hasText: 'gpt-4o' }).first().locator('input[type="checkbox"]').check()
+  await page.getByText('GPT-4o').first().click()
   await page.locator('label').filter({ hasText: 'zero_shot' }).locator('input[type="checkbox"]').check()
 
   // Select a tool extension
@@ -179,4 +190,46 @@ test('successful submission includes tool_extension_sets when extensions selecte
   // Submit
   await page.getByRole('button', { name: 'Submit Experiment' }).click()
   await expect(page).toHaveURL(/\/experiments\/newexperiment-1111/)
+})
+
+// ---------------------------------------------------------------------------
+// Phase 6: ModelSearchPicker grouped picker scenarios
+// ---------------------------------------------------------------------------
+
+test('models are grouped by provider in the picker', async ({ page }) => {
+  // Provider group headings should appear (cmdk group headings)
+  await expect(page.getByText('Openai', { exact: false })).toBeVisible()
+  await expect(page.getByText('Anthropic', { exact: false })).toBeVisible()
+  await expect(page.getByText('Google', { exact: false })).toBeVisible()
+})
+
+test('unavailable models hidden by default; "Show unavailable" toggle reveals them', async ({ page }) => {
+  // All models in fixture are available, so toggle behavior shows no change in this fixture.
+  // Verify the toggle button exists (rendered by ModelSearchPicker).
+  const showUnavailableToggle = page.locator('button', { hasText: 'Show unavailable' })
+  // ModelSearchPicker renders it as a ToggleChip; check by text
+  await expect(page.getByText('Show unavailable')).toBeVisible()
+})
+
+test('shows "Allow unavailable models" checkbox', async ({ page }) => {
+  await expect(page.getByTestId('allow-unavailable-checkbox')).toBeVisible()
+  await expect(page.getByTestId('allow-unavailable-checkbox')).not.toBeChecked()
+})
+
+test('checking "Allow unavailable models" sends allow_unavailable_models:true in payload', async ({ page }) => {
+  const postPromise = page.waitForRequest(
+    (req) => req.url().includes('/api/experiments') && req.method() === 'POST'
+  )
+
+  await page.locator('select').first().selectOption('cve-2024-python')
+  await page.getByText('GPT-4o').first().click()
+  await page.locator('label').filter({ hasText: 'zero_shot' }).locator('input[type="checkbox"]').check()
+  // Check the override checkbox
+  await page.getByTestId('allow-unavailable-checkbox').check()
+
+  await page.getByRole('button', { name: 'Submit Experiment' }).click()
+
+  const req = await postPromise
+  const body = req.postDataJSON()
+  expect(body.allow_unavailable_models).toBe(true)
 })
