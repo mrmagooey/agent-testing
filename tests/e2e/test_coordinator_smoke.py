@@ -474,3 +474,95 @@ class TestSmokeFullLifecycle:
         health_resp = test_client.get("/health")
         assert health_resp.status_code == 200
         assert health_resp.json()["status"] == "ok"
+
+
+class TestSmokeDeleteExperimentRemovesArtifacts:
+    """
+    DELETE /experiments/{id} removes on-disk artifacts and returns 204.
+
+    NOTE: The implementation does NOT delete the DB row — it only marks runs
+    as "cancelled" and removes filesystem artifacts (outputs dir + run config
+    files).  As a consequence GET /experiments/{id} still returns 200 after
+    deletion with status "cancelled".  This is tested below as the *actual*
+    observable contract.  See the potential-bug note in the docstring for the
+    coordinator's delete_experiment() method.
+    """
+
+    def test_delete_experiment_removes_artifacts(
+        self,
+        test_client: TestClient,
+        coordinator_instance: ExperimentCoordinator,
+        datasets_dir: Path,
+    ):
+        # --- 1. Submit, run workers, finalize to get a fully completed experiment ---
+        matrix = _minimal_matrix()
+        post_resp = test_client.post("/experiments", json=matrix.model_dump())
+        assert post_resp.status_code == 201
+        experiment_id = post_resp.json()["experiment_id"]
+        assert experiment_id == EXPERIMENT_ID
+
+        _run_workers_for_experiment(coordinator_instance, datasets_dir)
+        _run_async(coordinator_instance.finalize_experiment(experiment_id))
+
+        # --- 2. Pre-delete snapshot: experiment accessible and artifacts exist ---
+        pre_get_resp = test_client.get(f"/experiments/{experiment_id}")
+        assert pre_get_resp.status_code == 200, pre_get_resp.text
+        assert pre_get_resp.json()["experiment_id"] == experiment_id
+
+        outputs_dir = coordinator_instance.storage_root / "outputs" / experiment_id
+        assert outputs_dir.exists(), "outputs dir must exist before deletion"
+        assert (outputs_dir / "matrix_report.md").exists(), "matrix_report.md must exist"
+
+        # Confirm at least one run config file was written
+        config_dir = coordinator_instance.storage_root / "config" / "runs"
+        config_files_before = list(config_dir.glob("*.json"))
+        assert len(config_files_before) >= 1, "at least one run config file expected"
+
+        # Confirm experiment appears in list
+        list_resp = test_client.get("/experiments")
+        assert list_resp.status_code == 200
+        exp_ids_before = [e["experiment_id"] for e in list_resp.json()]
+        assert experiment_id in exp_ids_before
+
+        # --- 3. DELETE /experiments/{id} — expect 204 No Content ---
+        del_resp = test_client.delete(f"/experiments/{experiment_id}")
+        assert del_resp.status_code == 204, (
+            f"Expected 204, got {del_resp.status_code}: {del_resp.text}"
+        )
+        # 204 responses must have no body
+        assert del_resp.content == b""
+
+        # --- 4. Post-delete assertions: filesystem artifacts are gone ---
+        assert not outputs_dir.exists(), (
+            "outputs directory must be removed after DELETE"
+        )
+        # Run config files for this experiment's runs should be removed
+        config_files_after = list(config_dir.glob("*.json"))
+        assert len(config_files_after) == 0, (
+            f"Run config files should be removed, but found: {config_files_after}"
+        )
+
+        # --- 5. DB row is NOT deleted (potential bug — noted below) ---
+        # The implementation cancels runs in the DB but never removes the row,
+        # so GET /experiments/{id} still returns 200 with status "cancelled".
+        # This is tested as the actual observable contract, not the ideal one.
+        post_get_resp = test_client.get(f"/experiments/{experiment_id}")
+        assert post_get_resp.status_code == 200, (
+            "GET /experiments/{id} returns 200 after delete because the DB row "
+            "is NOT removed — only disk artifacts are cleaned up. "
+            "This may be a bug: a caller expecting 404 will be surprised."
+        )
+        post_data = post_get_resp.json()
+        assert post_data["experiment_id"] == experiment_id
+        # Status must be "cancelled" (set by cancel_experiment() inside delete_experiment())
+        assert post_data["status"] == "cancelled", (
+            f"Expected status 'cancelled' after delete, got {post_data['status']!r}"
+        )
+
+        # Similarly, GET /experiments still lists the experiment (DB row retained)
+        list_after_resp = test_client.get("/experiments")
+        assert list_after_resp.status_code == 200
+        exp_ids_after = [e["experiment_id"] for e in list_after_resp.json()]
+        assert experiment_id in exp_ids_after, (
+            "Experiment should still appear in listing because the DB row is retained"
+        )
