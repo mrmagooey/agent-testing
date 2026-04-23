@@ -1979,8 +1979,7 @@ class CVEDiscovery:
 Accepts either a full `CVEImportSpec` (manual, all fields provided) or just a CVE ID (auto-resolved).
 
 ```python
-@dataclass
-class CVEImportSpec:
+class CVEImportSpec(BaseModel):
     """Full spec — used when user provides all details, or after resolution."""
     cve_id: str
     repo_url: str
@@ -1991,6 +1990,7 @@ class CVEImportSpec:
     severity: Severity
     description: str
     affected_files: list[str] | None = None
+    patch_lines_changed: int | None = None
 
 class CVEImporter:
     def __init__(self, datasets_root: Path, resolver: CVEResolver):
@@ -2048,34 +2048,22 @@ def discover_cves(criteria: CVESelectionCriteria, max_results: int = 50) -> list
     candidates = coordinator.cve_discovery.discover(criteria, max_results)
     return [c.model_dump() for c in candidates]
 
-@app.post("/datasets/resolve-cve")
-def resolve_cve(cve_id: str) -> dict:
+@app.get("/datasets/resolve-cve")
+def resolve_cve(id: str) -> dict:
     """
     Manual mode: given a CVE ID, find the GitHub repo, fix commit, and metadata.
     Returns a ResolvedCVE that can be reviewed before import.
     """
-    resolved = coordinator.cve_resolver.resolve(cve_id)
+    resolved = coordinator.cve_resolver.resolve(id)
     if not resolved:
-        raise HTTPException(404, f"Could not resolve {cve_id}")
+        raise HTTPException(404, f"Could not resolve {id}")
     return resolved.model_dump()
 
 @app.post("/datasets/import-cve", status_code=201)
-def import_cve(req: "CVEImportRequest") -> dict:
-    """
-    Import a CVE as a dataset. Two modes:
-    - Provide only cve_id: framework resolves everything automatically
-    - Provide full CVEImportSpec: use exact repo/commit/metadata provided
-    """
-    if req.spec:
-        labels = coordinator.cve_importer.import_from_spec(req.spec)
-    else:
-        labels = coordinator.cve_importer.import_from_id(req.cve_id, req.dataset_name)
-    return {"dataset_name": req.dataset_name or req.cve_id, "labels_created": len(labels)}
-
-class CVEImportRequest(BaseModel):
-    cve_id: str                          # always required
-    dataset_name: str | None = None      # auto-generated if omitted
-    spec: CVEImportSpec | None = None    # provide for full-spec mode, omit for auto-resolve
+def import_cve(spec: dict) -> dict:
+    """Import a CVE-patched repo as a ground truth dataset."""
+    labels = coordinator.import_cve(spec)
+    return {"labels_created": len(labels)}
 ```
 
 #### Workflow
@@ -2300,7 +2288,7 @@ class DiffDatasetGenerator:
         return labels
 ```
 
-This is triggered via `POST /datasets/{name}/generate-diff` on the coordinator.
+`DiffDatasetGenerator` is invoked programmatically (there is no HTTP endpoint for it). Callers instantiate it directly, passing a `VulnInjector` and the datasets root path, then call `generate()`.
 
 ---
 
@@ -2708,7 +2696,7 @@ If a dataset has no `diff_spec.yaml`, the runner skips `DIFF_REVIEW` for that da
 
 ## 8. Verification Pass
 
-The verification pass is an optional pipeline stage that sits between strategy output and evaluation. It uses the same model (or optionally a different one) to check each candidate finding against the actual source code.
+The verification pass is an optional pipeline stage that sits between strategy output and evaluation. It reuses the same model instance that ran the scan to check each candidate finding against the actual source code.
 
 ### 8.1 LLMVerifier
 
@@ -2750,12 +2738,19 @@ Verify the following {len(candidates)} candidate security findings:
 Use your tools to read the source code and verify each finding.
 {VERIFICATION_PROMPT}
 """
+        input_before = sum(r.input_tokens for r in model.token_log)
+        output_before = sum(r.output_tokens for r in model.token_log)
+
         raw_output = run_agentic_loop(
             model, tools,
             system_prompt="You are a precise security finding verifier.",
             initial_user_message=user_message,
             max_turns=40,
         )
+
+        input_after = sum(r.input_tokens for r in model.token_log)
+        output_after = sum(r.output_tokens for r in model.token_log)
+        verification_tokens = (input_after - input_before) + (output_after - output_before)
 
         decisions = self._parse_verification_output(raw_output)
 
@@ -2797,7 +2792,7 @@ Use your tools to read the source code and verify each finding.
             rejected=rejected,
             uncertain=uncertain,
             total_candidates=len(candidates),
-            verification_tokens=model.last_call_tokens,
+            verification_tokens=verification_tokens,
         )
 ```
 
@@ -2812,29 +2807,23 @@ Verification is itself a testable variable. By running the same strategy with an
 
 The `findings_pre_verification` field in `RunResult` preserves the pre-verification state so these comparisons are possible.
 
-### 8.3 Cross-Model Verification
+### 8.3 Worker Integration
 
-By default the verification pass uses the same model as the strategy. The optional `verifier_model_id` field on `ExperimentRun` enables cross-model verification — e.g., Claude verifying GPT-4o's findings.
-
-This tests whether a different model's biases can catch false positives that the original model would confirm (since models tend to "agree with themselves"). The worker creates a separate `ModelProvider` for verification:
+The worker invokes verification using the same `model` instance that ran the strategy — no separate model is created. The relevant section of `ExperimentWorker.run()`:
 
 ```python
 # In ExperimentWorker.run():
 if run.verification_variant == VerificationVariant.WITH_VERIFICATION:
-    if run.verifier_model_id and run.verifier_model_id != run.model_id:
-        verifier_model = ModelProviderFactory().create(
-            run.effective_verifier_model, run.model_config
-        )
-    else:
-        verifier_model = model  # same model
-
     findings_pre_verification = list(candidates)
-    verification_result = LLMVerifier().verify(
-        candidates, target, verifier_model, tools
-    )
+    verifier = LLMVerifier()
+    verification_result = verifier.verify(candidates, target, model, tools)
+    candidates = [
+        vf.finding
+        for vf in verification_result.verified + verification_result.uncertain
+    ]
 ```
 
-Cross-model verification is set at the matrix level (`verifier_model_id` in `ExperimentMatrix`) and applies to all runs where `verification_variant=WITH_VERIFICATION`. To test multiple verifier models, run separate experiments.
+Because the verifier shares the model's `token_log`, the `verification_tokens` count in `VerificationResult` is computed as the delta in cumulative input and output tokens across that log before and after the verification loop — giving an accurate per-stage cost breakdown even within a single model session.
 
 ---
 
