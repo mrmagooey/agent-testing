@@ -3230,11 +3230,11 @@ This updates `run_result.json` in shared storage and recomputes metrics.
 
 ## Comparative Matrix
 
-| Model | Strategy | Tools | Profile | Verif | Prec | Recall | F1 | FPR | TP | FP | FN | Ev:Strong | Cost | Duration |
-|-------|----------|-------|---------|-------|------|--------|----|-----|----|----|----|-----------|------|----------|
-| gpt-4o | single_agent | with | default | none | 0.73 | 0.81 | 0.77 | 0.12 | 13 | 5 | 3 | 9/13 | $18.40 | 4m22s |
-| gpt-4o | single_agent | with | default | verif | 0.87 | 0.75 | 0.81 | 0.06 | 12 | 2 | 4 | 10/12 | $24.10 | 6m05s |
-| ...   | ...          | ...  | ...     | ...   | ...  | ...    | ... | ... | .. | .. | .. | ... | ... | ... |
+| Model | Strategy | Tools | Profile | Verif | Prec | Recall | F1 | FPR | TP | FP | FN | Ev:Strong | ext-{ext1} | ... | Cost | Duration |
+|-------|----------|-------|---------|-------|------|--------|----|-----|----|----|----|-----------|------------|-----|------|----------|
+| gpt-4o | single_agent | with | default | none | 0.73 | 0.81 | 0.77 | 0.12 | 13 | 5 | 3 | 9/13 | yes | ... | $18.40 | 4m22s |
+| gpt-4o | single_agent | with | default | verif | 0.87 | 0.75 | 0.81 | 0.06 | 12 | 2 | 4 | 10/12 | no | ... | $24.10 | 6m05s |
+| ...   | ...          | ...  | ...     | ...   | ...  | ...    | ... | ... | .. | .. | .. | ... | ... | ... | ... | ... |
 
 ## Analysis by Dimension
 
@@ -3244,13 +3244,16 @@ This updates `run_result.json` in shared storage and recomputes metrics.
 ### Strategy Comparison (averaged across other dimensions)
 ...
 
-### Tool Access Impact (paired: with vs without, same model+strategy+profile+verification)
+### Tool Access Impact
 ...
 
-### Review Profile Impact (paired: profile X vs default, same model+strategy+tools+verification)
+### Review Profile Impact
 ...
 
-### Verification Impact (paired: with vs without, same model+strategy+tools+profile)
+### Verification Impact
+...
+
+### Tool Extension Impact
 ...
 
 ### Evidence Quality by Model
@@ -3281,6 +3284,8 @@ This updates `run_result.json` in shared storage and recomputes metrics.
 ### Unlabeled Real Vulnerabilities Discovered
 ...
 ```
+
+The `ext-{ext.value}` columns in the Comparative Matrix are inserted dynamically at render time — one column per `ToolExtension` value that appears in at least one run in the experiment, positioned between `Ev:Strong` and `Cost`. When no extensions are active the columns are omitted entirely, keeping output byte-identical to pre-extension runs. Each cell shows `yes` or `no` for that specific run. Both `### Tool Access Impact` and `### Tool Extension Impact` subsections are rendered by the same `_dimension_table()` averaging helper; neither uses pairing logic.
 
 ### 10.3 JSON Report Schema
 
@@ -3326,12 +3331,19 @@ This updates `run_result.json` in shared storage and recomputes metrics.
       "findings": [ "..." ]
     }
   ],
+  "findings": [
+    {
+      "run_id": "...",
+      "..."
+    }
+  ],
   "dimension_analysis": {
     "by_model": {},
     "by_strategy": {},
     "tool_access_impact": {},
     "review_profile_impact": {},
     "verification_impact": {},
+    "tool_extension_impact": {},
     "evidence_quality_by_model": {}
   },
   "cost_analysis": {
@@ -3346,58 +3358,56 @@ This updates `run_result.json` in shared storage and recomputes metrics.
 
 ## 11. Cost Modeling
 
-### 11.1 Pricing Configuration
+### 11.1 Pricing Architecture — Three-Tier Resolution
+
+`CostCalculator.price_per_token()` resolves pricing through three tiers in order, stopping at the first hit:
+
+**Tier 1 — `pricing.yaml` override** (`config/pricing.yaml`, loaded via `PricingConfig`)  
+An explicit override list. List a model here *only* when LiteLLM's bundled pricing is missing, stale, or wrong. Entries use USD per million tokens. Current contents:
 
 ```yaml
-# config/pricing.yaml
-
-# Prices in USD per million tokens. Update as provider pricing changes.
+# Override layer for litellm.model_cost. The coordinator falls back to
+# litellm.model_cost[model_id] when an entry is absent here, so list a model
+# ONLY when LiteLLM's pricing is missing, stale, or wrong.
 models:
   gpt-4o:
-    input_per_million: 2.50
-    output_per_million: 10.00
+    input_per_million: 5.00
+    output_per_million: 15.00
 
   claude-opus-4:
     input_per_million: 15.00
     output_per_million: 75.00
 
   gemini-2.0-pro:
-    input_per_million: 1.25
-    output_per_million: 10.00
+    input_per_million: 3.50
+    output_per_million: 10.50
 
   mistral-large:
-    input_per_million: 2.00
-    output_per_million: 6.00
+    input_per_million: 4.00
+    output_per_million: 12.00
 
   command-r-plus:
-    input_per_million: 2.50
-    output_per_million: 10.00
+    input_per_million: 3.00
+    output_per_million: 15.00
 ```
+
+**Tier 2 — `CatalogPricingView` from probe metadata** (`src/sec_review_framework/cost/pricing_view.py`)  
+When a model is absent from `pricing.yaml`, `CostCalculator` consults an optional `PricingView` (typically `CatalogPricingView`) backed by the live `ProviderCatalog` snapshots populated by probes (e.g. OpenRouter). The view searches each snapshot's `ModelMetadata.pricing` dict, accepting keys `"prompt"`/`"completion"` (OpenRouter canonical) or `"input"`/`"output"`. Values may be strings or floats (USD per token). Returns `None` on any parse failure, which causes fall-through to tier 3.
+
+**Tier 3 — `litellm.model_cost` fallback** (`litellm` package, bundled pricing table)  
+The broadest coverage tier. `_from_model_cost()` reads `litellm.model_cost[model_id]` for `input_cost_per_token` and `output_cost_per_token` (already USD per token, no conversion needed). Returns `None` when either field is absent or non-numeric.
+
+If all three tiers miss, cost is recorded as `$0.00` and a warning is logged.
 
 ### 11.2 CostCalculator
 
-```python
-@dataclass
-class ModelPricing:
-    input_per_million: float
-    output_per_million: float
+`CostCalculator` (`src/sec_review_framework/cost/calculator.py`) accepts a preloaded `pricing: dict[str, ModelPricing]` (tier-1 data) and an optional `pricing_view: PricingView | None` (tier-2 interface). `CostCalculator.from_config()` loads tier-1 from `config/pricing.yaml`; the coordinator injects a `CatalogPricingView` instance for tier-2 at startup.
 
-class CostCalculator:
-    def __init__(self, pricing: dict[str, ModelPricing]):
-        self.pricing = pricing
+Key methods:
 
-    def compute(self, model_id: str, input_tokens: int, output_tokens: int) -> float:
-        p = self.pricing.get(model_id)
-        if p is None:
-            return 0.0  # unknown model — log warning, don't crash
-        return (input_tokens / 1_000_000 * p.input_per_million
-                + output_tokens / 1_000_000 * p.output_per_million)
-
-    def cost_per_true_positive(self, cost: float, true_positives: int) -> float | None:
-        if true_positives == 0:
-            return None
-        return cost / true_positives
-```
+- `price_per_token(model_id)` — runs the three-tier lookup, returns `(input_per_token, output_per_token)` in USD.
+- `compute(model_id, input_tokens, output_tokens)` — multiplies token counts by per-token rates; returns `0.0` for unknown models (logs warning, does not raise).
+- `cost_per_true_positive(cost, true_positives)` — the key efficiency metric; returns `None` when `true_positives == 0` to signal infinite cost rather than crashing.
 
 ### 11.3 Why Cost Matters
 
