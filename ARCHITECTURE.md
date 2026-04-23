@@ -4024,237 +4024,109 @@ All interaction happens through the coordinator's HTTP API — there is no CLI. 
 
 ### 15.2 Container Images
 
-Two images, built from the same codebase:
+Three images, all built from the same codebase. All runtime stages use `python:3.14-slim`.
 
-**Dockerfile.worker**
+**Dockerfile.coordinator** — two-stage build.
 
-```dockerfile
-FROM python:3.12-slim
+- Stage 1 (`node:22-slim AS frontend-build`): installs JS dependencies, runs `npm run build`, producing `/frontend/dist`.
+- Stage 2 (`python:3.14-slim`): installs the `.[coordinator]` extras (FastAPI, uvicorn, kubernetes client, prometheus-client) using a stub source tree for layer caching, then reinstalls the real package, then copies the built frontend assets from stage 1 into `/app/frontend/dist`. Sets `FRONTEND_DIST_DIR` and exposes port 8080.
+  - Entrypoint: `uvicorn sec_review_framework.coordinator:app --host 0.0.0.0 --port 8080`
 
-# Install Semgrep
-RUN pip install semgrep && semgrep --version
+**Dockerfile.worker** — two-stage build with LSP toolchain support.
 
-# Install framework
-COPY pyproject.toml .
-COPY src/ src/
-RUN pip install --no-cache-dir .
+- Stage 1 (`golang:1.24-alpine AS gopls-builder`): compiles gopls from source; the Go toolchain is not carried forward.
+- Stage 2 (`python:3.14-slim`): installs system packages for the LSP extension (gcc/g++/make for C extensions, clangd, nodejs/npm), then npm-installs pyright, typescript-language-server, and typescript at pinned versions. Copies the `gopls` binary from stage 1. Downloads the `rust-analyzer` pre-compiled binary with SHA-256 verification. Installs the `.[worker]` Python extras (semgrep, tree-sitter, etc.) using the same stub-source caching pattern.
+  - Estimated additional image size from LSP tooling: ~400–600 MB.
+  - Entrypoint: `python -m sec_review_framework.worker`
 
-# Download offline Semgrep rules (no cloud dependency at runtime)
-RUN semgrep --config p/owasp-top-ten --dry-run /dev/null 2>/dev/null || true
+**Dockerfile.dataset-builder** — single-stage (`python:3.14-slim`).
 
-ENTRYPOINT ["python", "-m", "sec_review_framework.worker"]
+Installs `git` (for CVE repo cloning), then installs the base framework package using the stub-source caching pattern. DevDocs docsets are NOT baked into the image; they are downloaded at Job execution time by the `devdocs-sync` Helm Job (see §15.8) onto the shared PVC.
+- Entrypoint: `python -m sec_review_framework.ground_truth.cve_importer`
+
+### 15.3 Helm Chart
+
+All Kubernetes resources are managed by the Helm chart at `helm/sec-review/` (chart name `sec-review`, version `0.1.0`). There is no raw `k8s/` directory. The canonical install commands are:
+
+```bash
+# Minikube (local dev)
+helm install sec-review ./helm/sec-review \
+  --namespace sec-review --create-namespace \
+  --values ./helm/sec-review/values-minikube.yaml \
+  --set-string secrets.apiKeys.openrouter=$OPENROUTER_TEST_KEY
+
+# Production
+helm upgrade --install sec-review ./helm/sec-review \
+  --namespace sec-review --create-namespace \
+  --values ./helm/sec-review/values-prod.yaml
+
+# kind / CI e2e
+helm upgrade --install sec-review-e2e ./helm/sec-review \
+  --namespace sec-review-e2e --create-namespace \
+  --values ./helm/sec-review/values-e2e.yaml \
+  --set image.coordinator.tag=e2e \
+  --set image.worker.tag=e2e \
+  --set-string secrets.apiKeys.openrouter=$OPENROUTER_TEST_KEY
 ```
 
-**Dockerfile.coordinator**
+**Templates** (`helm/sec-review/templates/`):
 
-```dockerfile
-FROM python:3.12-slim
+| Template | Kind | Notes |
+|---|---|---|
+| `coordinator-deployment.yaml` | Deployment | Single-replica coordinator; injects tool-extension flags and provider-probe config as env vars (see §15.3.1) |
+| `coordinator-service.yaml` | Service | ClusterIP on port 8080; NodePort in minikube |
+| `shared-pvc.yaml` | PersistentVolumeClaim | Created unless `storage.existingClaim` is set |
+| `secrets.yaml` | Secret | LLM API keys + optional AWS credentials; skipped when `secrets.create=false` |
+| `serviceaccount.yaml` | ServiceAccount | `coordinator-sa` |
+| `rbac.yaml` | Role + RoleBinding | Jobs CRUD, Pods/log get |
+| `network-policy.yaml` | NetworkPolicy | Worker egress: DNS + HTTPS to `networkPolicy.worker.llmEgressCidrs` + NFS |
+| `network-policy-dataset-builder.yaml` | NetworkPolicy | Dataset-builder egress: DNS + GitHub CIDRs + DevDocs CIDRs + NFS |
+| `experiment-config.yaml` | ConfigMap | Mounts `config/*.yaml` and `config/prompts/*` into `/app/config` via a `files/` symlink |
+| `servicemonitor.yaml` | ServiceMonitor | Prometheus Operator; enabled via `serviceMonitor.enabled` |
+| `fluentd-config.yaml` | ConfigMap | Fluentd config in the `logging` namespace; enabled via `fluentd.enabled` |
+| `gatekeeper-constraint.yaml` | ConstraintTemplate + SecReviewJobImage | OPA policy restricting Job images; enabled via `gatekeeper.enabled` |
+| `devdocs-sync-job.yaml` | Job | Post-install/upgrade hook; syncs DevDocs docsets onto the shared PVC; enabled via `workerTools.devdocs.enabled` |
+| `ingress.yaml` | Ingress | Optional external access for coordinator; disabled by default (`ingress.enabled=false`) |
+| `_helpers.tpl` | — | Standard Helm helper templates: `sec-review.fullname`, `sec-review.labels`, `sec-review.coordinatorImage`, `sec-review.gatekeeperAllowedImages`, etc. |
 
-COPY pyproject.toml .
-COPY src/ src/
-RUN pip install --no-cache-dir ".[coordinator]"
+**Values overlay files:**
 
-# coordinator extras: fastapi, uvicorn, kubernetes, prometheus-client
+- `values-minikube.yaml` — Local development on Minikube. Sets `pullPolicy: Never` (images loaded from local Docker daemon), `storage.accessMode: ReadWriteOnce`, coordinator service type `NodePort`, enables the Nginx ingress with a catch-all host, and disables networkPolicy, serviceMonitor, gatekeeper, fluentd, and devdocs sync (features not available on stock Minikube).
+- `values-prod.yaml` — Production example. Sets versioned image references (e.g. `ghcr.io/myorg/sec-review/coordinator:v1.0.0`), `ReadWriteMany` EFS storage, `secrets.create=false` (secrets managed externally), enables all observability and policy features, and shows how to pin Gatekeeper allowed-image digests.
+- `values-e2e.yaml` — kind cluster CI. Uses `pullPolicy: IfNotPresent` (images loaded via `kind load docker-image`), minimal resource requests to fit on a GitHub-hosted runner, no ingress, no network policies, no Prometheus/Gatekeeper/Fluentd, and tree-sitter extension only (LSP and devdocs disabled to keep CI fast).
 
-EXPOSE 8080
-ENTRYPOINT ["uvicorn", "sec_review_framework.coordinator:app", "--host", "0.0.0.0", "--port", "8080"]
-```
+#### 15.3.1 Coordinator Deployment
 
-### 15.3 Kubernetes Manifests
-
-**Namespace and storage**
+`helm/sec-review/templates/coordinator-deployment.yaml` renders a single-replica Deployment. Key env vars injected at deploy time (shown as their Helm source expressions):
 
 ```yaml
-# k8s/namespace.yaml
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: sec-review
----
-# k8s/shared-pvc.yaml
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: sec-review-data
-  namespace: sec-review
-spec:
-  accessModes:
-    - ReadWriteMany          # NFS/EFS — workers write, coordinator reads
-  resources:
-    requests:
-      storage: 50Gi
-  storageClassName: efs-sc   # adjust for your cluster
+- name: STORAGE_ROOT
+  value: {{ .Values.coordinator.storageRoot }}       # default: /data
+- name: WORKER_IMAGE
+  value: {{ include "sec-review.workerImage" . }}    # e.g. sec-review-worker:latest
+- name: NAMESPACE
+  value: {{ .Release.Namespace }}
+- name: TOOL_EXT_LSP_AVAILABLE
+  value: {{ .Values.workerTools.lsp.enabled | toString }}
+- name: TOOL_EXT_TREE_SITTER_AVAILABLE
+  value: {{ .Values.workerTools.treeSitter.enabled | toString }}
+- name: TOOL_EXT_DEVDOCS_AVAILABLE
+  value: {{ .Values.workerTools.devdocs.enabled | toString }}
+- name: PROVIDER_PROBE_ENABLED
+  value: {{ .Values.providerProbe.enabled | toString }}
 ```
 
-**Coordinator Deployment**
+When `coordinator.imageDigest` is set, the pod template gains a `sec-review.io/coordinator-image-digest` annotation — this forces a rollout when the image changes under a floating tag (e.g. `:latest`). The Makefile populates this automatically on `helm-install-minikube`.
 
-```yaml
-# k8s/coordinator-deployment.yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: coordinator
-  namespace: sec-review
-  labels:
-    app: sec-review-coordinator
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: sec-review-coordinator
-  template:
-    metadata:
-      labels:
-        app: sec-review-coordinator
-    spec:
-      serviceAccountName: coordinator-sa   # needs Job create/list/delete permissions
-      containers:
-        - name: coordinator
-          image: sec-review-coordinator:latest
-          ports:
-            - containerPort: 8080
-          volumeMounts:
-            - name: shared-data
-              mountPath: /data
-            - name: config
-              mountPath: /app/config
-          env:
-            - name: STORAGE_ROOT
-              value: /data
-            - name: WORKER_IMAGE
-              value: sec-review-worker:latest
-            - name: NAMESPACE
-              value: sec-review
-          resources:
-            requests:
-              cpu: 250m
-              memory: 512Mi
-            limits:
-              cpu: 1000m
-              memory: 1Gi
-      volumes:
-        - name: shared-data
-          persistentVolumeClaim:
-            claimName: sec-review-data
-        - name: config
-          configMap:
-            name: experiment-config
----
-# k8s/coordinator-service.yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: coordinator
-  namespace: sec-review
-  labels:
-    app: sec-review-coordinator
-spec:
-  selector:
-    app: sec-review-coordinator
-  ports:
-    - port: 8080
-      targetPort: 8080
-```
+The coordinator mounts the shared PVC at `storageRoot` and the `experiment-config` ConfigMap at `/app/config`. API keys are loaded via `envFrom.secretRef` when `secrets.create=true`.
 
-**Secrets**
+**Network Policy — Worker Egress**
 
-```yaml
-# k8s/secrets.yaml
-# Placeholder — in production, use sealed-secrets, external-secrets-operator,
-# or AWS Secrets Manager CSI driver.
-apiVersion: v1
-kind: Secret
-metadata:
-  name: llm-api-keys
-  namespace: sec-review
-type: Opaque
-stringData:
-  OPENAI_API_KEY: "..."
-  ANTHROPIC_API_KEY: "..."
-  GEMINI_API_KEY: "..."
-  MISTRAL_API_KEY: "..."
-  COHERE_API_KEY: "..."
-```
-
-**Network Policy — Worker Egress Restriction**
-
-```yaml
-# k8s/network-policy.yaml
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: worker-egress
-  namespace: sec-review
-spec:
-  podSelector:
-    matchLabels:
-      app: sec-review-worker
-  policyTypes:
-    - Egress
-  egress:
-    # Allow DNS resolution
-    - to: []
-      ports:
-        - protocol: UDP
-          port: 53
-        - protocol: TCP
-          port: 53
-    # Allow HTTPS to LLM provider endpoints only
-    - to:
-        - ipBlock:
-            cidr: 0.0.0.0/0        # narrowed by ports; for tighter control,
-                                     # resolve provider IPs and list explicitly
-      ports:
-        - protocol: TCP
-          port: 443
-    # Allow NFS to shared storage
-    - to:
-        - podSelector: {}           # within namespace
-      ports:
-        - protocol: TCP
-          port: 2049
-```
-
-For tighter egress control, replace the `0.0.0.0/0` CIDR with explicit IP ranges for each LLM provider. This requires maintaining the IP list as providers change, but prevents exfiltration to arbitrary HTTPS endpoints.
+Worker pods (labelled `app: sec-review-worker`) are governed by `network-policy.yaml`. Egress is limited to DNS (UDP/TCP 53), HTTPS to `networkPolicy.worker.llmEgressCidrs` (default `0.0.0.0/0`; narrow to specific provider CIDRs for tighter control), and NFS on `networkPolicy.nfsPort` within the namespace. Requires a CNI with NetworkPolicy enforcement (Calico, Cilium); disabled in `values-minikube.yaml` and `values-e2e.yaml`.
 
 **RBAC — Coordinator Service Account**
 
-```yaml
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: coordinator-sa
-  namespace: sec-review
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: job-manager
-  namespace: sec-review
-rules:
-  - apiGroups: ["batch"]
-    resources: ["jobs"]
-    verbs: ["create", "get", "list", "watch", "delete"]
-  - apiGroups: [""]
-    resources: ["pods"]
-    verbs: ["get", "list", "watch"]     # for job status
-  - apiGroups: [""]
-    resources: ["pods/log"]
-    verbs: ["get"]                      # for debugging failed workers
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: coordinator-job-manager
-  namespace: sec-review
-subjects:
-  - kind: ServiceAccount
-    name: coordinator-sa
-roleRef:
-  kind: Role
-  name: job-manager
-  apiGroup: rbac.authorization.k8s.io
-```
+`rbac.yaml` creates a Role (`job-manager`) granting Jobs CRUD and Pods/log get in the release namespace, bound to `coordinator-sa` via a RoleBinding. Enabled when `rbac.create=true` (default). For EKS, add the IRSA annotation under `serviceAccount.annotations`.
 
 ### 15.4 Observability
 
@@ -4295,26 +4167,28 @@ active_jobs_by_model = Gauge("sec_review_active_jobs", "Currently running jobs",
 pending_jobs = Gauge("sec_review_pending_jobs", "Jobs waiting to be scheduled")
 ```
 
-**ServiceMonitor** for Prometheus Operator:
+**ServiceMonitor** for Prometheus Operator — rendered by `helm/sec-review/templates/servicemonitor.yaml` when `serviceMonitor.enabled=true`:
 
 ```yaml
-# k8s/servicemonitor.yaml
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
-  name: sec-review-coordinator
-  namespace: sec-review
+  name: <release>-coordinator
+  namespace: <release-namespace>
 spec:
   selector:
     matchLabels:
-      app: sec-review-coordinator
+      app.kubernetes.io/component: coordinator
+      # ... standard sec-review.coordinator.selectorLabels
   endpoints:
-    - port: "8080"
-      path: /metrics
-      interval: 15s
+    - port: http
+      path: /metrics        # values: serviceMonitor.path
+      interval: 15s         # values: serviceMonitor.interval
 ```
 
-**Grafana Dashboard** — pre-built dashboard (`k8s/grafana-dashboard.json`) with panels for:
+The scrape interval and path are configurable via `serviceMonitor.interval` and `serviceMonitor.path` in `values.yaml`. Requires Prometheus Operator CRDs; disabled in `values-minikube.yaml` and `values-e2e.yaml`.
+
+**Grafana Dashboard** — pre-built dashboard (`helm/sec-review/grafana-dashboard.json`) with panels for:
 
 - Experiment progress (runs completed / total over time)
 - Active jobs by model (stacked area)
@@ -4329,8 +4203,8 @@ spec:
 All interaction is via the coordinator's HTTP API. Access via `kubectl port-forward`, an Ingress, or any in-cluster client.
 
 ```bash
-# Port-forward for local access
-kubectl port-forward -n sec-review svc/coordinator 8080:8080
+# Port-forward for local access (release name `sec-review` → service name `sec-review-coordinator`)
+kubectl port-forward -n sec-review svc/sec-review-coordinator 8080:8080
 COORD=http://localhost:8080
 ```
 
@@ -4444,46 +4318,18 @@ Worker pods are ephemeral — once a Job completes and the pod is garbage-collec
 
 **Layer 1: Conversation transcripts to shared storage.** Each worker writes `conversation.jsonl` incrementally during the run — one JSON line per message exchange. Survives OOM kills and evictions (partial transcripts are still useful). Written to the same output directory as `run_result.json`.
 
-**Layer 2: Structured stdout to Loki via Fluentd DaemonSet.** Workers emit structured JSON to stdout with `experiment_id` and `run_id` fields. A Fluentd DaemonSet on each node tails `/var/log/pods/sec-review_*/*/*.log`, filters for `app=sec-review-worker`, and forwards to Loki.
+**Layer 2: Structured stdout to Loki via Fluentd DaemonSet.** Workers emit structured JSON to stdout with `experiment_id` and `run_id` fields. A Fluentd DaemonSet on each node tails pod logs for the release namespace, filters for `app=sec-review-worker`, and forwards to Loki.
 
-```yaml
-# Fluentd ConfigMap (excerpt)
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: fluentd-worker-config
-  namespace: logging
-data:
-  fluent.conf: |
-    <source>
-      @type tail
-      path /var/log/pods/sec-review_*/*/*.log
-      pos_file /var/log/fluentd-worker.pos
-      tag kubernetes.worker.*
-      <parse>
-        @type cri
-      </parse>
-    </source>
+The Fluentd ConfigMap is rendered by `helm/sec-review/templates/fluentd-config.yaml` when `fluentd.enabled=true`. It targets the `fluentd.namespace` (default `logging`) — an external namespace managed separately — and uses `fluentd.lokiUrl`, `fluentd.configMapName`, and `fluentd.flushIntervalSeconds` from `values.yaml`. The log path pattern uses `{{ .Release.Namespace }}_*` so the config is namespace-scoped to the release. Key values:
 
-    <filter kubernetes.worker.**>
-      @type grep
-      <regexp>
-        key $.kubernetes.labels.app
-        pattern ^sec-review-worker$
-      </regexp>
-    </filter>
+| Key | Default |
+|---|---|
+| `fluentd.namespace` | `logging` |
+| `fluentd.lokiUrl` | `http://loki.monitoring.svc.cluster.local:3100` |
+| `fluentd.flushIntervalSeconds` | `5` |
+| `fluentd.configMapName` | `fluentd-worker-config` |
 
-    <match kubernetes.worker.**>
-      @type loki
-      url http://loki.monitoring.svc.cluster.local:3100
-      flush_interval 5s
-      <label>
-        app $.kubernetes.labels.app
-        experiment_id $.kubernetes.labels.experiment_id
-        run_id $.kubernetes.labels.run_id
-      </label>
-    </match>
-```
+Disabled in `values-minikube.yaml` and `values-e2e.yaml` (no `logging` namespace or Loki in those environments).
 
 Worker pods must carry `experiment_id` and `run_id` as pod labels (already set by the coordinator's Job template).
 
@@ -4491,104 +4337,57 @@ Worker pods must carry `experiment_id` and `run_id` as pod labels (already set b
 
 CVE imports require cloning repos from GitHub, but worker pods have egress locked to LLM provider endpoints. A separate `dataset-builder` Job type has its own NetworkPolicy permitting GitHub access.
 
-```yaml
-# k8s/network-policy-dataset-builder.yaml
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: dataset-builder-egress
-  namespace: sec-review
-spec:
-  podSelector:
-    matchLabels:
-      role: dataset-builder
-  policyTypes:
-    - Egress
-  egress:
-    # GitHub HTTPS
-    - ports:
-        - protocol: TCP
-          port: 443
-      to:
-        - ipBlock:
-            cidr: 140.82.112.0/20   # github.com (verify current ranges)
-        - ipBlock:
-            cidr: 192.30.252.0/22
-    # DNS
-    - ports:
-        - protocol: UDP
-          port: 53
-    # NFS/EFS
-    - ports:
-        - protocol: TCP
-          port: 2049
-```
+The NetworkPolicy is rendered by `helm/sec-review/templates/network-policy-dataset-builder.yaml` when `networkPolicy.enabled=true`. It selects pods with `role: dataset-builder` and allows egress to:
 
-The coordinator creates `dataset-builder` Jobs when `POST /datasets/import-cve` is called. These jobs use a separate container image (`Dockerfile.dataset-builder`) with git installed, and mount the shared datasets volume read-write. Workers mount it read-only.
+- `networkPolicy.datasetBuilder.githubCidrs` on HTTPS/443 (defaults: `140.82.112.0/20`, `192.30.252.0/22`)
+- `networkPolicy.datasetBuilder.docsetsCidrs` on HTTPS/443 (defaults: `151.101.0.0/16`, `199.232.0.0/16` — Fastly CDN for documents.devdocs.io)
+- DNS (UDP/TCP 53)
+- NFS on `networkPolicy.nfsPort` (default 2049)
+
+The coordinator creates `dataset-builder` Jobs when `POST /datasets/import-cve` is called. These jobs use the `Dockerfile.dataset-builder` image (see §15.2) with git installed, and mount the shared datasets volume read-write. Workers mount it read-only.
+
+**DevDocs Sync Job** — `helm/sec-review/templates/devdocs-sync-job.yaml` renders a `batch/v1 Job` that runs as a Helm post-install/post-upgrade hook (weight 0) when `workerTools.devdocs.enabled=true`. It uses the `dataset-builder` image to run `python -m sec_review_framework.data.devdocs_sync`, downloading DevDocs JSON docsets (index.json + db.json) from documents.devdocs.io onto the shared PVC at `workerTools.devdocs.docsetsPath` (default `/data/devdocs`). The docset list is controlled by `workerTools.devdocs.docsets`. Subsequent runs are idempotent (files already present are skipped). The Job is retained for 1 hour after completion (`ttlSecondsAfterFinished: 3600`) so logs are inspectable. The hook is annotated with the SHA-256 of the docset list so Helm re-runs it when the list changes.
+
+Workers (at runtime) read the JSON files directly from the PVC — no network calls from worker pods to documentation servers.
 
 ### 15.9 RBAC Hardening
 
-The coordinator's ServiceAccount can create Jobs, but nothing prevents it from creating Jobs with arbitrary images. A Gatekeeper ConstraintTemplate restricts Jobs in the `sec-review` namespace to approved images only.
+The coordinator's ServiceAccount can create Jobs, but nothing prevents it from creating Jobs with arbitrary images. A Gatekeeper ConstraintTemplate restricts Jobs in the release namespace to approved images only.
+
+The ConstraintTemplate and Constraint are rendered by `helm/sec-review/templates/gatekeeper-constraint.yaml` when `gatekeeper.enabled=true`. The template defines the `SecReviewJobImage` CRD kind and an OPA Rego policy that checks every container and initContainer image in each admitted Job. The Constraint is scoped to the release namespace with `enforcementAction: deny`.
+
+The allowed-image list is controlled by `gatekeeper.allowedImages`. When left empty, the `sec-review.gatekeeperAllowedImages` helper template falls back to the current `image.worker` and `image.datasetBuilder` references from `values.yaml`. In production (`values-prod.yaml`), pin explicit digest-tagged references:
 
 ```yaml
-# k8s/gatekeeper-constraint.yaml
-apiVersion: templates.gatekeeper.sh/v1
-kind: ConstraintTemplate
-metadata:
-  name: secreviewjobimage
-spec:
-  crd:
-    spec:
-      names:
-        kind: SecReviewJobImage
-      validation:
-        openAPIV3Schema:
-          type: object
-          properties:
-            allowedImages:
-              type: array
-              items:
-                type: string
-  targets:
-    - target: admission.k8s.gatekeeper.sh
-      rego: |
-        package secreviewjobimage
-
-        violation[{"msg": msg}] {
-          input.review.kind.kind == "Job"
-          containers := array.concat(
-            object.get(input.review.object.spec.template.spec, "containers", []),
-            object.get(input.review.object.spec.template.spec, "initContainers", [])
-          )
-          container := containers[_]
-          image := container.image
-          not image_is_allowed(image)
-          msg := sprintf("Image %q not permitted in sec-review namespace", [image])
-        }
-
-        image_is_allowed(image) {
-          image == input.parameters.allowedImages[_]
-        }
----
-apiVersion: constraints.gatekeeper.sh/v1beta1
-kind: SecReviewJobImage
-metadata:
-  name: restrict-sec-review-job-images
-spec:
-  enforcementAction: deny
-  match:
-    kinds:
-      - apiGroups: ["batch"]
-        kinds: ["Job"]
-    namespaces:
-      - sec-review
-  parameters:
-    allowedImages:
-      - "ghcr.io/myorg/sec-review/worker:v1.0.0"
-      - "ghcr.io/myorg/sec-review/dataset-builder:v1.0.0"
+gatekeeper:
+  enabled: true
+  allowedImages:
+    - ghcr.io/myorg/sec-review/worker:v1.0.0
+    - ghcr.io/myorg/sec-review/dataset-builder:v1.0.0
 ```
 
+Disabled in `values-minikube.yaml` and `values-e2e.yaml` (Gatekeeper not installed in those environments).
+
 Defense-in-depth: namespace-scoped RBAC (limits what API objects the coordinator can touch) + Gatekeeper policy (limits what those objects may contain). Neither alone is sufficient.
+
+### 15.10 Values Configuration Surface
+
+Key `values.yaml` knobs beyond the ones already covered above:
+
+| Key | Description |
+|---|---|
+| `coordinator.imageDigest` | Opaque string embedded as a pod annotation. When set, forces a Deployment rollout even when the image tag has not changed (useful with floating `:latest` tags). Populated automatically by the Makefile on `helm-install-minikube`. |
+| `workerTools.treeSitter.enabled` | Toggles the TREE_SITTER MCP-backed tool extension. Coordinator injects `TOOL_EXT_TREE_SITTER_AVAILABLE` into the coordinator pod; surfaced via `GET /api/tool-extensions`. |
+| `workerTools.lsp.enabled` | Toggles the LSP MCP-backed tool extension (pyright, gopls, typescript-language-server, rust-analyzer, clangd). Coordinator injects `TOOL_EXT_LSP_AVAILABLE`. |
+| `workerTools.devdocs.enabled` | Toggles the DEVDOCS MCP-backed tool extension and the devdocs-sync post-upgrade Job. Coordinator injects `TOOL_EXT_DEVDOCS_AVAILABLE`. |
+| `providerProbe.enabled` / `providerProbe.ttlSeconds` / `providerProbe.maxStaleSeconds` | Controls live upstream model-catalog probing from the coordinator. TTL controls how often the probe refreshes; maxStale controls how long a stale snapshot is served before reporting `probe_status=failed`. |
+| `providerProbe.bedrock.enabled` / `providerProbe.bedrock.regions` | Enables AWS Bedrock model probing across listed regions. |
+| `providerEndpoints.localLlm.baseUrl` | Base URL for a self-hosted or LAN inference endpoint. Injected as `LOCAL_LLM_BASE_URL`; leave blank to disable local probing. |
+| `networkPolicy.datasetBuilder.docsetsCidrs` | CIDR ranges for DevDocs docset fetches from the dataset-builder NetworkPolicy. Defaults to Fastly CDN ranges; narrow or point at an internal mirror in production. |
+| `secrets.aws.enabled` / `secrets.aws.{accessKeyId,secretAccessKey,sessionToken,region}` | Injects AWS credentials for Bedrock as a Secret. Prefer IRSA (`serviceAccount.annotations`) in production. |
+| `secrets.baseUrls.openai` | Overrides the OpenAI-compatible base URL (e.g. for llama.cpp or other OpenAI-compatible local servers). |
+
+As noted in CLAUDE.md, `workerTools.{treeSitter,lsp,devdocs}.enabled` is the single control point for the three MCP-backed tool extensions — toggling here updates both the Helm-rendered env var (which the coordinator's `/api/tool-extensions` endpoint reads) and the devdocs-sync Job lifecycle. Disabling an extension does not remove its packages from the worker image.
 
 ---
 
