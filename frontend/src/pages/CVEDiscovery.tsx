@@ -115,7 +115,7 @@ export default function CVEDiscovery() {
             onClick={() => setActiveTab(t.key)}
             className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
               activeTab === t.key
-                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
+                ? 'border-amber-600 text-amber-600 dark:text-amber-400'
                 : 'border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
             }`}
           >
@@ -218,7 +218,7 @@ export default function CVEDiscovery() {
             <button
               type="submit"
               disabled={searching}
-              className="px-6 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium transition-colors disabled:opacity-50"
+              className="px-6 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-sm font-medium transition-colors disabled:opacity-50"
             >
               {searching ? 'Searching…' : 'Search CVEs'}
             </button>
@@ -251,7 +251,7 @@ export default function CVEDiscovery() {
               <button
                 onClick={handleResolve}
                 disabled={resolving || !cveId.trim()}
-                className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium transition-colors disabled:opacity-50"
+                className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-sm font-medium transition-colors disabled:opacity-50"
               >
                 {resolving ? 'Resolving…' : 'Resolve'}
               </button>

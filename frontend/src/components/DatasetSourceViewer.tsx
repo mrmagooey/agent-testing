@@ -176,7 +176,7 @@ export default function DatasetSourceViewer({
           </span>
           <button
             onClick={() => setForceLoad(true)}
-            className="ml-3 underline hover:no-underline focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:outline-none"
+            className="ml-3 underline hover:no-underline focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:outline-none"
           >
             Dismiss
           </button>

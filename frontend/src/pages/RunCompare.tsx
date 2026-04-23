@@ -68,20 +68,20 @@ function VennDiagram({ aOnly, overlap, bOnly }: { aOnly: number; overlap: number
   const w = 160, h = 80, r = 36, cx1 = 52, cx2 = 108, cy = 40
   return (
     <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} aria-label="Venn diagram">
-      <circle cx={cx1} cy={cy} r={r} fill="#6366f1" fillOpacity={0.25} stroke="#6366f1" strokeWidth={1.5} />
-      <circle cx={cx2} cy={cy} r={r} fill="#6366f1" fillOpacity={0.25} stroke="#6366f1" strokeWidth={1.5} />
+      <circle cx={cx1} cy={cy} r={r} fill="#f59e0b" fillOpacity={0.25} stroke="#f59e0b" strokeWidth={1.5} />
+      <circle cx={cx2} cy={cy} r={r} fill="#f59e0b" fillOpacity={0.25} stroke="#f59e0b" strokeWidth={1.5} />
       <text x={cx1 - r / 2 - 4} y={cy + 1} textAnchor="middle" dominantBaseline="middle"
-        className="fill-indigo-700 dark:fill-indigo-300" fontSize={13} fontWeight="bold">{aOnly}</text>
+        className="fill-amber-700 dark:fill-amber-300" fontSize={13} fontWeight="bold">{aOnly}</text>
       <text x={(cx1 + cx2) / 2} y={cy + 1} textAnchor="middle" dominantBaseline="middle"
-        className="fill-indigo-900 dark:fill-indigo-100" fontSize={12} fontWeight="bold">{overlap}</text>
+        className="fill-amber-900 dark:fill-amber-100" fontSize={12} fontWeight="bold">{overlap}</text>
       <text x={cx2 + r / 2 + 4} y={cy + 1} textAnchor="middle" dominantBaseline="middle"
-        className="fill-indigo-700 dark:fill-indigo-300" fontSize={13} fontWeight="bold">{bOnly}</text>
+        className="fill-amber-700 dark:fill-amber-300" fontSize={13} fontWeight="bold">{bOnly}</text>
       <text x={cx1 - r / 2 - 4} y={cy + 17} textAnchor="middle" dominantBaseline="middle"
-        className="fill-indigo-500 dark:fill-indigo-400" fontSize={8}>only A</text>
+        className="fill-amber-500 dark:fill-amber-400" fontSize={8}>only A</text>
       <text x={(cx1 + cx2) / 2} y={cy + 17} textAnchor="middle" dominantBaseline="middle"
-        className="fill-indigo-500 dark:fill-indigo-400" fontSize={8}>both</text>
+        className="fill-amber-500 dark:fill-amber-400" fontSize={8}>both</text>
       <text x={cx2 + r / 2 + 4} y={cy + 17} textAnchor="middle" dominantBaseline="middle"
-        className="fill-indigo-500 dark:fill-indigo-400" fontSize={8}>only B</text>
+        className="fill-amber-500 dark:fill-amber-400" fontSize={8}>only B</text>
     </svg>
   )
 }
@@ -182,29 +182,27 @@ export default function RunCompare() {
         Use it to see exactly what a model or strategy change caught or missed relative to a baseline.
       </PageDescription>
 
-      {/* Pickers — only shown on /compare (cross-experiment route) */}
-      {!isLegacyRoute && (
-        <Card>
-          <CardContent className="pt-6">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-              <RunPicker
-                label="Run A"
-                selectedExperiment={aExperiment}
-                selectedRun={aRun}
-                onExperimentChange={(v) => handlePickerChange('a_experiment', v)}
-                onRunChange={(v) => handlePickerChange('a_run', v)}
-              />
-              <RunPicker
-                label="Run B"
-                selectedExperiment={bExperiment}
-                selectedRun={bRun}
-                onExperimentChange={(v) => handlePickerChange('b_experiment', v)}
-                onRunChange={(v) => handlePickerChange('b_run', v)}
-              />
-            </div>
-          </CardContent>
-        </Card>
-      )}
+      {/* Pickers — always shown so users can select/change runs on any route */}
+      <Card>
+        <CardContent className="pt-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+            <RunPicker
+              label="Run A"
+              selectedExperiment={aExperiment}
+              selectedRun={aRun}
+              onExperimentChange={(v) => handlePickerChange('a_experiment', v)}
+              onRunChange={(v) => handlePickerChange('a_run', v)}
+            />
+            <RunPicker
+              label="Run B"
+              selectedExperiment={bExperiment}
+              selectedRun={bRun}
+              onExperimentChange={(v) => handlePickerChange('b_experiment', v)}
+              onRunChange={(v) => handlePickerChange('b_run', v)}
+            />
+          </div>
+        </CardContent>
+      </Card>
 
       {loading && (
         <div className="flex items-center justify-center h-32 text-gray-400">Loading comparison...</div>
@@ -242,7 +240,7 @@ export default function RunCompare() {
                   <dl className="space-y-1 text-sm">
                     {([
                       ['Experiment', run.experiment_name
-                        ? <Link to={`/experiments/${run.experiment_id}`} className="text-indigo-600 dark:text-indigo-400 hover:underline font-mono text-xs">{run.experiment_name}</Link>
+                        ? <Link to={`/experiments/${run.experiment_id}`} className="text-amber-600 dark:text-amber-400 hover:underline font-mono text-xs">{run.experiment_name}</Link>
                         : null],
                       ['Dataset', run.dataset || '—'],
                       ['Model', run.model],
@@ -276,7 +274,7 @@ export default function RunCompare() {
           </div>
 
           {/* Summary — Venn + cost delta */}
-          <div className="bg-indigo-50 dark:bg-indigo-950 rounded-lg px-5 py-4">
+          <div className="bg-amber-50 dark:bg-amber-950 rounded-lg px-5 py-4">
             <div className="flex flex-wrap items-center gap-6">
               <div className="shrink-0">
                 <VennDiagram
@@ -285,7 +283,7 @@ export default function RunCompare() {
                   bOnly={comparison.only_in_b.length}
                 />
               </div>
-              <div className="text-sm text-indigo-800 dark:text-indigo-200 space-y-1">
+              <div className="text-sm text-amber-800 dark:text-amber-200 space-y-1">
                 <p>Run A found <strong>{comparison.only_in_a.length}</strong> vulns that B missed.</p>
                 <p>Run B found <strong>{comparison.only_in_b.length}</strong> vulns that A missed.</p>
                 <p><strong>{comparison.found_by_both.length}</strong> found by both.</p>
@@ -293,7 +291,7 @@ export default function RunCompare() {
               {comparison.run_a.cost_usd !== undefined && comparison.run_b.cost_usd !== undefined && (() => {
                 const costDiff = comparison.run_b.cost_usd! - comparison.run_a.cost_usd!
                 return (
-                  <div className="ml-auto text-sm text-indigo-800 dark:text-indigo-200 text-right">
+                  <div className="ml-auto text-sm text-amber-800 dark:text-amber-200 text-right">
                     <p className="text-xs opacity-70 mb-1">Cost delta (B − A)</p>
                     <Badge
                       variant="outline"
@@ -340,7 +338,7 @@ export default function RunCompare() {
                           onClick={() => setActiveTab(t.key)}
                           className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px ${
                             activeTab === t.key
-                              ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
+                              ? 'border-amber-600 text-amber-600 dark:text-amber-400'
                               : 'border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
                           }`}
                         >

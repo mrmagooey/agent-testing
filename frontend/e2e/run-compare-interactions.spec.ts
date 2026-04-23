@@ -27,7 +27,7 @@ const FINDING_A_DESC = 'The file path parameter is not sanitized'
 const EMPTY_STATE = 'No findings in this category.'
 
 // Active-tab CSS class applied in RunCompare.tsx
-const ACTIVE_TAB_CLASS = 'border-indigo-600'
+const ACTIVE_TAB_CLASS = 'border-amber-600'
 
 test.describe('RunCompare tab switching', () => {
   test.beforeEach(async ({ page }) => {
@@ -38,7 +38,7 @@ test.describe('RunCompare tab switching', () => {
   test('"Found by Both" tab is active by default and shows shared findings', async ({ page }) => {
     const tabButton = page.getByRole('button', { name: TAB_BOTH })
     await expect(tabButton).toBeVisible()
-    // Active tab has the indigo bottom-border class
+    // Active tab has the amber bottom-border class
     await expect(tabButton).toHaveClass(new RegExp(ACTIVE_TAB_CLASS))
     // Content region shows the shared finding
     await expect(page.getByText(FINDING_BOTH_TITLE)).toBeVisible()

@@ -234,6 +234,110 @@ export async function mockApi(page: Page) {
       return json(route, templates)
     }
 
+    // --- Global Findings ---
+    if (path === '/findings' && method === 'GET') {
+      const q = url.searchParams.get('q') ?? ''
+      const limitParam = Number(url.searchParams.get('limit') ?? 50)
+      const offsetParam = Number(url.searchParams.get('offset') ?? 0)
+
+      const allItems = [
+        {
+          finding_id: 'find-001',
+          run_id: 'run-001-aaa',
+          experiment_id: 'aaaaaaaa-0001-0001-0001-000000000001',
+          title: 'SQL Injection in user login handler',
+          description: 'User-supplied input is concatenated directly into a SQL query without parameterization.',
+          vuln_class: 'sqli',
+          severity: 'critical',
+          match_status: 'tp',
+          file_path: 'src/auth/login.py',
+          line_start: 42,
+          line_end: 47,
+          recommendation: 'Use parameterized queries or an ORM to prevent SQL injection.',
+          evidence_quality: 'strong',
+          matched_label_id: 'label-001',
+          experiment_name: 'GPT-4o Zero-Shot April 2026',
+          model_id: 'gpt-4o',
+          strategy: 'zero_shot',
+          dataset_name: 'cve-2024-python',
+          created_at: '2026-04-17T08:15:00Z',
+          confidence: 0.94,
+          cwe_ids: ['CWE-89'],
+        },
+        {
+          finding_id: 'find-002',
+          run_id: 'run-001-aaa',
+          experiment_id: 'aaaaaaaa-0001-0001-0001-000000000001',
+          title: 'Reflected XSS in search results',
+          description: 'The search query parameter is reflected in the response without HTML encoding.',
+          vuln_class: 'xss',
+          severity: 'high',
+          match_status: 'fp',
+          file_path: 'src/search/results.py',
+          line_start: 88,
+          line_end: 92,
+          recommendation: 'Encode all user-supplied data before rendering in HTML context.',
+          evidence_quality: 'adequate',
+          matched_label_id: null,
+          experiment_name: 'GPT-4o Zero-Shot April 2026',
+          model_id: 'gpt-4o',
+          strategy: 'zero_shot',
+          dataset_name: 'cve-2024-python',
+          created_at: '2026-04-17T08:16:00Z',
+          confidence: 0.71,
+          cwe_ids: ['CWE-79'],
+        },
+        {
+          finding_id: 'find-003',
+          run_id: 'run-001-aaa',
+          experiment_id: 'aaaaaaaa-0001-0001-0001-000000000001',
+          title: 'Path traversal in file download endpoint',
+          description: 'The file path parameter is not sanitized, allowing traversal outside the allowed directory.',
+          vuln_class: 'path_traversal',
+          severity: 'high',
+          match_status: 'tp',
+          file_path: 'src/files/download.py',
+          line_start: 15,
+          line_end: 20,
+          recommendation: 'Validate and normalize file paths before use.',
+          evidence_quality: 'strong',
+          matched_label_id: 'label-003',
+          experiment_name: 'Claude 3.5 Sonnet Chain-of-Thought April 2026',
+          model_id: 'claude-3-5-sonnet-20241022',
+          strategy: 'chain_of_thought',
+          dataset_name: 'cve-2024-python',
+          created_at: '2026-04-17T09:00:00Z',
+          cwe_ids: ['CWE-22'],
+        },
+      ]
+
+      const filtered = q
+        ? allItems.filter(
+            (item) =>
+              item.title.toLowerCase().includes(q.toLowerCase()) ||
+              item.description.toLowerCase().includes(q.toLowerCase()) ||
+              item.vuln_class.toLowerCase().includes(q.toLowerCase()),
+          )
+        : allItems
+
+      const paginated = filtered.slice(offsetParam, offsetParam + limitParam)
+
+      return json(route, {
+        total: filtered.length,
+        limit: limitParam,
+        offset: offsetParam,
+        facets: {
+          vuln_class: { sqli: 1, xss: 1, path_traversal: 1 },
+          severity: { critical: 1, high: 2 },
+          match_status: { tp: 2, fp: 1 },
+          model_id: { 'gpt-4o': 2, 'claude-3-5-sonnet-20241022': 1 },
+          strategy: { zero_shot: 2, chain_of_thought: 1 },
+          dataset_name: { 'cve-2024-python': 3 },
+        },
+        items: paginated,
+      })
+    }
+
     // --- Trends ---
     if (path === '/trends' && method === 'GET') {
       const dataset = url.searchParams.get('dataset')

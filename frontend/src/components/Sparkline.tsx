@@ -39,7 +39,7 @@ function SparklineTooltip({
       <div className="text-gray-400">{date}</div>
       <div>
         F1{' '}
-        <span className="font-semibold text-indigo-300">{p.f1.toFixed(3)}</span>
+        <span className="font-semibold text-amber-300">{p.f1.toFixed(3)}</span>
       </div>
     </div>
   )
@@ -86,7 +86,7 @@ export default function Sparkline({ points, onPointClick }: SparklineProps) {
         <Line
           type="monotone"
           dataKey="f1"
-          stroke="#6366f1"
+          stroke="#f59e0b"
           strokeWidth={1.5}
           dot={false}
           isAnimationActive={false}
@@ -96,7 +96,7 @@ export default function Sparkline({ points, onPointClick }: SparklineProps) {
           x={lastPoint.experiment_id}
           y={lastPoint.f1}
           r={3}
-          fill="#6366f1"
+          fill="#f59e0b"
           stroke="#fff"
           strokeWidth={1}
           xAxisId={0}

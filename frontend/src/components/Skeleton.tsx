@@ -38,7 +38,7 @@ export function SkeletonTable({ rows = 5, cols = 4 }: { rows?: number; cols?: nu
 export function PageLoadingSpinner() {
   return (
     <div className="flex items-center justify-center h-64 text-gray-400 dark:text-gray-500">
-      <span className="inline-block h-6 w-6 rounded-full border-2 border-gray-300 dark:border-gray-600 border-t-indigo-500 animate-spin mr-3" />
+      <span className="inline-block h-6 w-6 rounded-full border-2 border-gray-300 dark:border-gray-600 border-t-amber-500 animate-spin mr-3" />
       Loading…
     </div>
   )

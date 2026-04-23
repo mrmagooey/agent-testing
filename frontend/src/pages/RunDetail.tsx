@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { useParams, useSearchParams, useLocation, Link } from 'react-router-dom'
 import { getRun, getFileContent, reclassifyFinding, type Run, type Finding, type ToolCall, type Message, type PromptSnapshot } from '../api/client'
 import { useExperiment } from '../hooks/useExperiment'
@@ -48,7 +48,7 @@ function Collapsible({ title, children }: { title: string; children: React.React
     <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
       <button
         onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-center justify-between px-6 py-4 text-left focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:outline-none rounded-xl"
+        className="w-full flex items-center justify-between px-6 py-4 text-left focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:outline-none rounded-xl"
       >
         <h2 className="font-semibold">{title}</h2>
         <span className="text-gray-400">{open ? '▲' : '▼'}</span>
@@ -245,12 +245,12 @@ export default function RunDetail() {
             placeholder="Search title / file…"
             value={searchQuery}
             onChange={(e) => setFilter('q', e.target.value)}
-            className="text-sm rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-2 py-1 focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:outline-none"
+            className="text-sm rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-2 py-1 focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:outline-none"
           />
           <select
             value={severityFilter}
             onChange={(e) => setFilter('severity', e.target.value)}
-            className="text-sm rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-2 py-1 focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:outline-none"
+            className="text-sm rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-2 py-1 focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:outline-none"
           >
             <option value="all">All severities</option>
             {['critical', 'high', 'medium', 'low', 'info'].map((s) => (
@@ -260,7 +260,7 @@ export default function RunDetail() {
           <select
             value={matchFilter}
             onChange={(e) => setFilter('match', e.target.value)}
-            className="text-sm rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-2 py-1 focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:outline-none"
+            className="text-sm rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-2 py-1 focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:outline-none"
           >
             <option value="all">All statuses</option>
             <option value="tp">True Positive</option>
@@ -299,9 +299,8 @@ export default function RunDetail() {
                 </thead>
                 <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
                   {pagedFindings.map((f) => (
-                    <>
+                    <React.Fragment key={f.finding_id}>
                       <tr
-                        key={f.finding_id}
                         id={`finding-${f.finding_id}`}
                         onClick={() => {
                           setExpandedFinding((id) => id === f.finding_id ? null : f.finding_id)
@@ -326,7 +325,7 @@ export default function RunDetail() {
                         <td className="px-3 py-2 font-mono text-xs text-gray-500">{f.line_start ?? '—'}</td>
                       </tr>
                       {expandedFinding === f.finding_id && (
-                        <tr key={`${f.finding_id}-expanded`}>
+                        <tr>
                           <td colSpan={6} className="px-4 py-4 bg-gray-50 dark:bg-gray-900">
                             <div className="space-y-4">
                               <div>
@@ -358,7 +357,7 @@ export default function RunDetail() {
                                     target="_blank"
                                     rel="noreferrer"
                                     onClick={(e) => e.stopPropagation()}
-                                    className="text-xs px-3 py-1 rounded bg-indigo-100 dark:bg-indigo-900 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-200 dark:hover:bg-indigo-800 transition-colors focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:outline-none"
+                                    className="text-xs px-3 py-1 rounded bg-amber-100 dark:bg-amber-900 text-amber-700 dark:text-amber-300 hover:bg-amber-200 dark:hover:bg-amber-800 transition-colors focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:outline-none"
                                   >
                                     View in dataset
                                   </Link>
@@ -369,7 +368,7 @@ export default function RunDetail() {
                                       e.stopPropagation()
                                       await reclassifyFinding(experimentId, run.run_id, f.finding_id, 'unlabeled_real', '')
                                     }}
-                                    className="text-xs px-3 py-1 rounded bg-orange-100 dark:bg-orange-900 text-orange-800 dark:text-orange-200 hover:bg-orange-200 transition-colors focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:outline-none"
+                                    className="text-xs px-3 py-1 rounded bg-orange-100 dark:bg-orange-900 text-orange-800 dark:text-orange-200 hover:bg-orange-200 transition-colors focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:outline-none"
                                   >
                                     Reclassify as Unlabeled Real
                                   </button>
@@ -379,7 +378,7 @@ export default function RunDetail() {
                           </td>
                         </tr>
                       )}
-                    </>
+                    </React.Fragment>
                   ))}
                 </tbody>
               </table>
@@ -394,14 +393,14 @@ export default function RunDetail() {
                   <button
                     onClick={() => setFindingsPage((p) => Math.max(0, p - 1))}
                     disabled={findingsPage === 0}
-                    className="px-3 py-1 text-xs rounded border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-40 transition-colors focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:outline-none"
+                    className="px-3 py-1 text-xs rounded border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-40 transition-colors focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:outline-none"
                   >
                     Previous
                   </button>
                   <button
                     onClick={() => setFindingsPage((p) => Math.min(totalFindingPages - 1, p + 1))}
                     disabled={findingsPage >= totalFindingPages - 1}
-                    className="px-3 py-1 text-xs rounded border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-40 transition-colors focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:outline-none"
+                    className="px-3 py-1 text-xs rounded border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-40 transition-colors focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:outline-none"
                   >
                     Next
                   </button>
@@ -430,9 +429,8 @@ export default function RunDetail() {
                 const inputStr = JSON.stringify(tc.input)
                 const flagged = tc.flagged || /https?:\/\//.test(inputStr)
                 return (
-                  <>
+                  <React.Fragment key={i}>
                     <tr
-                      key={i}
                       onClick={() => setExpandedTool((t) => t === i ? null : i)}
                       className={`cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors ${flagged ? 'bg-red-50 dark:bg-red-950/30' : ''}`}
                     >
@@ -448,13 +446,13 @@ export default function RunDetail() {
                       </td>
                     </tr>
                     {expandedTool === i && (
-                      <tr key={`tool-${i}-expanded`}>
+                      <tr>
                         <td colSpan={4} className="px-4 py-3 bg-gray-50 dark:bg-gray-900">
                           <CodeViewer content={inputStr} language="json" maxHeight="200px" />
                         </td>
                       </tr>
                     )}
-                  </>
+                  </React.Fragment>
                 )
               })}
             </tbody>

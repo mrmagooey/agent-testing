@@ -202,7 +202,7 @@ export default function ExperimentDetail() {
             )}
             <button
               onClick={() => navigate(`/compare?a_experiment=${experimentId}`)}
-              className="px-3 py-1 rounded-lg text-sm border border-indigo-300 dark:border-indigo-700 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950 transition-colors"
+              className="px-3 py-1 rounded-lg text-sm border border-amber-300 dark:border-amber-700 text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950 transition-colors"
             >
               Compare with another
             </button>
@@ -359,7 +359,7 @@ export default function ExperimentDetail() {
               {selectedRuns.length === 2 && (
                 <button
                   onClick={handleCompare}
-                  className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:outline-none"
+                  className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:outline-none"
                 >
                   Compare Selected
                 </button>
@@ -367,7 +367,7 @@ export default function ExperimentDetail() {
               {experimentId && <DownloadButton experimentId={experimentId} label="Download Results" />}
               <button
                 onClick={() => setSelectedRuns([])}
-                className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:outline-none"
+                className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:outline-none"
               >
                 Clear
               </button>

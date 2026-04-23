@@ -74,12 +74,12 @@ describe('ToggleChip', () => {
   it('active chip applies active class styles', () => {
     render(<ToggleChip label="active" checked={true} onChange={vi.fn()} />)
     const label = screen.getByText('active').closest('label')!
-    expect(label.className).toContain('bg-indigo-600')
+    expect(label.className).toContain('bg-amber-600')
   })
 
   it('inactive chip does not apply active class styles', () => {
     render(<ToggleChip label="inactive" checked={false} onChange={vi.fn()} />)
     const label = screen.getByText('inactive').closest('label')!
-    expect(label.className).not.toContain('bg-indigo-600')
+    expect(label.className).not.toContain('bg-amber-600')
   })
 })

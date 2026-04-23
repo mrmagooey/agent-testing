@@ -78,7 +78,7 @@ export default function RunPicker({
               onRunChange('')
             }}
             disabled={disabled || experimentsLoading}
-            className="w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm px-2 py-1.5 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
+            className="w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm px-2 py-1.5 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-amber-500 disabled:opacity-50"
           >
             <option value="">
               {experimentsLoading ? 'Loading…' : '— select experiment —'}
@@ -103,7 +103,7 @@ export default function RunPicker({
             value={selectedRun}
             onChange={(e) => onRunChange(e.target.value)}
             disabled={disabled || !selectedExperiment || runsLoading}
-            className="w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm px-2 py-1.5 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
+            className="w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm px-2 py-1.5 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-amber-500 disabled:opacity-50"
           >
             <option value="">
               {runsLoading

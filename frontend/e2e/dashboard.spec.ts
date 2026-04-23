@@ -85,3 +85,29 @@ test('shows model x strategy accuracy heatmap', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Model × Strategy Accuracy' })).toBeVisible()
   await expect(page.getByTestId('accuracy-heatmap')).toBeVisible()
 })
+
+test('active experiments table has separate Cost and Status header cells', async ({ page }) => {
+  await page.goto('/')
+  const activeSection = page.locator('section').filter({ hasText: 'Active Experiments' })
+  const headerCells = activeSection.locator('thead th')
+
+  // Verify we have 6 header cells
+  await expect(headerCells).toHaveCount(6)
+
+  // Find Cost and Status cells specifically
+  const allHeaders = await headerCells.allTextContents()
+  const costIndex = allHeaders.findIndex(text => text.includes('Cost'))
+  const statusIndex = allHeaders.findIndex(text => text.includes('Status'))
+
+  // Both should exist
+  expect(costIndex).toBeGreaterThanOrEqual(0)
+  expect(statusIndex).toBeGreaterThanOrEqual(0)
+
+  // They should be in different cells (Cost at index 3, Status at index 4)
+  expect(costIndex).toBe(3)
+  expect(statusIndex).toBe(4)
+
+  // Verify header text contains them as separate words (CSS uppercases the display text).
+  const headerText = await activeSection.locator('thead').innerText()
+  expect(headerText).toMatch(/Cost\s+Status/i)
+})

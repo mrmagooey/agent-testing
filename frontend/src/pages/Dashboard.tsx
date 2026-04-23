@@ -358,12 +358,12 @@ export default function Dashboard() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-border">
-                    <th className="text-left pb-2 font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">Experiment ID</th>
-                    <th className="text-left pb-2 font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">Dataset</th>
-                    <th className="text-left pb-2 font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground w-48">Progress</th>
-                    <th className="text-right pb-2 font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">Cost</th>
-                    <th className="text-left pb-2 font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">Status</th>
-                    <th className="text-right pb-2 font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">Elapsed</th>
+                    <th className="text-left pb-2 px-2 font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">Experiment ID</th>
+                    <th className="text-left pb-2 px-2 font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">Dataset</th>
+                    <th className="text-left pb-2 px-2 font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground w-48">Progress</th>
+                    <th className="text-right pb-2 px-2 font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">Cost</th>
+                    <th className="text-left pb-2 px-2 font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">Status</th>
+                    <th className="text-right pb-2 px-2 font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">Elapsed</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -374,22 +374,22 @@ export default function Dashboard() {
                       className="border-b border-border cursor-pointer hover:bg-muted/40 transition-colors"
                       style={ROW_REVEAL_STYLE(i)}
                     >
-                      <td className="py-2.5 font-mono text-xs text-primary">
+                      <td className="py-2.5 px-2 font-mono text-xs text-primary">
                         {b.experiment_id.slice(0, 8)}…
                       </td>
-                      <td className="py-2.5 text-sm">{b.dataset}</td>
-                      <td className="py-2.5 w-48">
+                      <td className="py-2.5 px-2 text-sm">{b.dataset}</td>
+                      <td className="py-2.5 px-2 w-48">
                         <SimpleProgressBar completed={b.completed_runs} total={b.total_runs} />
                       </td>
-                      <td className="py-2.5 text-right font-mono tabular-nums text-xs">
+                      <td className="py-2.5 px-2 text-right font-mono tabular-nums text-xs">
                         ${b.total_cost_usd.toFixed(2)}
                       </td>
-                      <td className="py-2.5">
+                      <td className="py-2.5 px-2">
                         <span className={`font-mono text-[10px] uppercase tracking-wider border border-current px-1.5 py-0.5 ${STATUS_SIGNAL[b.status]}`}>
                           {b.status}
                         </span>
                       </td>
-                      <td className="py-2.5 text-right font-mono tabular-nums text-xs text-muted-foreground">
+                      <td className="py-2.5 px-2 text-right font-mono tabular-nums text-xs text-muted-foreground">
                         {formatElapsed(b.created_at)}
                       </td>
                     </tr>

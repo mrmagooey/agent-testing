@@ -192,7 +192,7 @@ test.describe('URL state persistence', () => {
     // The model button should show an active count badge (1 selected)
     const modelBtn = page.getByRole('button', { name: /^model/i })
     await expect(modelBtn).toBeVisible()
-    // The button should have indigo styling (active class) — check for the count badge
+    // The button should have amber styling (active class) — check for the count badge
     await expect(modelBtn.locator('span').filter({ hasText: '1' })).toBeVisible()
   })
 

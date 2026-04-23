@@ -3,14 +3,14 @@
 // to both in one place.
 export const CHIP_BASE =
   'relative inline-flex items-center gap-1.5 select-none text-xs px-2 py-0.5 rounded-full border transition-colors'
-export const CHIP_ACTIVE = 'bg-indigo-600 border-indigo-600 text-white hover:bg-indigo-700'
+export const CHIP_ACTIVE = 'bg-amber-600 border-amber-600 text-white hover:bg-amber-700'
 export const CHIP_INACTIVE =
-  'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:border-indigo-500 hover:text-indigo-600 dark:hover:text-indigo-400'
+  'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:border-amber-500 hover:text-amber-600 dark:hover:text-amber-400'
 
 export function chipClasses(checked: boolean, disabled?: boolean): string {
   return [
     CHIP_BASE,
-    'focus-within:ring-2 focus-within:ring-indigo-500 focus-within:ring-offset-1',
+    'focus-within:ring-2 focus-within:ring-amber-500 focus-within:ring-offset-1',
     disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer',
     checked ? CHIP_ACTIVE : CHIP_INACTIVE,
   ].join(' ')

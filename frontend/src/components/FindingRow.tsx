@@ -86,7 +86,7 @@ export default function FindingRow(props: FindingRowProps) {
                 <Link
                   to={`/experiments/${(props as GlobalFindingProps).finding.experiment_id}`}
                   onClick={(e) => e.stopPropagation()}
-                  className="text-indigo-600 dark:text-indigo-400 hover:underline"
+                  className="text-amber-600 dark:text-amber-400 hover:underline"
                 >
                   {(props as GlobalFindingProps).finding.experiment_name ||
                     (props as GlobalFindingProps).finding.experiment_id}
@@ -138,7 +138,7 @@ export default function FindingRow(props: FindingRowProps) {
                     to={`/experiments/${(props as GlobalFindingProps).finding.experiment_id}/runs/${
                       (props as GlobalFindingProps).finding.run_id
                     }#finding-${fid}`}
-                    className="text-xs px-3 py-1 rounded bg-indigo-100 dark:bg-indigo-900 text-indigo-800 dark:text-indigo-200 hover:bg-indigo-200 dark:hover:bg-indigo-800 transition-colors"
+                    className="text-xs px-3 py-1 rounded bg-amber-100 dark:bg-amber-900 text-amber-800 dark:text-amber-200 hover:bg-amber-200 dark:hover:bg-amber-800 transition-colors"
                   >
                     Open run
                   </Link>

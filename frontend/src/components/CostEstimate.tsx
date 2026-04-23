@@ -32,7 +32,7 @@ export default function CostEstimate({ estimate, loading }: CostEstimateProps) {
           </div>
           <div className="flex items-baseline justify-between">
             <span className="text-sm text-gray-600 dark:text-gray-400">Estimated cost</span>
-            <span className="text-lg font-bold text-indigo-600 dark:text-indigo-400">
+            <span className="text-lg font-bold text-amber-600 dark:text-amber-400">
               ${estimate.estimated_cost_usd.toFixed(2)}
             </span>
           </div>

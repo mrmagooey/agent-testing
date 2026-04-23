@@ -64,7 +64,7 @@ function ChipGroup({
           <p className="text-sm font-medium text-gray-700 dark:text-gray-300">{label}</p>
         )}
         {selected.length > 0 && (
-          <span className="px-1.5 py-0.5 rounded-full text-xs font-semibold bg-indigo-100 dark:bg-indigo-900 text-indigo-700 dark:text-indigo-300">
+          <span className="px-1.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 dark:bg-amber-900 text-amber-700 dark:text-amber-300">
             {selected.length} selected
           </span>
         )}
@@ -447,7 +447,7 @@ export default function ExperimentNew() {
             <button
               type="submit"
               disabled={submitting || (submitAttempted && !isValid)}
-              className="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold transition-colors disabled:opacity-50"
+              className="w-full py-3 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-semibold transition-colors disabled:opacity-50"
             >
               {submitting ? 'Submitting…' : 'Submit Experiment'}
             </button>

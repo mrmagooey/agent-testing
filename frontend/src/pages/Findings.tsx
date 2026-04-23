@@ -182,7 +182,7 @@ export default function Findings() {
           value={searchInput}
           onChange={(e) => handleSearchInput(e.target.value)}
           placeholder="Search findings by title, description, vuln class, CWE…"
-          className="w-full rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          className="w-full rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
           aria-label="Search findings"
         />
       </div>

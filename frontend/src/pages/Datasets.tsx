@@ -93,7 +93,7 @@ export default function Datasets() {
     >
       {col.label}
       {sortKey === col.key && (
-        <span className="ml-1 text-indigo-500">{sortDir === 'asc' ? '↑' : '↓'}</span>
+        <span className="ml-1 text-amber-500">{sortDir === 'asc' ? '↑' : '↓'}</span>
       )}
     </th>
   )
@@ -104,7 +104,7 @@ export default function Datasets() {
         <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Datasets</h1>
         <button
           onClick={() => navigate('/datasets/discover')}
-          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium transition-colors"
+          className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-sm font-medium transition-colors"
         >
           Discover CVEs
         </button>
@@ -124,7 +124,7 @@ export default function Datasets() {
             placeholder="Filter datasets…"
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
           />
         </div>
         {filter && (
@@ -148,7 +148,7 @@ export default function Datasets() {
               >
                 Size
                 {sortKey === 'size_bytes' && (
-                  <span className="ml-1 text-indigo-500">{sortDir === 'asc' ? '↑' : '↓'}</span>
+                  <span className="ml-1 text-amber-500">{sortDir === 'asc' ? '↑' : '↓'}</span>
                 )}
               </th>
               <th className="px-4 py-3 text-left">Languages</th>
@@ -158,7 +158,7 @@ export default function Datasets() {
               >
                 Created
                 {sortKey === 'created_at' && (
-                  <span className="ml-1 text-indigo-500">{sortDir === 'asc' ? '↑' : '↓'}</span>
+                  <span className="ml-1 text-amber-500">{sortDir === 'asc' ? '↑' : '↓'}</span>
                 )}
               </th>
             </tr>
@@ -170,7 +170,7 @@ export default function Datasets() {
                 onClick={() => navigate(`/datasets/${encodeURIComponent(d.name)}`)}
                 className="cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
               >
-                <td className="px-4 py-3 font-medium text-indigo-600 dark:text-indigo-400 font-mono">
+                <td className="px-4 py-3 font-medium text-amber-600 dark:text-amber-400 font-mono">
                   {d.name}
                 </td>
                 <td className="px-4 py-3">

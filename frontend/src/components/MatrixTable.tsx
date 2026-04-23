@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import React, { useState, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { Run } from '../api/client'
 import { metricTone } from '../constants/colors'
@@ -123,7 +123,7 @@ export default function MatrixTable({ runs, onSelect, selectedIds = [] }: Matrix
   return (
     <div>
       {localSelected.length > 0 && (
-        <div className="mb-2 text-sm text-indigo-600 dark:text-indigo-400">
+        <div className="mb-2 text-sm text-amber-600 dark:text-amber-400">
           {localSelected.length} run(s) selected
         </div>
       )}
@@ -204,13 +204,12 @@ export default function MatrixTable({ runs, onSelect, selectedIds = [] }: Matrix
                 const isExpanded = expandedRows.has(run.run_id)
                 const isSelected = localSelected.includes(run.run_id)
                 const rowBase = isSelected
-                  ? 'bg-indigo-50 dark:bg-indigo-950'
+                  ? 'bg-amber-50 dark:bg-amber-950'
                   : 'bg-white dark:bg-gray-900'
 
                 return (
-                  <>
+                  <React.Fragment key={run.run_id}>
                     <TableRow
-                      key={run.run_id}
                       onClick={() => navigate(`/experiments/${run.experiment_id}/runs/${run.run_id}`)}
                       className={cn(
                         'cursor-pointer transition-colors hover:bg-gray-50 dark:hover:bg-gray-800/50 border-b-0',
@@ -224,14 +223,14 @@ export default function MatrixTable({ runs, onSelect, selectedIds = [] }: Matrix
                           checked={isSelected}
                           onChange={() => {}}
                           onClick={(e) => toggleSelect(run.run_id, e)}
-                          className="rounded focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:outline-none"
+                          className="rounded focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:outline-none"
                         />
                       </TableCell>
                       {/* expand toggle */}
                       <TableCell className={cn(stickyBase, 'left-8 px-2 py-2 z-10', rowBase)}>
                         <button
                           onClick={(e) => toggleExpand(run.run_id, e)}
-                          className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 text-xs leading-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:outline-none rounded"
+                          className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 text-xs leading-none focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:outline-none rounded"
                           title={isExpanded ? 'Collapse details' : 'Expand details'}
                         >
                           {isExpanded ? '▲' : '▼'}
@@ -295,7 +294,7 @@ export default function MatrixTable({ runs, onSelect, selectedIds = [] }: Matrix
                       })}
                     </TableRow>
                     {isExpanded && (
-                      <TableRow key={`${run.run_id}-detail`} className="border-b-0">
+                      <TableRow className="border-b-0">
                         <TableCell colSpan={totalCols} className="px-6 py-3 bg-gray-50 dark:bg-gray-800/60 border-b border-gray-100 dark:border-gray-800">
                           <dl className="flex flex-wrap gap-x-6 gap-y-1 text-xs">
                             {DETAIL_COLS.map(({ key, label }) => (
@@ -310,7 +309,7 @@ export default function MatrixTable({ runs, onSelect, selectedIds = [] }: Matrix
                         </TableCell>
                       </TableRow>
                     )}
-                  </>
+                  </React.Fragment>
                 )
               })}
               {runs.length === 0 && (

@@ -286,7 +286,7 @@ export default function Feedback() {
           <button
             onClick={handleLoadTrends}
             disabled={!trendDataset || trendsLoading}
-            className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium transition-colors disabled:opacity-50"
+            className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-sm font-medium transition-colors disabled:opacity-50"
           >
             {trendsLoading ? 'Loading…' : 'Load Trends'}
           </button>
@@ -344,7 +344,7 @@ export default function Feedback() {
           <button
             onClick={handleCompare}
             disabled={!experimentAId || !experimentBId || comparing}
-            className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium transition-colors disabled:opacity-50"
+            className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-sm font-medium transition-colors disabled:opacity-50"
           >
             {comparing ? 'Comparing…' : 'Compare'}
           </button>

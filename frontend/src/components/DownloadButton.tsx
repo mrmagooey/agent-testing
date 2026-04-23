@@ -19,7 +19,7 @@ export default function DownloadButton({ experimentId, label = 'Download Reports
   return (
     <button
       onClick={handleDownload}
-      className="bg-indigo-600 hover:bg-indigo-700 text-white rounded px-4 py-2 text-sm font-medium transition-colors"
+      className="bg-amber-600 hover:bg-amber-700 text-white rounded px-4 py-2 text-sm font-medium transition-colors"
     >
       {label}
     </button>

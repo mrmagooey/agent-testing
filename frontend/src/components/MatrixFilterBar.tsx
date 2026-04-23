@@ -57,15 +57,15 @@ function PopoverFilter({
         onClick={() => setOpen((o) => !o)}
         className={[
           'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-sm transition-colors',
-          'focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:outline-none',
+          'focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:outline-none',
           hasActive
-            ? 'border-indigo-400 bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 font-medium'
+            ? 'border-amber-400 bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-300 font-medium'
             : 'border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800',
         ].join(' ')}
       >
         {label}
         {hasActive && (
-          <span className="inline-flex items-center justify-center w-4 h-4 text-[10px] font-bold bg-indigo-600 text-white rounded-full">
+          <span className="inline-flex items-center justify-center w-4 h-4 text-[10px] font-bold bg-amber-600 text-white rounded-full">
             {selected.length}
           </span>
         )}
@@ -94,14 +94,14 @@ function PopoverFilter({
                 className={[
                   'w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors',
                   'hover:bg-gray-50 dark:hover:bg-gray-700',
-                  checked ? 'text-indigo-700 dark:text-indigo-300 font-medium' : 'text-gray-700 dark:text-gray-200',
+                  checked ? 'text-amber-700 dark:text-amber-300 font-medium' : 'text-gray-700 dark:text-gray-200',
                 ].join(' ')}
               >
                 <span
                   className={[
                     'flex-shrink-0 w-4 h-4 rounded border transition-colors',
                     checked
-                      ? 'bg-indigo-600 border-indigo-600'
+                      ? 'bg-amber-600 border-amber-600'
                       : 'border-gray-300 dark:border-gray-600',
                   ].join(' ')}
                   aria-hidden="true"
@@ -197,7 +197,7 @@ export default function MatrixFilterBar({ runs, value, onChange }: MatrixFilterB
         disabled={!isActive}
         className={[
           'ml-auto px-3 py-1.5 rounded-lg border text-sm transition-colors',
-          'focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:outline-none',
+          'focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:outline-none',
           isActive
             ? 'border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800'
             : 'border-transparent text-gray-400 dark:text-gray-600 cursor-default',

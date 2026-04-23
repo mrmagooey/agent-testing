@@ -57,14 +57,14 @@ function FacetGroup({
               data-testid={`filter-chip-${facetKey}-${value}`}
               className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border transition-colors ${
                 active
-                  ? 'bg-indigo-600 text-white border-indigo-600'
-                  : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 border-gray-200 dark:border-gray-700 hover:border-indigo-400 dark:hover:border-indigo-500'
+                  ? 'bg-amber-600 text-white border-amber-600'
+                  : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 border-gray-200 dark:border-gray-700 hover:border-amber-400 dark:hover:border-amber-500'
               }`}
             >
               {value}
               <span
                 className={`${
-                  active ? 'text-indigo-200' : 'text-gray-400 dark:text-gray-500'
+                  active ? 'text-amber-200' : 'text-gray-400 dark:text-gray-500'
                 }`}
               >
                 {count}
@@ -105,7 +105,7 @@ export default function FindingsFilterBar({
         {hasAnyFilter && (
           <button
             onClick={onClearAll}
-            className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline"
+            className="text-xs text-amber-600 dark:text-amber-400 hover:underline"
           >
             Clear all
           </button>

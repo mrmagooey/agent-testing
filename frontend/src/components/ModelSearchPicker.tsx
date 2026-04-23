@@ -406,10 +406,10 @@ export default function ModelSearchPicker({
                           onSelect={() => toggle(model.id)}
                           className={[
                             'flex items-center justify-between px-3 py-2 text-sm cursor-pointer',
-                            'hover:bg-indigo-50 dark:hover:bg-indigo-950/40',
-                            'aria-selected:bg-indigo-50 dark:aria-selected:bg-indigo-950/40',
+                            'hover:bg-amber-50 dark:hover:bg-amber-950/40',
+                            'aria-selected:bg-amber-50 dark:aria-selected:bg-amber-950/40',
                             isSelected
-                              ? 'text-indigo-700 dark:text-indigo-300 font-medium'
+                              ? 'text-amber-700 dark:text-amber-300 font-medium'
                               : 'text-gray-800 dark:text-gray-200',
                           ].join(' ')}
                           data-selected={isSelected}
@@ -424,7 +424,7 @@ export default function ModelSearchPicker({
                           </span>
                           <span className="ml-2 flex items-center gap-1.5 shrink-0">
                             {isSelected && (
-                              <span className="text-xs text-indigo-600 dark:text-indigo-400">✓</span>
+                              <span className="text-xs text-amber-600 dark:text-amber-400">✓</span>
                             )}
                             <ModelStatusBadge status={model.status} />
                           </span>

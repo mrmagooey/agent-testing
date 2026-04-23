@@ -23,10 +23,14 @@ function signalLabel(accuracy: number): string {
   return 'FAIL'
 }
 
+// Signal text colors chosen for contrast against the amber cell ramp in both
+// light and dark modes. The cell background is theme-independent (oklch amber),
+// so we use solid, dark signal hues rather than `text-signal-*` tokens whose
+// default shades were too light/saturated to read on saturated amber.
 function signalCls(accuracy: number): string {
-  if (accuracy >= 0.8) return 'text-signal-success'
-  if (accuracy >= 0.6) return 'text-signal-warning'
-  return 'text-signal-danger'
+  if (accuracy >= 0.8) return 'text-green-900'
+  if (accuracy >= 0.6) return 'text-orange-900'
+  return 'text-red-900'
 }
 
 function HeatmapCell({ cell }: { cell: AccuracyMatrixCell }) {
@@ -34,12 +38,14 @@ function HeatmapCell({ cell }: { cell: AccuracyMatrixCell }) {
   const labelCls = signalCls(cell.accuracy)
   return (
     <td
+      data-testid="heatmap-cell"
+      data-signal={label}
       className="px-3 py-3 text-center font-mono text-xs"
       style={amberCellStyle(cell.accuracy)}
       title={`${cell.model} × ${cell.strategy}: ${cell.accuracy.toFixed(3)} recall (${cell.run_count} run${cell.run_count !== 1 ? 's' : ''})`}
     >
       <div className="font-semibold tabular-nums">{cell.accuracy.toFixed(3)}</div>
-      <div className={`text-[10px] opacity-80 ${labelCls}`}>{label}</div>
+      <div data-testid="heatmap-cell-signal" className={`text-[10px] font-semibold ${labelCls}`}>{label}</div>
     </td>
   )
 }

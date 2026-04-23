@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import React, { useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { Finding } from '../api/client'
 import { reclassifyFinding } from '../api/client'
@@ -110,9 +110,8 @@ export default function FindingsExplorer({ experimentId, findings: initialFindin
           </thead>
           <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
             {filtered.map((finding) => (
-              <>
+              <React.Fragment key={finding.finding_id}>
                 <tr
-                  key={finding.finding_id}
                   onClick={() =>
                     setExpandedId((id) => (id === finding.finding_id ? null : finding.finding_id))
                   }
@@ -142,7 +141,7 @@ export default function FindingsExplorer({ experimentId, findings: initialFindin
                   </td>
                 </tr>
                 {expandedId === finding.finding_id && (
-                  <tr key={`${finding.finding_id}-expanded`}>
+                  <tr>
                     <td colSpan={6} className="px-4 py-4 bg-gray-50 dark:bg-gray-900">
                       <div className="space-y-3">
                         <CodeViewer
@@ -168,7 +167,7 @@ export default function FindingsExplorer({ experimentId, findings: initialFindin
                               target="_blank"
                               rel="noreferrer"
                               onClick={(e) => e.stopPropagation()}
-                              className="text-xs px-3 py-1 rounded bg-indigo-100 dark:bg-indigo-900 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-200 dark:hover:bg-indigo-800 transition-colors"
+                              className="text-xs px-3 py-1 rounded bg-amber-100 dark:bg-amber-900 text-amber-700 dark:text-amber-300 hover:bg-amber-200 dark:hover:bg-amber-800 transition-colors"
                             >
                               View in dataset
                             </Link>
@@ -193,7 +192,7 @@ export default function FindingsExplorer({ experimentId, findings: initialFindin
                     </td>
                   </tr>
                 )}
-              </>
+              </React.Fragment>
             ))}
             {filtered.length === 0 && (
               <tr>
@@ -233,7 +232,7 @@ export default function FindingsExplorer({ experimentId, findings: initialFindin
               <button
                 onClick={handleReclassify}
                 disabled={reclassifyLoading}
-                className="px-4 py-2 text-sm rounded bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50"
+                className="px-4 py-2 text-sm rounded bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50"
               >
                 {reclassifyLoading ? 'Saving...' : 'Confirm'}
               </button>

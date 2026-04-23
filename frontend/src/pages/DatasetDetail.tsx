@@ -214,7 +214,7 @@ export default function DatasetDetail() {
                   onClick={() => setSelectedFile(l.file_path)}
                   className="cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
                 >
-                  <td className="py-2 font-mono text-xs text-indigo-600 dark:text-indigo-400 max-w-xs truncate">
+                  <td className="py-2 font-mono text-xs text-amber-600 dark:text-amber-400 max-w-xs truncate">
                     {l.file_path}
                   </td>
                   <td className="py-2 font-mono text-xs text-gray-500">
@@ -261,7 +261,7 @@ export default function DatasetDetail() {
                       <button
                         key={t.template_id}
                         onClick={() => handleTemplateSelect(t)}
-                        className="w-full text-left p-3 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-indigo-50 dark:hover:bg-indigo-950 transition-colors"
+                        className="w-full text-left p-3 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-amber-50 dark:hover:bg-amber-950 transition-colors"
                       >
                         <div className="flex items-center justify-between">
                           <span className="font-medium text-sm">{t.vuln_class}</span>
@@ -317,7 +317,7 @@ export default function DatasetDetail() {
                   )}
                   <button
                     onClick={handlePreview}
-                    className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium transition-colors"
+                    className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-sm font-medium transition-colors"
                   >
                     Preview Injection
                   </button>

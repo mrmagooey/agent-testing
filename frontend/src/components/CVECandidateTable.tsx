@@ -50,7 +50,7 @@ export default function CVECandidateTable({ candidates, onImport }: CVECandidate
           <span className="text-sm text-gray-600 dark:text-gray-400">{selected.size} selected</span>
           <button
             onClick={() => onImport?.(Array.from(selected))}
-            className="text-sm px-4 py-1.5 rounded bg-indigo-600 hover:bg-indigo-700 text-white transition-colors"
+            className="text-sm px-4 py-1.5 rounded bg-amber-600 hover:bg-amber-700 text-white transition-colors"
           >
             Import Selected ({selected.size})
           </button>
@@ -95,7 +95,7 @@ export default function CVECandidateTable({ candidates, onImport }: CVECandidate
                   <td className={`px-3 py-2 font-mono font-bold ${scoreColor(c.score)}`}>
                     {c.score.toFixed(2)}
                   </td>
-                  <td className="px-3 py-2 font-mono text-xs text-indigo-600 dark:text-indigo-400">
+                  <td className="px-3 py-2 font-mono text-xs text-amber-600 dark:text-amber-400">
                     {c.cve_id}
                   </td>
                   <td className="px-3 py-2 text-gray-600 dark:text-gray-400 font-mono text-xs">
@@ -130,7 +130,7 @@ export default function CVECandidateTable({ candidates, onImport }: CVECandidate
                             href={c.advisory_url}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="text-indigo-600 dark:text-indigo-400 hover:underline text-xs"
+                            className="text-amber-600 dark:text-amber-400 hover:underline text-xs"
                           >
                             Advisory ↗
                           </a>
@@ -140,7 +140,7 @@ export default function CVECandidateTable({ candidates, onImport }: CVECandidate
                             href={c.fix_commit}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="text-indigo-600 dark:text-indigo-400 hover:underline text-xs"
+                            className="text-amber-600 dark:text-amber-400 hover:underline text-xs"
                           >
                             Fix commit ↗
                           </a>
