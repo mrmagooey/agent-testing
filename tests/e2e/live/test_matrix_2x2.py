@@ -39,6 +39,8 @@ MATRIX_PAYLOAD = {
     "max_experiment_cost_usd": 0.30,
     "strategy_configs": {"single_agent": {"max_turns": 3}, "per_file": {"max_turns": 3}},
 }
+if os.environ.get("LIVE_TEST_MODEL_ID"):
+    MATRIX_PAYLOAD["allow_unavailable_models"] = True
 
 
 def test_matrix_2x2(live_client, experiment_cleanup):

@@ -2176,6 +2176,11 @@ AVG_TOKENS_PER_KLOC = 1400  # prompt + completion, calibrated empirically
 app = FastAPI(title="Security Review Framework", version="1.0.0")
 coordinator: ExperimentCoordinator = None  # type: ignore[assignment]  # initialized at startup
 _background_tasks: set[asyncio.Task] = set()
+# One-shot fire-and-forget tasks (e.g. _maybe_backfill).  Not cancelled on
+# shutdown — they complete on their own — but we keep strong references here
+# so the GC doesn't collect them while they're running.  Each task removes
+# itself via add_done_callback when it finishes.
+_ephemeral_tasks: set[asyncio.Task] = set()
 
 
 @app.middleware("http")
@@ -2320,7 +2325,13 @@ async def startup() -> None:
         except Exception as exc:
             logger.warning("backfill check failed: %s", exc)
 
-    _background_tasks.add(asyncio.create_task(_maybe_backfill()))
+    # _maybe_backfill is a one-shot task: it completes on its own and must NOT
+    # be cancelled by the shutdown handler (that could interrupt a partial DB
+    # write).  Track it in _ephemeral_tasks so the GC doesn't collect it, and
+    # remove it automatically when it finishes.
+    _t = asyncio.create_task(_maybe_backfill())
+    _ephemeral_tasks.add(_t)
+    _t.add_done_callback(_ephemeral_tasks.discard)
 
 
 @app.on_event("shutdown")

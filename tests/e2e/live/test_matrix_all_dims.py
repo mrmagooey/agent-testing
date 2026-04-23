@@ -90,6 +90,10 @@ CELL_B_PAYLOAD = {
     "strategy_configs": {"per_file": {"max_turns": 3}},
 }
 
+if os.environ.get("LIVE_TEST_MODEL_ID"):
+    CELL_A_PAYLOAD["allow_unavailable_models"] = True
+    CELL_B_PAYLOAD["allow_unavailable_models"] = True
+
 
 def test_matrix_all_dims(live_client, experiment_cleanup):
     # --- Submit Cell A ---
