@@ -1860,7 +1860,8 @@ class ExperimentCoordinator:
         if not registry:
             return []
         snapshots = self.catalog.snapshot() if self.catalog is not None else {}
-        groups = compute_availability(registry, snapshots, _os.environ)
+        sv = self.catalog.snapshot_version if self.catalog is not None else 0
+        groups = compute_availability(registry, snapshots, _os.environ, snapshot_version=sv)
 
         if flat:
             return flat_model_list(groups)
@@ -1891,7 +1892,8 @@ class ExperimentCoordinator:
             return []
 
         snapshots = self.catalog.snapshot() if self.catalog is not None else {}
-        groups = compute_availability(registry, snapshots, _os.environ)
+        sv = self.catalog.snapshot_version if self.catalog is not None else 0
+        groups = compute_availability(registry, snapshots, _os.environ, snapshot_version=sv)
         id_to_status = build_id_to_status(groups)
         known_ids = set(id_to_status.keys())
 

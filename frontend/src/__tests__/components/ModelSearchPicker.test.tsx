@@ -6,10 +6,17 @@ import type { ModelProviderGroup } from '../../api/client'
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
+/** Returns an ISO-8601 UTC timestamp N minutes in the past. */
+function minutesAgo(n: number): string {
+  return new Date(Date.now() - n * 60_000).toISOString().replace(/\.\d{3}Z$/, 'Z')
+}
+
 const GROUPS: ModelProviderGroup[] = [
   {
     provider: 'openai',
     probe_status: 'fresh',
+    fetched_at: minutesAgo(3),
+    last_error: null,
     models: [
       { id: 'gpt-4o', display_name: 'GPT-4o', status: 'available' },
       { id: 'gpt-3.5-turbo', display_name: 'GPT-3.5 Turbo', status: 'available' },
@@ -19,6 +26,8 @@ const GROUPS: ModelProviderGroup[] = [
   {
     provider: 'anthropic',
     probe_status: 'stale',
+    fetched_at: minutesAgo(12),
+    last_error: 'Connection timeout after 30s',
     models: [
       { id: 'claude-3-opus', display_name: 'Claude 3 Opus', status: 'available' },
       { id: 'claude-3-haiku', display_name: 'Claude 3 Haiku', status: 'key_missing' },
@@ -27,6 +36,8 @@ const GROUPS: ModelProviderGroup[] = [
   {
     provider: 'mistral',
     probe_status: 'failed',
+    fetched_at: null,
+    last_error: 'API returned 503',
     models: [
       { id: 'mistral-large', display_name: 'Mistral Large', status: 'probe_failed' },
     ],
@@ -34,6 +45,8 @@ const GROUPS: ModelProviderGroup[] = [
   {
     provider: 'cohere',
     probe_status: 'disabled',
+    fetched_at: null,
+    last_error: null,
     models: [
       { id: 'command-r', display_name: 'Command R', status: 'key_missing' },
       { id: 'command-r-plus', display_name: 'Command R+', status: 'key_missing' },
@@ -79,7 +92,7 @@ describe('group rendering', () => {
   it('omits groups with zero models', () => {
     const groups: ModelProviderGroup[] = [
       ...GROUPS,
-      { provider: 'empty-provider', probe_status: 'fresh', models: [] },
+      { provider: 'empty-provider', probe_status: 'fresh', fetched_at: null, last_error: null, models: [] },
     ]
     renderPicker({ groups })
     expect(screen.queryByText('Empty-provider')).not.toBeInTheDocument()
@@ -302,5 +315,103 @@ describe('allowUnavailableDefault reactivity', () => {
 
     // Now unavailable model should be visible
     expect(screen.getByText('Mistral Large')).toBeInTheDocument()
+  })
+})
+
+// ─── Probe staleness timestamp badges ─────────────────────────────────────────
+
+describe('probe staleness timestamp badges', () => {
+  it('renders "last probed N min ago" for a fresh group with a recent fetched_at', () => {
+    const groups: ModelProviderGroup[] = [
+      {
+        provider: 'openai',
+        probe_status: 'fresh',
+        fetched_at: minutesAgo(5),
+        last_error: null,
+        models: [{ id: 'gpt-4o', display_name: 'GPT-4o', status: 'available' }],
+      },
+    ]
+    renderPicker({ groups })
+    // Timestamp badge should say "last probed 5 min ago"
+    const badge = screen.getByTestId('probe-timestamp')
+    expect(badge.textContent).toMatch(/last probed 5 min ago/i)
+  })
+
+  it('renders "never probed" when fetched_at is null', () => {
+    const groups: ModelProviderGroup[] = [
+      {
+        provider: 'mistral',
+        probe_status: 'failed',
+        fetched_at: null,
+        last_error: null,
+        models: [{ id: 'mistral-large', display_name: 'Mistral Large', status: 'probe_failed' }],
+      },
+    ]
+    renderPicker({ groups, allowUnavailableDefault: true })
+    const badge = screen.getByTestId('probe-timestamp')
+    expect(badge.textContent).toMatch(/never probed/i)
+  })
+
+  it('renders "last probed just now" when fetched_at is under 1 minute ago', () => {
+    const groups: ModelProviderGroup[] = [
+      {
+        provider: 'openai',
+        probe_status: 'fresh',
+        fetched_at: minutesAgo(0),
+        last_error: null,
+        models: [{ id: 'gpt-4o', display_name: 'GPT-4o', status: 'available' }],
+      },
+    ]
+    renderPicker({ groups })
+    const badge = screen.getByTestId('probe-timestamp')
+    expect(badge.textContent).toMatch(/last probed just now/i)
+  })
+
+  it('renders last_error text inline when non-null', () => {
+    const groups: ModelProviderGroup[] = [
+      {
+        provider: 'anthropic',
+        probe_status: 'stale',
+        fetched_at: minutesAgo(20),
+        last_error: 'Connection timeout after 30s',
+        models: [{ id: 'claude-3-opus', display_name: 'Claude 3 Opus', status: 'available' }],
+      },
+    ]
+    renderPicker({ groups })
+    const errorEl = screen.getByTestId('probe-last-error')
+    expect(errorEl).toBeInTheDocument()
+    expect(errorEl.textContent).toContain('Connection timeout after 30s')
+  })
+
+  it('does not render last_error element when last_error is null', () => {
+    const groups: ModelProviderGroup[] = [
+      {
+        provider: 'openai',
+        probe_status: 'fresh',
+        fetched_at: minutesAgo(2),
+        last_error: null,
+        models: [{ id: 'gpt-4o', display_name: 'GPT-4o', status: 'available' }],
+      },
+    ]
+    renderPicker({ groups })
+    expect(screen.queryByTestId('probe-last-error')).not.toBeInTheDocument()
+  })
+
+  it('renders last_error for failed provider without error styling', () => {
+    const groups: ModelProviderGroup[] = [
+      {
+        provider: 'mistral',
+        probe_status: 'failed',
+        fetched_at: null,
+        last_error: 'API returned 503',
+        models: [{ id: 'mistral-large', display_name: 'Mistral Large', status: 'probe_failed' }],
+      },
+    ]
+    renderPicker({ groups, allowUnavailableDefault: true })
+    const errorEl = screen.getByTestId('probe-last-error')
+    expect(errorEl.textContent).toContain('API returned 503')
+    // Should use gray (informational) text, not red error class
+    expect(errorEl.className).not.toMatch(/text-red/)
+    expect(errorEl.className).toMatch(/text-gray/)
   })
 })

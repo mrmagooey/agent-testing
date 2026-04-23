@@ -102,6 +102,9 @@ class ProviderCatalog:
             else:
                 self._snapshots[p.provider_key] = ProviderSnapshot(probe_status="disabled")
         self._task: asyncio.Task | None = None
+        # Monotonically-increasing counter bumped on every snapshot update.
+        # Used by compute_availability's LRU cache to invalidate on probe refresh.
+        self.snapshot_version: int = 0
 
     # ------------------------------------------------------------------
     # Public API
@@ -189,6 +192,9 @@ class ProviderCatalog:
                         )
                         continue
                     self._snapshots[key] = snap
+
+        # Bump version so compute_availability's LRU cache sees new data.
+        self.snapshot_version += 1
 
     async def _safe_probe(self, probe: ProviderProbe) -> ProviderSnapshot:
         """Run probe; handle errors without propagating."""

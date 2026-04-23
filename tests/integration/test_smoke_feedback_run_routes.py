@@ -26,6 +26,7 @@ from tests.integration.test_coordinator_api import _make_coordinator
 def _fake_catalog(snapshots: dict) -> ProviderCatalog:
     catalog = MagicMock(spec=ProviderCatalog)
     catalog.snapshot.return_value = snapshots
+    catalog.snapshot_version = 0
     return catalog
 
 

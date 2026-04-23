@@ -132,6 +132,8 @@ export interface Model {
 export interface ModelProviderGroup {
   provider: string
   probe_status: ProviderProbeStatus
+  fetched_at: string | null
+  last_error: string | null
   models: Model[]
 }
 

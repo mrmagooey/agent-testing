@@ -36,31 +36,71 @@ function capitalize(s: string): string {
 
 // --- Sub-components ---
 
-function ProbeStatusIndicator({ status }: { status: ProviderProbeStatus }) {
-  if (status === 'fresh') return null
+function formatRelativeTime(fetchedAt: string | null): string {
+  if (!fetchedAt) return 'never probed'
+  const ageMs = Date.now() - Date.parse(fetchedAt)
+  const ageMin = Math.floor(ageMs / 60_000)
+  if (ageMin < 1) return 'last probed just now'
+  if (ageMin === 1) return 'last probed 1 min ago'
+  return `last probed ${ageMin} min ago`
+}
+
+function ProbeStatusIndicator({
+  status,
+  fetchedAt,
+}: {
+  status: ProviderProbeStatus
+  fetchedAt: string | null
+}) {
+  if (status === 'fresh') {
+    return (
+      <span
+        className="text-xs text-gray-400 dark:text-gray-500"
+        data-testid="probe-timestamp"
+      >
+        {formatRelativeTime(fetchedAt)}
+      </span>
+    )
+  }
 
   if (status === 'stale') {
     return (
-      <span
-        title="Last probe stale — results may be out of date"
-        className="inline-flex items-center text-amber-500 dark:text-amber-400"
-        aria-label="stale probe"
-        data-testid="probe-stale"
-      >
-        <Clock size={12} />
+      <span className="inline-flex items-center gap-1">
+        <span
+          title="Last probe stale — results may be out of date"
+          className="inline-flex items-center text-amber-500 dark:text-amber-400"
+          aria-label="stale probe"
+          data-testid="probe-stale"
+        >
+          <Clock size={12} />
+        </span>
+        <span
+          className="text-xs text-gray-400 dark:text-gray-500"
+          data-testid="probe-timestamp"
+        >
+          {formatRelativeTime(fetchedAt)}
+        </span>
       </span>
     )
   }
 
   if (status === 'failed') {
     return (
-      <span
-        title="Catalog probe failed — showing last known state"
-        className="inline-flex items-center text-red-500 dark:text-red-400"
-        aria-label="probe failed"
-        data-testid="probe-failed"
-      >
-        <AlertTriangle size={12} />
+      <span className="inline-flex items-center gap-1">
+        <span
+          title="Catalog probe failed — showing last known state"
+          className="inline-flex items-center text-red-500 dark:text-red-400"
+          aria-label="probe failed"
+          data-testid="probe-failed"
+        >
+          <AlertTriangle size={12} />
+        </span>
+        <span
+          className="text-xs text-gray-400 dark:text-gray-500"
+          data-testid="probe-timestamp"
+        >
+          {formatRelativeTime(fetchedAt)}
+        </span>
       </span>
     )
   }
@@ -288,11 +328,25 @@ export default function ModelSearchPicker({
                 <Command.Group
                   key={group.provider}
                   heading={
-                    <div className="flex items-center justify-between px-3 py-1.5 sticky top-0 bg-gray-50 dark:bg-gray-800 border-b border-gray-100 dark:border-gray-700">
-                      <span className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
-                        {capitalize(group.provider)}
-                      </span>
-                      <ProbeStatusIndicator status={group.probe_status} />
+                    <div className="flex flex-col px-3 py-1.5 sticky top-0 bg-gray-50 dark:bg-gray-800 border-b border-gray-100 dark:border-gray-700">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+                          {capitalize(group.provider)}
+                        </span>
+                        <ProbeStatusIndicator
+                          status={group.probe_status}
+                          fetchedAt={group.fetched_at ?? null}
+                        />
+                      </div>
+                      {group.last_error && (
+                        <span
+                          className="text-xs text-gray-400 dark:text-gray-500 truncate mt-0.5"
+                          data-testid="probe-last-error"
+                          title={group.last_error}
+                        >
+                          {group.last_error}
+                        </span>
+                      )}
                     </div>
                   }
                 >

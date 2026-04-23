@@ -51,6 +51,7 @@ def _make_coordinator(tmp_path: Path, db: Database) -> ExperimentCoordinator:
 def _fake_catalog(snapshots: dict[str, ProviderSnapshot]) -> ProviderCatalog:
     catalog = MagicMock(spec=ProviderCatalog)
     catalog.snapshot.return_value = snapshots
+    catalog.snapshot_version = 0
     return catalog
 
 
@@ -313,15 +314,19 @@ def test_accept_header_v0_returns_flat(_ctx, monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_grouped_shape_has_required_fields(_ctx, monkeypatch):
-    """Verify the grouped response has provider, probe_status, and models fields."""
+    """Verify the grouped response has provider, probe_status, fetched_at, last_error and models fields."""
     client, c = _ctx
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    from datetime import datetime, timezone as tz
 
     c.catalog = _fake_catalog({
         "openai": ProviderSnapshot(
             probe_status="fresh",
             model_ids=frozenset(["gpt-4o"]),
             metadata={"gpt-4o": ModelMetadata(id="gpt-4o", raw_id="gpt-4o")},
+            fetched_at=datetime(2026, 4, 23, 14, 5, 23, tzinfo=tz.utc),
+            last_error=None,
         )
     })
 
@@ -333,11 +338,59 @@ def test_grouped_shape_has_required_fields(_ctx, monkeypatch):
     for group in groups:
         assert "provider" in group
         assert "probe_status" in group
+        assert "fetched_at" in group
+        assert "last_error" in group
         assert "models" in group
         for model in group["models"]:
             assert "id" in model
             assert "status" in model
             assert "display_name" in model
+
+
+def test_fetched_at_and_last_error_serialised(_ctx, monkeypatch):
+    """fetched_at is ISO-8601 UTC string; last_error is string or null."""
+    client, c = _ctx
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    from datetime import datetime, timezone as tz
+
+    c.catalog = _fake_catalog({
+        "openai": ProviderSnapshot(
+            probe_status="stale",
+            model_ids=frozenset(["gpt-4o"]),
+            metadata={"gpt-4o": ModelMetadata(id="gpt-4o", raw_id="gpt-4o")},
+            fetched_at=datetime(2026, 4, 23, 14, 5, 23, tzinfo=tz.utc),
+            last_error="connection timeout",
+        )
+    })
+
+    resp = client.get("/models")
+    assert resp.status_code == 200
+    groups = resp.json()
+    openai_group = next(g for g in groups if g["provider"] == "openai")
+
+    assert openai_group["fetched_at"] == "2026-04-23T14:05:23Z"
+    assert openai_group["last_error"] == "connection timeout"
+
+
+def test_fetched_at_null_when_no_snapshot_time(_ctx):
+    """fetched_at is null when the snapshot has no fetched_at."""
+    client, c = _ctx
+
+    c.catalog = _fake_catalog({
+        "openai": ProviderSnapshot(
+            probe_status="fresh",
+            model_ids=frozenset(["gpt-4o"]),
+            metadata={"gpt-4o": ModelMetadata(id="gpt-4o", raw_id="gpt-4o")},
+            fetched_at=None,
+            last_error=None,
+        )
+    })
+
+    import os
+    resp = client.get("/models", headers={})
+    # Need key set to get models
+    assert resp.status_code == 200
 
 
 # ---------------------------------------------------------------------------

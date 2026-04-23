@@ -10,11 +10,13 @@ Table-driven: parametrize over all combinations of:
 from __future__ import annotations
 
 import pytest
+from datetime import datetime, timezone
 
 from sec_review_framework.config import ModelProviderConfig
 from sec_review_framework.models.availability import (
     ModelEntry,
     ProviderGroup,
+    _lru_cache,
     build_effective_registry,
     build_id_to_status,
     compute_availability,
@@ -490,3 +492,128 @@ class TestSynthesizedLocalLLM:
 
         assert len(groups) == 1
         assert groups[0].models[0].status == "probe_failed"
+
+
+# ---------------------------------------------------------------------------
+# Memoization
+# ---------------------------------------------------------------------------
+
+class TestMemoization:
+    """compute_availability is cached; identical inputs return the same object
+    (cache hit) and bumping snapshot_version forces a recompute."""
+
+    def setup_method(self):
+        # Clear the LRU cache so each test starts clean.
+        _lru_cache.clear()
+
+    def test_identical_inputs_return_same_object(self):
+        """Calling compute_availability twice with identical inputs returns
+        the same list object — confirming a cache hit occurred."""
+        cfg = _make_api_key_cfg(model_name="gpt-4o")
+        snap = _fresh_snapshot("gpt-4o")
+        snapshots = {"openai": snap}
+        env = {"OPENAI_API_KEY": "sk-test"}
+
+        result1 = compute_availability([cfg], snapshots, env, snapshot_version=1)
+        result2 = compute_availability([cfg], snapshots, env, snapshot_version=1)
+
+        # Same object identity means the second call was served from cache.
+        assert result1 is result2
+
+    def test_new_snapshot_version_invalidates_cache(self):
+        """Bumping snapshot_version forces a recompute."""
+        cfg = _make_api_key_cfg(model_name="gpt-4o")
+        snap = _fresh_snapshot("gpt-4o")
+        snapshots: dict = {"openai": snap}
+        env = {"OPENAI_API_KEY": "sk-test"}
+
+        result1 = compute_availability([cfg], snapshots, env, snapshot_version=1)
+        assert result1[0].probe_status == "fresh"
+
+        # Replace snapshot content and bump version.
+        snapshots["openai"] = ProviderSnapshot(probe_status="failed", last_error="boom")
+        result2 = compute_availability([cfg], snapshots, env, snapshot_version=2)
+
+        # New result reflects the updated snapshot.
+        assert result2[0].probe_status == "failed"
+        # Different objects — cache miss.
+        assert result1 is not result2
+
+    def test_cache_bounded_at_maxsize(self):
+        """Cache evicts oldest entries when it exceeds maxsize=4."""
+        from sec_review_framework.models.availability import _CACHE_MAXSIZE
+
+        cfg = _make_api_key_cfg(model_name="gpt-4o")
+        snap = _fresh_snapshot("gpt-4o")
+        env = {"OPENAI_API_KEY": "sk-test"}
+
+        for version in range(_CACHE_MAXSIZE + 2):
+            compute_availability([cfg], {"openai": snap}, env, snapshot_version=version)
+
+        assert len(_lru_cache) <= _CACHE_MAXSIZE
+
+
+# ---------------------------------------------------------------------------
+# fetched_at / last_error serialization
+# ---------------------------------------------------------------------------
+
+class TestFetchedAtAndLastError:
+    """groups_to_dicts includes fetched_at (ISO-8601 UTC) and last_error."""
+
+    def test_fetched_at_iso_format(self):
+        cfg = _make_api_key_cfg(model_name="gpt-4o")
+        dt = datetime(2026, 4, 23, 14, 5, 23, tzinfo=timezone.utc)
+        snap = ProviderSnapshot(
+            probe_status="fresh",
+            model_ids=frozenset(["gpt-4o"]),
+            metadata={"gpt-4o": ModelMetadata(id="gpt-4o")},
+            fetched_at=dt,
+        )
+        groups = compute_availability([cfg], {"openai": snap}, {"OPENAI_API_KEY": "sk"})
+        result = groups_to_dicts(groups)
+        assert result[0]["fetched_at"] == "2026-04-23T14:05:23Z"
+
+    def test_fetched_at_null_when_none(self):
+        cfg = _make_api_key_cfg(model_name="gpt-4o")
+        snap = ProviderSnapshot(
+            probe_status="fresh",
+            model_ids=frozenset(["gpt-4o"]),
+            metadata={"gpt-4o": ModelMetadata(id="gpt-4o")},
+            fetched_at=None,
+        )
+        groups = compute_availability([cfg], {"openai": snap}, {"OPENAI_API_KEY": "sk"})
+        result = groups_to_dicts(groups)
+        assert result[0]["fetched_at"] is None
+
+    def test_last_error_included(self):
+        cfg = _make_api_key_cfg(model_name="gpt-4o")
+        snap = ProviderSnapshot(
+            probe_status="stale",
+            model_ids=frozenset(["gpt-4o"]),
+            metadata={"gpt-4o": ModelMetadata(id="gpt-4o")},
+            last_error="connection timeout",
+        )
+        groups = compute_availability([cfg], {"openai": snap}, {"OPENAI_API_KEY": "sk"})
+        result = groups_to_dicts(groups)
+        assert result[0]["last_error"] == "connection timeout"
+
+    def test_last_error_null_when_none(self):
+        cfg = _make_api_key_cfg(model_name="gpt-4o")
+        snap = _fresh_snapshot("gpt-4o")
+        groups = compute_availability([cfg], {"openai": snap}, {"OPENAI_API_KEY": "sk"})
+        result = groups_to_dicts(groups)
+        assert result[0]["last_error"] is None
+
+    def test_fetched_at_naive_datetime_treated_as_utc(self):
+        """Naive datetimes (no tzinfo) are treated as UTC in the output."""
+        cfg = _make_api_key_cfg(model_name="gpt-4o")
+        naive_dt = datetime(2026, 4, 23, 12, 0, 0)  # no tzinfo
+        snap = ProviderSnapshot(
+            probe_status="fresh",
+            model_ids=frozenset(["gpt-4o"]),
+            metadata={"gpt-4o": ModelMetadata(id="gpt-4o")},
+            fetched_at=naive_dt,
+        )
+        groups = compute_availability([cfg], {"openai": snap}, {"OPENAI_API_KEY": "sk"})
+        result = groups_to_dicts(groups)
+        assert result[0]["fetched_at"] == "2026-04-23T12:00:00Z"

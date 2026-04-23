@@ -19,6 +19,7 @@ from sec_review_framework.models.catalog import ModelMetadata, ProviderCatalog, 
 def _fake_catalog(snapshots: dict[str, ProviderSnapshot]) -> ProviderCatalog:
     catalog = MagicMock(spec=ProviderCatalog)
     catalog.snapshot.return_value = snapshots
+    catalog.snapshot_version = 0
     return catalog
 
 

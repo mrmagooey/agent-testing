@@ -56,6 +56,7 @@ def _fake_catalog(snapshots: dict[str, ProviderSnapshot]) -> ProviderCatalog:
     """Build a ProviderCatalog with a fake snapshot() return."""
     catalog = MagicMock(spec=ProviderCatalog)
     catalog.snapshot.return_value = snapshots
+    catalog.snapshot_version = 0
     return catalog
 
 

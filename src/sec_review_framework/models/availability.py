@@ -8,9 +8,13 @@ The result is used by both GET /api/models and the submit-time validator.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
+import threading
+from collections import OrderedDict
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Mapping
 
 from sec_review_framework.config import ModelProviderConfig
@@ -42,6 +46,64 @@ class ProviderGroup:
     provider: str
     probe_status: ProbeStatus
     models: list[ModelEntry]
+    fetched_at: datetime | None = None
+    last_error: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Memoisation helpers
+# ---------------------------------------------------------------------------
+
+_CACHE_MAXSIZE = 4
+_cache_lock = threading.Lock()
+# OrderedDict used as an LRU: key → result.
+_lru_cache: OrderedDict[str, list[ProviderGroup]] = OrderedDict()
+
+
+def _env_subset_hash(env: Mapping[str, str]) -> str:
+    """Hash only the env vars relevant to provider authentication.
+
+    Uses ENV_VAR_FOR_PROVIDER values so the hash changes when any provider
+    key is added, removed, or rotated between calls.
+    """
+    relevant_vars = sorted(
+        v for v in ENV_VAR_FOR_PROVIDER.values() if v is not None
+    )
+    parts = "|".join(f"{k}={env.get(k, '')}" for k in relevant_vars)
+    return hashlib.sha256(parts.encode()).hexdigest()[:16]
+
+
+def _snapshots_hash(snapshots: dict[str, ProviderSnapshot]) -> str:
+    """Stable hash of the snapshots dict contents.
+
+    ProviderSnapshot is a mutable dataclass and not hashable, so we
+    derive a digest from its probe-relevant fields including metadata.
+    """
+    parts: list[str] = []
+    for key in sorted(snapshots):
+        s = snapshots[key]
+        model_ids_str = ",".join(sorted(s.model_ids))
+        fetched = s.fetched_at.isoformat() if s.fetched_at else ""
+        # Include a hash of metadata keys/display_name/context_length so metadata
+        # changes also invalidate the cache.
+        meta_parts = sorted(
+            f"{mid}:{m.display_name or ''}:{m.context_length or ''}:{m.region or ''}"
+            for mid, m in s.metadata.items()
+        )
+        meta_str = ";".join(meta_parts)
+        parts.append(
+            f"{key}:{s.probe_status}:{model_ids_str}:{fetched}:{s.last_error or ''}:{meta_str}"
+        )
+    return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
+
+
+def _registry_hash(registry: list[ModelProviderConfig]) -> str:
+    """Stable hash of the registry list contents."""
+    parts = [
+        f"{c.id}:{c.model_name}:{c.auth}:{c.api_key_env or ''}:{c.api_base or ''}:{c.display_name or ''}:{c.region or ''}"
+        for c in registry
+    ]
+    return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
 
 
 def _auth_spec_for_provider(provider_key: str) -> AuthSpec:
@@ -193,26 +255,12 @@ def _enrich_entry(
     )
 
 
-def compute_availability(
+def _compute_availability_impl(
     registry: list[ModelProviderConfig],
     snapshots: dict[str, ProviderSnapshot],
     env: Mapping[str, str],
 ) -> list[ProviderGroup]:
-    """Compute availability for every registry entry, grouped by provider.
-
-    Parameters
-    ----------
-    registry:
-        Ordered list of ModelProviderConfig entries.
-    snapshots:
-        Provider snapshots from ProviderCatalog.snapshot().
-    env:
-        Environment variable mapping (usually os.environ).
-
-    Returns
-    -------
-    list[ProviderGroup] in insertion order of first appearance of each provider.
-    """
+    """Core implementation — not memoized directly; called by compute_availability."""
     # Preserve insertion order of providers.
     provider_order: list[str] = []
     groups: dict[str, list[ModelEntry]] = {}
@@ -237,9 +285,62 @@ def compute_availability(
             provider=provider_key,
             probe_status=probe_status,
             models=groups[provider_key],
+            fetched_at=snapshot.fetched_at if snapshot else None,
+            last_error=snapshot.last_error if snapshot else None,
         ))
 
     return result
+
+
+def compute_availability(
+    registry: list[ModelProviderConfig],
+    snapshots: dict[str, ProviderSnapshot],
+    env: Mapping[str, str],
+    *,
+    snapshot_version: int = 0,
+) -> list[ProviderGroup]:
+    """Compute availability for every registry entry, grouped by provider.
+
+    Results are memoized per ``(snapshot_version, env_subset_hash)`` so the
+    hot ``/models`` path avoids redundant work between requests.  The cache
+    is process-local, thread-safe, and bounded to ``_CACHE_MAXSIZE=4`` entries
+    (LRU eviction).
+
+    Parameters
+    ----------
+    registry:
+        Ordered list of ModelProviderConfig entries.
+    snapshots:
+        Provider snapshots from ProviderCatalog.snapshot().
+    env:
+        Environment variable mapping (usually os.environ).
+    snapshot_version:
+        Monotonically-increasing version from ProviderCatalog.  Pass
+        ``catalog.snapshot_version`` at call site to invalidate the cache on
+        each probe refresh.
+
+    Returns
+    -------
+    list[ProviderGroup] in insertion order of first appearance of each provider.
+    """
+    env_hash = _env_subset_hash(env)
+    snaps_hash = _snapshots_hash(snapshots)
+    reg_hash = _registry_hash(registry)
+    cache_key = f"{snapshot_version}:{snaps_hash}:{env_hash}:{reg_hash}"
+
+    with _cache_lock:
+        if cache_key in _lru_cache:
+            # Move to end (most-recently-used).
+            _lru_cache.move_to_end(cache_key)
+            return _lru_cache[cache_key]
+
+        result = _compute_availability_impl(registry, snapshots, env)
+
+        _lru_cache[cache_key] = result
+        _lru_cache.move_to_end(cache_key)
+        while len(_lru_cache) > _CACHE_MAXSIZE:
+            _lru_cache.popitem(last=False)
+        return result
 
 
 def flat_model_list(groups: list[ProviderGroup]) -> list[dict]:
@@ -274,9 +375,18 @@ def groups_to_dicts(groups: list[ProviderGroup]) -> list[dict]:
             if m.region is not None:
                 entry["region"] = m.region
             models_out.append(entry)
+        # Serialise fetched_at as ISO-8601 UTC string; null when absent.
+        fetched_at_str: str | None = None
+        if g.fetched_at is not None:
+            dt = g.fetched_at
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            fetched_at_str = dt.strftime("%Y-%m-%dT%H:%M:%SZ")
         out.append({
             "provider": g.provider,
             "probe_status": g.probe_status,
+            "fetched_at": fetched_at_str,
+            "last_error": g.last_error,
             "models": models_out,
         })
     return out

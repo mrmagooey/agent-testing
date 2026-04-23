@@ -46,6 +46,7 @@ def _make_coordinator(tmp_path: Path, db: Database) -> ExperimentCoordinator:
 def _fake_catalog(snapshots: dict[str, ProviderSnapshot]) -> ProviderCatalog:
     catalog = MagicMock(spec=ProviderCatalog)
     catalog.snapshot.return_value = snapshots
+    catalog.snapshot_version = 0
     return catalog
 
 

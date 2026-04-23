@@ -22,6 +22,8 @@ const GROUPED_RESPONSE: ModelProviderGroup[] = [
   {
     provider: 'openai',
     probe_status: 'fresh',
+    fetched_at: '2026-04-23T14:05:23Z',
+    last_error: null,
     models: [
       { id: 'gpt-4o', display_name: 'GPT-4o', status: 'available', context_length: 128000, region: null },
       { id: 'gpt-4o-mini', display_name: 'GPT-4o Mini', status: 'key_missing', context_length: 128000, region: null },
@@ -30,6 +32,8 @@ const GROUPED_RESPONSE: ModelProviderGroup[] = [
   {
     provider: 'bedrock',
     probe_status: 'disabled',
+    fetched_at: null,
+    last_error: null,
     models: [
       { id: 'bedrock-claude-3-5-sonnet', display_name: 'Claude 3.5 Sonnet (Bedrock)', status: 'key_missing', region: 'us-east-1' },
     ],
@@ -37,6 +41,8 @@ const GROUPED_RESPONSE: ModelProviderGroup[] = [
   {
     provider: 'anthropic',
     probe_status: 'fresh',
+    fetched_at: '2026-04-23T14:00:00Z',
+    last_error: null,
     models: [
       { id: 'claude-3-5-sonnet-20241022', display_name: 'Claude 3.5 Sonnet', status: 'available', context_length: 200000, region: null },
       { id: 'claude-3-opus-20240229', display_name: 'Claude 3 Opus', status: 'not_listed', context_length: 200000, region: null },
@@ -96,6 +102,8 @@ describe('listAvailableModelIds()', () => {
       {
         provider: 'openai',
         probe_status: 'failed',
+        fetched_at: null,
+        last_error: 'timeout',
         models: [
           { id: 'gpt-4o', display_name: 'GPT-4o', status: 'probe_failed' },
         ],
