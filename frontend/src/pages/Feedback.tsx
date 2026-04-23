@@ -308,7 +308,10 @@ export default function Feedback() {
       </section>
 
       {/* Experiment Comparison */}
-      <section className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
+      <section
+        className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6"
+        data-testid="experiment-comparison-section"
+      >
         <h2 className="font-semibold mb-5">Experiment Comparison</h2>
         <div className="flex flex-wrap items-end gap-4 mb-6">
           <div>
@@ -420,7 +423,10 @@ export default function Feedback() {
       </section>
 
       {/* FP Pattern Browser */}
-      <section className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
+      <section
+        className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6"
+        data-testid="fp-pattern-browser-section"
+      >
         <h2 className="font-semibold mb-5">FP Pattern Browser</h2>
         <div className="flex items-end gap-4 mb-5">
           <div>
