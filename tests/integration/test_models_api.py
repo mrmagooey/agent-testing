@@ -155,15 +155,22 @@ def test_bedrock_key_missing_when_snapshot_is_disabled(_ctx):
     client, c = _ctx
 
     c.catalog = _fake_catalog({
-        "bedrock": ProviderSnapshot(probe_status="disabled")
+        "bedrock": ProviderSnapshot(
+            probe_status="disabled",
+            last_error="AWS credentials not configured",
+        )
     })
 
     resp = client.get("/models")
     assert resp.status_code == 200
-    # No models emitted for disabled snapshot (build_effective_registry returns empty for disabled).
+    # Disabled snapshot with actionable last_error → group is included in the
+    # response so the frontend can render the empty-state card.
     groups = resp.json()
     bedrock_group = next((g for g in groups if g["provider"] == "bedrock"), None)
-    assert bedrock_group is None
+    assert bedrock_group is not None
+    assert bedrock_group["probe_status"] == "disabled"
+    assert bedrock_group["models"] == []
+    assert bedrock_group["last_error"] == "AWS credentials not configured"
 
 
 # ---------------------------------------------------------------------------
@@ -405,3 +412,83 @@ def test_no_snapshots_returns_empty_list(_ctx):
     resp = client.get("/models")
     assert resp.status_code == 200
     assert resp.json() == []
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: disabled snapshots expose last_error in API response
+# ---------------------------------------------------------------------------
+
+def test_disabled_providers_appear_with_last_error_template(_ctx):
+    """When probes are disabled due to missing creds, each provider group is
+    returned with probe_status='disabled', models=[], and last_error matching
+    the canonical template expected by the frontend empty-state renderer.
+
+    API-key probes: '<ENV_VAR> not set'
+    Bedrock probe: 'AWS credentials not configured'
+    """
+    import re
+    client, c = _ctx
+
+    c.catalog = _fake_catalog({
+        "openai": ProviderSnapshot(
+            probe_status="disabled",
+            last_error="OPENAI_API_KEY not set",
+        ),
+        "anthropic": ProviderSnapshot(
+            probe_status="disabled",
+            last_error="ANTHROPIC_API_KEY not set",
+        ),
+        "gemini": ProviderSnapshot(
+            probe_status="disabled",
+            last_error="GEMINI_API_KEY not set",
+        ),
+        "mistral": ProviderSnapshot(
+            probe_status="disabled",
+            last_error="MISTRAL_API_KEY not set",
+        ),
+        "cohere": ProviderSnapshot(
+            probe_status="disabled",
+            last_error="COHERE_API_KEY not set",
+        ),
+        "openrouter": ProviderSnapshot(
+            probe_status="disabled",
+            last_error="OPENROUTER_API_KEY not set",
+        ),
+        "bedrock": ProviderSnapshot(
+            probe_status="disabled",
+            last_error="AWS credentials not configured",
+        ),
+    })
+
+    resp = client.get("/models")
+    assert resp.status_code == 200
+    groups = resp.json()
+
+    env_var_re = re.compile(r"^([A-Z_]+) not set$")
+
+    provider_keys = {g["provider"] for g in groups}
+    expected_keys = {"openai", "anthropic", "gemini", "mistral", "cohere", "openrouter", "bedrock"}
+    assert expected_keys == provider_keys, (
+        f"Expected all disabled providers in response. Missing: {expected_keys - provider_keys}"
+    )
+
+    for group in groups:
+        assert group["probe_status"] == "disabled", (
+            f"Expected probe_status=disabled for {group['provider']}, got {group['probe_status']}"
+        )
+        assert group["models"] == [], (
+            f"Expected no models for disabled {group['provider']}"
+        )
+        last_error = group["last_error"]
+        assert last_error is not None, (
+            f"Expected last_error to be set for disabled {group['provider']}"
+        )
+
+        if group["provider"] == "bedrock":
+            assert last_error == "AWS credentials not configured", (
+                f"Bedrock last_error should be 'AWS credentials not configured', got {last_error!r}"
+            )
+        else:
+            assert env_var_re.match(last_error), (
+                f"Expected '<ENV_VAR> not set' pattern for {group['provider']}, got {last_error!r}"
+            )

@@ -63,7 +63,7 @@ class BedrockProbe:
         if creds is None:
             return ProviderSnapshot(
                 probe_status="disabled",
-                last_error="No AWS credentials found",
+                last_error="AWS credentials not configured",
             )
 
         regions_raw = os.environ.get("BEDROCK_PROBE_REGIONS", "us-east-1")

@@ -276,6 +276,23 @@ def _compute_availability_impl(
         entry = _enrich_entry(cfg, snapshot, status)
         groups[provider_key].append(entry)
 
+    # Also include providers that have a disabled snapshot but no registry
+    # entries, when the snapshot has a user-actionable last_error (env var not
+    # set, or AWS credentials missing).  This surfaces the empty-state card in
+    # the frontend so users know what to configure.  Infrastructure-level
+    # disabled providers (e.g. local_llm with no base URL) are intentionally
+    # omitted to avoid cluttering the UI.
+    _actionable_re = re.compile(r"^[A-Z_]+ not set$|^AWS credentials not configured$")
+    for provider_key, snapshot in snapshots.items():
+        if (
+            snapshot.probe_status == "disabled"
+            and provider_key not in groups
+            and snapshot.last_error is not None
+            and _actionable_re.match(snapshot.last_error)
+        ):
+            provider_order.append(provider_key)
+            groups[provider_key] = []
+
     result: list[ProviderGroup] = []
     for provider_key in provider_order:
         # Determine probe_status from snapshot; default "disabled" if none.

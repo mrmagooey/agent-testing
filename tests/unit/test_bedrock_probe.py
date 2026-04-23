@@ -84,7 +84,7 @@ async def test_bedrock_probe_disabled_when_no_credentials(monkeypatch):
         snap = await probe.probe()
 
     assert snap.probe_status == "disabled"
-    assert "credentials" in (snap.last_error or "").lower()
+    assert snap.last_error == "AWS credentials not configured"
 
 
 async def test_bedrock_probe_returns_fresh_with_models(monkeypatch):

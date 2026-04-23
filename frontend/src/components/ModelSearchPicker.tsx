@@ -4,6 +4,41 @@ import { AlertTriangle, Clock, X } from 'lucide-react'
 import type { ModelProviderGroup, ModelStatus, ProviderProbeStatus } from '../api/client'
 import ToggleChip from './ToggleChip'
 
+// Regex to detect the "{ENV_VAR} not set" pattern emitted by API-key probes.
+const ENV_VAR_NOT_SET_RE = /^([A-Z_]+) not set$/
+
+interface EmptyProviderCardProps {
+  providerKey: string
+  lastError: string | null
+}
+
+function EmptyProviderCard({ providerKey, lastError }: EmptyProviderCardProps): React.ReactElement {
+  const envMatch = lastError ? ENV_VAR_NOT_SET_RE.exec(lastError) : null
+
+  let content: React.ReactNode
+  if (envMatch) {
+    const envVar = envMatch[1]
+    content = (
+      <>
+        No models — set <code className="font-mono text-xs bg-gray-100 dark:bg-gray-700 px-1 rounded">{envVar}</code> to see available models.
+      </>
+    )
+  } else if (providerKey === 'bedrock') {
+    content = 'Configure AWS credentials to see available models.'
+  } else {
+    content = lastError ?? 'No models available.'
+  }
+
+  return (
+    <div
+      className="mx-3 my-2 px-3 py-2 rounded bg-gray-50 dark:bg-gray-800/60 border border-gray-200 dark:border-gray-700 text-xs text-gray-500 dark:text-gray-400"
+      data-testid="empty-provider-card"
+    >
+      {content}
+    </div>
+  )
+}
+
 interface ModelSearchPickerProps {
   groups: ModelProviderGroup[]
   selected: string[]
@@ -252,7 +287,9 @@ export default function ModelSearchPicker({
         return { group, filteredModels }
       })
       .filter(({ group, filteredModels }) => {
-        // Drop groups with no models at all
+        // Always show disabled+empty groups so the empty-state card renders.
+        if (group.probe_status === 'disabled' && group.models.length === 0) return true
+        // Drop groups with no models at all (other statuses)
         if (group.models.length === 0) return false
         // Keep groups that have filtered models OR all models are key_missing (for placeholder)
         return filteredModels.length > 0 || group.models.every((m) => m.status === 'key_missing')
@@ -350,7 +387,9 @@ export default function ModelSearchPicker({
                     </div>
                   }
                 >
-                  {allKeyMissing ? (
+                  {group.probe_status === 'disabled' && filteredModels.length === 0 && group.models.length === 0 ? (
+                    <EmptyProviderCard providerKey={group.provider} lastError={group.last_error ?? null} />
+                  ) : allKeyMissing ? (
                     <div className="px-3 py-2 text-xs text-gray-400 dark:text-gray-500 italic">
                       No {capitalize(group.provider)} key configured — set{' '}
                       {group.provider.toUpperCase()}_API_KEY to see models here.

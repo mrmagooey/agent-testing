@@ -1856,11 +1856,14 @@ class ExperimentCoordinator:
         """
         import os as _os
 
-        registry = self.effective_registry()
-        if not registry:
-            return []
         snapshots = self.catalog.snapshot() if self.catalog is not None else {}
         sv = self.catalog.snapshot_version if self.catalog is not None else 0
+        registry = self.effective_registry()
+        # If the registry is empty AND there are no snapshots at all, there is
+        # nothing to return.  We still continue when there are disabled snapshots
+        # so the frontend can render empty-state cards per provider.
+        if not registry and not snapshots:
+            return []
         groups = compute_availability(registry, snapshots, _os.environ, snapshot_version=sv)
 
         if flat:

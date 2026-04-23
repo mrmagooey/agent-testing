@@ -415,3 +415,112 @@ describe('probe staleness timestamp badges', () => {
     expect(errorEl.className).toMatch(/text-gray/)
   })
 })
+
+// ─── Phase 5: empty-state cards for disabled+empty providers ──────────────────
+
+describe('empty-state card for disabled providers', () => {
+  it('renders API-key empty-state card with env var name in <code>', () => {
+    const groups: ModelProviderGroup[] = [
+      {
+        provider: 'openai',
+        probe_status: 'disabled',
+        fetched_at: null,
+        last_error: 'OPENAI_API_KEY not set',
+        models: [],
+      },
+    ]
+    renderPicker({ groups })
+    const card = screen.getByTestId('empty-provider-card')
+    expect(card).toBeInTheDocument()
+    // The env var name should appear inside a <code> element
+    const codeEl = card.querySelector('code')
+    expect(codeEl).not.toBeNull()
+    expect(codeEl!.textContent).toBe('OPENAI_API_KEY')
+    // Full copy text
+    expect(card.textContent).toContain('OPENAI_API_KEY')
+    expect(card.textContent).toContain('to see available models')
+  })
+
+  it('renders AWS credentials empty-state card for bedrock provider', () => {
+    const groups: ModelProviderGroup[] = [
+      {
+        provider: 'bedrock',
+        probe_status: 'disabled',
+        fetched_at: null,
+        last_error: 'AWS credentials not configured',
+        models: [],
+      },
+    ]
+    renderPicker({ groups })
+    const card = screen.getByTestId('empty-provider-card')
+    expect(card).toBeInTheDocument()
+    expect(card.textContent).toContain('Configure AWS credentials')
+  })
+
+  it('renders fallback copy for unparseable last_error', () => {
+    const groups: ModelProviderGroup[] = [
+      {
+        provider: 'unknown-provider',
+        probe_status: 'disabled',
+        fetched_at: null,
+        last_error: 'some unexpected error message',
+        models: [],
+      },
+    ]
+    renderPicker({ groups })
+    const card = screen.getByTestId('empty-provider-card')
+    expect(card).toBeInTheDocument()
+    // Should render the verbatim last_error as fallback
+    expect(card.textContent).toContain('some unexpected error message')
+  })
+
+  it('renders "No models available" fallback when last_error is null', () => {
+    const groups: ModelProviderGroup[] = [
+      {
+        provider: 'unknown-provider',
+        probe_status: 'disabled',
+        fetched_at: null,
+        last_error: null,
+        models: [],
+      },
+    ]
+    renderPicker({ groups })
+    const card = screen.getByTestId('empty-provider-card')
+    expect(card).toBeInTheDocument()
+    expect(card.textContent).toContain('No models available')
+  })
+
+  it('does NOT render empty-state card when probe_status is fresh with models', () => {
+    const groups: ModelProviderGroup[] = [
+      {
+        provider: 'openai',
+        probe_status: 'fresh',
+        fetched_at: minutesAgo(2),
+        last_error: null,
+        models: [{ id: 'gpt-4o', display_name: 'GPT-4o', status: 'available' }],
+      },
+    ]
+    renderPicker({ groups })
+    expect(screen.queryByTestId('empty-provider-card')).not.toBeInTheDocument()
+    expect(screen.getByRole('option', { name: /GPT-4o/ })).toBeInTheDocument()
+  })
+
+  it('keeps provider header and probe-disabled pill visible alongside the empty-state card', () => {
+    const groups: ModelProviderGroup[] = [
+      {
+        provider: 'openai',
+        probe_status: 'disabled',
+        fetched_at: null,
+        last_error: 'OPENAI_API_KEY not set',
+        models: [],
+      },
+    ]
+    renderPicker({ groups })
+    // Provider header is present
+    expect(screen.getByText('Openai')).toBeInTheDocument()
+    // Probe disabled pill is present
+    expect(screen.getByTestId('probe-disabled')).toBeInTheDocument()
+    // Empty-state card is present
+    expect(screen.getByTestId('empty-provider-card')).toBeInTheDocument()
+  })
+})
