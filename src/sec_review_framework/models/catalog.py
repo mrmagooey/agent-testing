@@ -35,6 +35,9 @@ class ModelMetadata:
     context_length: int | None = None
     region: str | None = None      # Bedrock
     pricing: dict | None = None    # OpenRouter
+    # Probe-driven catalog fields (Phase 1 of YAML removal migration):
+    provider_key: str | None = None  # logical group — "openai", "bedrock", etc.
+    raw_id: str | None = None        # full LiteLLM routing string (== id)
 
 
 @dataclass

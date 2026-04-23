@@ -72,6 +72,8 @@ class LiteLLMEndpointProbe:
                 id=mid,
                 display_name=raw_id,
                 context_length=context_length,
+                provider_key=self.provider_key,
+                raw_id=mid,
             )
 
         return ProviderSnapshot(

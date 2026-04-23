@@ -58,6 +58,8 @@ class OpenRouterProbe:
                 display_name=m.get("name"),
                 context_length=m.get("context_length"),
                 pricing=pricing_raw,
+                provider_key="openrouter",
+                raw_id=mid,
             )
 
         return ProviderSnapshot(
