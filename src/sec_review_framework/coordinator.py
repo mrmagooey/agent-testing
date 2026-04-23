@@ -2767,8 +2767,8 @@ def list_models(
 
     Default response is the grouped-by-provider shape.
     Pass ``?format=flat`` or ``Accept: application/vnd.sec-review.v0+json`` for
-    the legacy flat list ``[{id, display_name}]`` — used by Phase 3 frontend
-    until Phase 4+ updates the client.
+    the legacy flat list ``[{id, display_name}]`` — retained for backward
+    compatibility with older clients.
     """
     use_flat = format == "flat"
     if not use_flat and request is not None:

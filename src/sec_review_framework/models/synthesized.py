@@ -1,10 +1,9 @@
 """synthesize_configs_from_snapshot — build ModelProviderConfig objects from a probe snapshot.
 
 Synthesized configs let probe-discovered models flow into availability
-computation and submit-time enrichment without manual YAML entries.
-
-Phase 2 upgrade: AuthSpec dataclasses control how auth fields are populated;
-the stable model id equals the full LiteLLM routing string (raw_id).
+computation and submit-time enrichment. AuthSpec dataclasses control how
+auth fields are populated; the stable model id equals the full LiteLLM
+routing string (raw_id).
 """
 
 from __future__ import annotations

@@ -1,17 +1,16 @@
 """Legacy model-id aliases.
 
-The YAML-driven registry used short opaque ids like ``bedrock-claude-3-5-sonnet``
-and ``openrouter-llama-3.1-8b``.  After Phase 2 of the catalog migration the
-stable id is the full LiteLLM routing string
+Old short opaque ids like ``bedrock-claude-3-5-sonnet`` and
+``openrouter-llama-3.1-8b`` map to the full LiteLLM routing string
 (``bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0``,
-``openrouter/meta-llama/llama-3.1-8b-instruct``).
+``openrouter/meta-llama/llama-3.1-8b-instruct``) that the probe-driven
+catalog uses as the stable id.
 
-This module maps the old opaque ids to the new routing-string ids so rows
-persisted in the database (and references in older ``experiments.yaml`` files)
-continue to resolve.  ``rewrite_legacy_id()`` is the single entry point.
-
-A one-time deprecation warning is emitted per id per process so operators can
-find and update stale references without log flooding.
+The mapping lets rows persisted in the database (and references in older
+``experiments.yaml`` files) continue to resolve. ``rewrite_legacy_id()`` is
+the single entry point, and emits a one-shot deprecation warning per id
+per process so operators can find and update stale references without log
+flooding.
 """
 
 from __future__ import annotations
