@@ -4431,10 +4431,11 @@ Overview of framework state. First thing a user sees.
 Form-driven experiment creation. Replaces the `curl -X POST /experiments` workflow.
 
 - **Dataset selector** — dropdown of available datasets with label count and size.
-- **Model picker** — checkboxes for available models. Shows pricing per model.
+- **Model picker** — `<ModelSearchPicker>`: a searchable, filterable picker grouped by provider. Supports keyboard navigation, shows per-model availability status, and warns when a selected model becomes unavailable.
 - **Strategy picker** — checkboxes for strategies. Each expands to show its config (max_turns, skip_patterns, etc.).
 - **Profile picker** — radio buttons for review profiles. Shows the prompt modifier text on hover.
 - **Dimension toggles** — tool_variants (with/without), verification (none/with), parallel modes.
+- **Tool extensions** — multi-select chips populated from `GET /api/tool-extensions` (via `listToolExtensions()`). Available extensions are selectable; unavailable ones are shown disabled. A **"Generate all combinations (power-set)"** checkbox, when enabled, submits runs for every subset of the selected extensions rather than a single fixed set.
 - **Repetitions** — number input, defaults to 1.
 - **Cross-model verification** — optional model selector for verifier.
 - **Cost estimate** — live-updating estimate as the user changes selections. Calls `POST /experiments/estimate` on every change (debounced). Shows total runs, estimated cost, breakdown by model.
@@ -4452,7 +4453,7 @@ Real-time progress and results for a single experiment.
 - Cancel button.
 
 **After completion:**
-- **Comparative matrix** — the full matrix table from the report. Sortable by any column. Heatmap coloring on precision/recall/F1 cells (green = good, red = bad).
+- **Comparative matrix** — the full matrix table from the report. Sortable by any column. Heatmap coloring on precision/recall/F1 cells (green = good, red = bad). When runs in the experiment carry tool extensions, a dynamic **Extensions** column appears automatically (driven by the `tool_extensions` field on each run row).
 - **Dimension analysis charts** — bar charts for model comparison, strategy comparison, tool access impact, profile impact, verification impact. Generated client-side from the JSON report data.
 - **Cost analysis** — table: model, avg cost/run, total experiment cost, cost per true positive.
 - **Evidence quality breakdown** — stacked bar chart per model: strong/adequate/weak.
@@ -4524,6 +4525,23 @@ Deep dive into a single experiment run.
 - **Tool call audit** — table of tool calls with name, input (truncated, expandable), timestamp. Flagged rows for calls with URL-like strings.
 - **Conversation transcript** — collapsible, full message-by-message exchange from `conversation.jsonl`. Each message rendered in CodeMirror with role-based coloring (user=blue, assistant=green, tool=gray). Useful for debugging why the model did or didn't find something.
 
+#### Global Findings Explorer (`/findings`)
+
+Cross-experiment findings search and exploration. Allows searching all findings regardless of which experiment produced them.
+
+- **Filter bar** (`<FindingsFilterBar>`) — faceted filters for vuln_class, severity, match_status, model, strategy, and dataset. Date-range pickers for `created_from` / `created_to`. All filters are reflected in URL query parameters for shareability.
+- **Free-text search** — `q` parameter forwarded to `GET /api/findings` full-text search.
+- **Findings list** — paginated list of `<FindingRow>` entries. Each row is expandable to show the full LLM description, source context, and a link back to the originating run.
+- **Pagination** — `<Pagination>` widget with configurable page size (25 / 50 / 100).
+
+#### Dataset Source View (`/datasets/:name/source`)
+
+Full-screen source file viewer for a specific file within a dataset.
+
+- **Breadcrumbs** — dataset list → dataset detail → current file path.
+- **Source viewer** (`<DatasetSourceViewer>`) — loads file content via `GET /datasets/{name}/file?path=...`. Renders in CodeMirror with syntax highlighting, line numbers, and optional line-range highlighting (`?line=&end=` query parameters). Ground-truth label annotations are shown as colored gutter marks.
+- **Back-to-run link** — when navigated to from a run finding (`?from_experiment=&from_run=`), shows a contextual "Back to run" button.
+
 ### 16.3 Directory Structure
 
 ```
@@ -4546,21 +4564,39 @@ frontend/
 │   │   ├── CVEDiscovery.tsx
 │   │   ├── Datasets.tsx
 │   │   ├── DatasetDetail.tsx
+│   │   ├── DatasetSourceView.tsx  # full-screen source viewer for a dataset file
+│   │   ├── Findings.tsx           # global findings search/explorer page
 │   │   └── Feedback.tsx
 │   ├── components/
-│   │   ├── MatrixTable.tsx       # sortable, heatmapped comparative matrix
-│   │   ├── FindingsExplorer.tsx  # filterable findings table with search + expand
-│   │   ├── FindingsSearch.tsx    # free-text search bar, calls /findings/search
-│   │   ├── CodeViewer.tsx        # CodeMirror wrapper: syntax highlight, annotations, line gutter
-│   │   ├── FileTree.tsx          # collapsible directory tree with label badges
-│   │   ├── DiffViewer.tsx        # side-by-side diff (for injection preview + run comparison)
-│   │   ├── CostEstimate.tsx      # live cost estimate widget
+│   │   ├── MatrixTable.tsx        # sortable, heatmapped comparative matrix; renders a dynamic "Extensions" column when any run carries tool_extensions
+│   │   ├── FindingsExplorer.tsx   # filterable findings table with search + expand
+│   │   ├── FindingsSearch.tsx     # free-text search bar, calls /findings/search
+│   │   ├── FindingRow.tsx         # single expandable finding row (experiment or global scope)
+│   │   ├── FindingsFilterBar.tsx  # faceted filter bar for the global findings page
+│   │   ├── MatrixFilterBar.tsx    # popover filter controls for the experiment matrix table
+│   │   ├── AccuracyHeatmap.tsx    # amber-ramp heatmap of model × dataset accuracy grid
+│   │   ├── TrendGrid.tsx          # grid of per-model accuracy trend cards with sparklines
+│   │   ├── Sparkline.tsx          # small Recharts line chart for accuracy-over-time trend data
+│   │   ├── ModelSearchPicker.tsx  # searchable, keyboard-navigable model picker grouped by provider
+│   │   ├── DatasetSourceViewer.tsx # CodeMirror-based source file viewer with label annotations and line highlighting
+│   │   ├── PromptInjectionViewer.tsx # side-by-side diff viewer for prompt injection previews
+│   │   ├── RunPicker.tsx          # paired experiment + run select dropdowns
+│   │   ├── Pagination.tsx         # page navigation with configurable page-size selector
+│   │   ├── Breadcrumbs.tsx        # accessible breadcrumb trail for nested pages
+│   │   ├── ToggleChip.tsx         # pill-shaped toggle chip used in filter and multi-select controls
+│   │   ├── Skeleton.tsx           # animated loading skeletons (SkeletonLine, SkeletonCard, SkeletonTable)
+│   │   ├── EmptyState.tsx         # centred empty-state placeholder with icon, title, and optional subtitle
+│   │   ├── PageDescription.tsx    # styled paragraph wrapper for page-level description text
+│   │   ├── CodeViewer.tsx         # CodeMirror wrapper: syntax highlight, annotations, line gutter
+│   │   ├── FileTree.tsx           # collapsible directory tree with label badges
+│   │   ├── DiffViewer.tsx         # side-by-side diff (for injection preview + run comparison)
+│   │   ├── CostEstimate.tsx       # live cost estimate widget
 │   │   ├── ProgressBar.tsx
-│   │   ├── DimensionChart.tsx    # bar chart for dimension analysis
-│   │   ├── CVECandidateTable.tsx # discovery results with bulk select
+│   │   ├── DimensionChart.tsx     # bar chart for dimension analysis
+│   │   ├── CVECandidateTable.tsx  # discovery results with bulk select
 │   │   ├── ConversationViewer.tsx # message-by-message transcript with role coloring
-│   │   ├── ThemeToggle.tsx       # dark/light mode toggle
-│   │   └── DownloadButton.tsx    # report download (.zip)
+│   │   ├── ThemeToggle.tsx        # dark/light mode toggle
+│   │   └── DownloadButton.tsx     # report download (.zip)
 │   └── hooks/
 │       ├── useExperiment.ts      # polling hook for experiment progress
 │       ├── useEstimate.ts        # debounced cost estimate
@@ -4589,7 +4625,7 @@ The frontend is built during the coordinator Docker image build:
 
 ```dockerfile
 # Dockerfile.coordinator (updated)
-FROM node:20-slim AS frontend-build
+FROM node:22-slim AS frontend-build
 WORKDIR /frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
