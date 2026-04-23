@@ -57,34 +57,25 @@ def test_exactly_one_experiment_config_configmap() -> None:
 
 @requires_helm
 def test_experiment_configmap_has_required_keys() -> None:
-    """ConfigMap data includes the expected config/*.yaml files."""
+    """ConfigMap data includes the expected config/*.yaml files.
+
+    models.yaml was deleted in Phase 2 (the catalog is now probe-driven);
+    the required set covers only the files that still exist under config/.
+    """
     docs = _render_chart()
     cm = _get_experiment_configmap(docs)
     data = cm.get("data") or {}
 
     required_keys = {
-        "models.yaml",
         "pricing.yaml",
         "review_profiles.yaml",
         "concurrency.yaml",
     }
     missing = required_keys - set(data.keys())
     assert not missing, f"ConfigMap is missing keys: {missing}"
-
-
-@requires_helm
-def test_experiment_configmap_models_yaml_content_matches_repo() -> None:
-    """The models.yaml key in the ConfigMap matches config/models.yaml on disk."""
-    docs = _render_chart()
-    cm = _get_experiment_configmap(docs)
-    data = cm.get("data") or {}
-
-    assert "models.yaml" in data, "models.yaml key missing from ConfigMap"
-
-    repo_content = (CONFIG_DIR / "models.yaml").read_text()
-    # Both should parse to the same object (ignoring trailing newline differences).
-    assert yaml.safe_load(data["models.yaml"]) == yaml.safe_load(repo_content), (
-        "models.yaml content in ConfigMap does not match config/models.yaml"
+    # Deleted file must not appear.
+    assert "models.yaml" not in data, (
+        "models.yaml was deleted; it must not appear in the ConfigMap"
     )
 
 
@@ -115,5 +106,8 @@ def test_experiment_configmap_e2e_values() -> None:
     cm = _get_experiment_configmap(docs)
     data = cm.get("data") or {}
 
-    for key in ("models.yaml", "pricing.yaml", "review_profiles.yaml", "concurrency.yaml"):
+    for key in ("pricing.yaml", "review_profiles.yaml", "concurrency.yaml"):
         assert key in data, f"Missing key {key!r} in ConfigMap with e2e values"
+    assert "models.yaml" not in data, (
+        "models.yaml was deleted; it must not appear in the ConfigMap with e2e values"
+    )

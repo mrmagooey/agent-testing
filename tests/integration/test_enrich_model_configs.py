@@ -10,7 +10,6 @@ forwarded into matrix.model_configs.
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -18,8 +17,10 @@ from sec_review_framework.coordinator import ExperimentCoordinator
 from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
 from sec_review_framework.data.experiment import ExperimentMatrix
 from sec_review_framework.db import Database
-from sec_review_framework.models.catalog import ModelMetadata, ProviderCatalog, ProviderSnapshot
+from sec_review_framework.models.catalog import ModelMetadata, ProviderSnapshot
 from sec_review_framework.reporting.markdown import MarkdownReportGenerator
+
+from tests.fixtures.provider_snapshots import fake_catalog as _fake_catalog
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -41,13 +42,6 @@ def _make_coordinator(tmp_path: Path, db: Database) -> ExperimentCoordinator:
         config_dir=None,
         default_cap=4,
     )
-
-
-def _fake_catalog(snapshots: dict[str, ProviderSnapshot]) -> ProviderCatalog:
-    catalog = MagicMock(spec=ProviderCatalog)
-    catalog.snapshot.return_value = snapshots
-    catalog.snapshot_version = 0
-    return catalog
 
 
 def _minimal_matrix(model_ids: list[str], **kwargs) -> ExperimentMatrix:

@@ -15,7 +15,7 @@ Tests:
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -24,8 +24,10 @@ import sec_review_framework.coordinator as coord_module
 from sec_review_framework.coordinator import ExperimentCoordinator, app
 from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
 from sec_review_framework.db import Database
-from sec_review_framework.models.catalog import ModelMetadata, ProviderCatalog, ProviderSnapshot
+from sec_review_framework.models.catalog import ModelMetadata, ProviderSnapshot
 from sec_review_framework.reporting.markdown import MarkdownReportGenerator
+
+from tests.fixtures.provider_snapshots import fake_catalog as _fake_catalog
 
 
 # ---------------------------------------------------------------------------
@@ -50,14 +52,6 @@ def _make_coordinator(tmp_path: Path, db: Database) -> ExperimentCoordinator:
         config_dir=None,
         default_cap=4,
     )
-
-
-def _fake_catalog(snapshots: dict[str, ProviderSnapshot]) -> ProviderCatalog:
-    """Build a ProviderCatalog with a fake snapshot() return."""
-    catalog = MagicMock(spec=ProviderCatalog)
-    catalog.snapshot.return_value = snapshots
-    catalog.snapshot_version = 0
-    return catalog
 
 
 def _submit_payload(
