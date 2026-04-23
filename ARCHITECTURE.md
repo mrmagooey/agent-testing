@@ -609,6 +609,9 @@ class PromptSnapshot(BaseModel):
     review_profile_modifier: str | None = None
     finding_output_format: str
     verification_prompt: str | None = None
+    clean_prompt: str | None = None           # pre-injection prompt text, if injection was applied
+    injected_prompt: str | None = None        # post-injection prompt text
+    injection_template_id: str | None = None  # template used for injection, if any
 
     @classmethod
     def capture(cls, **kwargs) -> "PromptSnapshot":
@@ -808,11 +811,12 @@ class ExperimentRun(BaseModel):
     verifier_model_id: str | None = None  # if None, uses model_id for verification
     dataset_name: str
     dataset_version: str
-    strategy_config: dict          # strategy-specific params
-    model_config: dict             # temperature, max_tokens, etc.
+    strategy_config: dict = {}     # strategy-specific params
+    provider_kwargs: dict = {}     # extra kwargs forwarded to the model provider (e.g. temperature)
     parallel: bool = False         # whether subagents run in parallel
     repetition_index: int = 0     # which repetition this is (0-indexed)
     created_at: datetime | None = None
+    tool_extensions: frozenset[ToolExtension] = frozenset()  # active MCP tool extensions
 
     @property
     def effective_verifier_model(self) -> str:
@@ -891,6 +895,17 @@ class EvaluationResult(BaseModel):
 
 Note on `unlabeled_real`: these are findings where a human reviewer determines post-hoc that the model found a genuine vulnerability not in the ground truth. They are excluded from false positive counts to avoid penalizing models that find real things. Tracking them separately surfaces ground truth gaps.
 
+### 4.9 DB Schema — `runs` Table
+
+The SQLite `runs` table stores one row per `ExperimentRun`. Relevant columns:
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `TEXT PRIMARY KEY` | Run ID string |
+| `experiment_id` | `TEXT` | Foreign key to experiments table |
+| `status` | `TEXT` | One of `pending / running / completed / failed` |
+| `tool_extensions` | `TEXT DEFAULT ''` | Serialized form of `ExperimentRun.tool_extensions`: a comma-separated, lexicographically sorted list of extension names (e.g. `"DEVDOCS,LSP"`). Empty string for runs with no active extensions. Added via an idempotent `ALTER TABLE runs ADD COLUMN` migration; old rows without the column read as empty set. |
+
 ---
 
 ## 5. Experiment Runner Flow
@@ -911,9 +926,13 @@ class ExperimentMatrix(BaseModel):
     review_profiles: list[ReviewProfileName] = [ReviewProfileName.DEFAULT]
     verification_variants: list[VerificationVariant] = [VerificationVariant.NONE, VerificationVariant.WITH_VERIFICATION]
     parallel_modes: list[bool] = [False]
+    tool_extension_sets: list[frozenset[ToolExtension]] = [frozenset()]
+    # Each element is a frozenset of ToolExtension values to enable for that cell.
+    # Default [frozenset()] means one cell per other dimension with no extensions active.
+    # Use ExperimentMatrix.tool_extension_sets_powerset(enabled) to generate all 2^N subsets.
 
-    strategy_configs: dict[str, dict]
-    model_configs: dict[str, dict]
+    strategy_configs: dict[str, dict] = {}
+    model_configs: dict[str, dict] = {}
 
     # Repetitions — run each cell N times for statistical significance
     num_repetitions: int = 1
@@ -928,9 +947,17 @@ class ExperimentMatrix(BaseModel):
         """
         Cartesian product of all active dimensions × num_repetitions.
 
-        Default: 5 models × 5 strategies × 2 tool variants × 2 verification = 100 runs
+        Default: 5 models × 5 strategies × 2 tool variants × 2 verification × 1 ext_set = 100 runs
         With 3 repetitions: 300 runs.
         Use single-element lists to fix dimensions you don't want to vary.
+
+        Run ID format:
+            {experiment_id}_{model_id}_{strategy}_{tool_variant}_{profile}_{verif}[_rep{N}][_ext-{a+b}]
+
+        The _rep{N} suffix is omitted when num_repetitions == 1.
+        The _ext-{sorted+joined} suffix is omitted when the extension set is empty, keeping
+        legacy run IDs byte-identical. Extensions are joined with '+' in sorted order
+        (e.g. _ext-devdocs+lsp). Model IDs containing '/' are sanitized to '--'.
         """
         runs = []
         for model_id in self.model_ids:
@@ -939,28 +966,35 @@ class ExperimentMatrix(BaseModel):
                     for profile in self.review_profiles:
                         for verif in self.verification_variants:
                             for parallel in self.parallel_modes:
-                                for rep in range(self.num_repetitions):
-                                    rep_suffix = f"_rep{rep}" if self.num_repetitions > 1 else ""
-                                    run_id = (
-                                        f"{self.experiment_id}_{model_id}_{strategy}"
-                                        f"_{tool_variant}_{profile}_{verif}{rep_suffix}"
-                                    )
-                                    runs.append(ExperimentRun(
-                                        id=run_id,
-                                        experiment_id=self.experiment_id,
-                                        model_id=model_id,
-                                        strategy=strategy,
-                                        tool_variant=tool_variant,
-                                        review_profile=profile,
-                                        verification_variant=verif,
-                                        verifier_model_id=self.verifier_model_id,
-                                        parallel=parallel,
-                                        repetition_index=rep,
-                                        dataset_name=self.dataset_name,
-                                        dataset_version=self.dataset_version,
-                                        strategy_config=self.strategy_configs.get(strategy, {}),
-                                        model_config=self.model_configs.get(model_id, {}),
-                                ))
+                                for ext_set in self.tool_extension_sets:
+                                    for rep in range(self.num_repetitions):
+                                        rep_suffix = f"_rep{rep}" if self.num_repetitions > 1 else ""
+                                        ext_suffix = (
+                                            "_ext-" + "+".join(sorted(e.value for e in ext_set))
+                                            if ext_set else ""
+                                        )
+                                        safe_model_id = model_id.replace("/", "--")
+                                        run_id = (
+                                            f"{self.experiment_id}_{safe_model_id}_{strategy}"
+                                            f"_{tool_variant}_{profile}_{verif}{rep_suffix}{ext_suffix}"
+                                        )
+                                        runs.append(ExperimentRun(
+                                            id=run_id,
+                                            experiment_id=self.experiment_id,
+                                            model_id=model_id,
+                                            strategy=strategy,
+                                            tool_variant=tool_variant,
+                                            review_profile=profile,
+                                            verification_variant=verif,
+                                            verifier_model_id=self.verifier_model_id,
+                                            parallel=parallel,
+                                            repetition_index=rep,
+                                            dataset_name=self.dataset_name,
+                                            dataset_version=self.dataset_version,
+                                            strategy_config=self.strategy_configs.get(strategy, {}),
+                                            provider_kwargs=self.model_configs.get(model_id, {}),
+                                            tool_extensions=ext_set,
+                                        ))
         return runs
 ```
 
@@ -1226,7 +1260,46 @@ def compare_runs(experiment_id: str, run_a: str, run_b: str) -> dict:
     #   "metric_deltas": {"precision": +0.12, "recall": -0.05, "f1": +0.04}
     # }
 
+@app.get("/compare-runs")
+async def compare_runs_cross(
+    a_experiment: str, a_run: str, b_experiment: str, b_run: str
+) -> dict:
+    """
+    Cross-experiment run comparison. Runs may belong to different experiments.
+    Returns the same shape as the single-experiment compare-runs endpoint, with
+    additional per-side fields: experiment_id, experiment_name, dataset.
+    Top-level dataset_mismatch flag and warnings list are always present.
+    Returns 404 if either run result is missing.
+    """
+    return await coordinator.compare_runs_cross(
+        a_experiment=a_experiment, a_run=a_run,
+        b_experiment=b_experiment, b_run=b_run,
+    )
+
 # --- Findings ---
+
+@app.get("/findings")
+async def search_findings_global(
+    q: str | None = None,
+    vuln_class: list[str] | None = None,
+    severity: list[str] | None = None,
+    match_status: list[str] | None = None,
+    model_id: list[str] | None = None,
+    strategy: list[str] | None = None,
+    experiment_id: list[str] | None = None,
+    dataset_name: list[str] | None = None,
+    created_from: str | None = None,
+    created_to: str | None = None,
+    sort: str = "created_at desc",
+    limit: int = 50,
+    offset: int = 0,
+) -> dict:
+    """
+    Search findings across ALL experiments.
+    Supports FTS (q=), multi-value filters (vuln_class[]=...), date range,
+    and pagination. Returns facet counts alongside results.
+    """
+    return await coordinator.search_findings_global(...)
 
 @app.get("/experiments/{experiment_id}/findings/search")
 def search_findings(experiment_id: str, q: str, run_id: str | None = None) -> list[dict]:
@@ -1340,11 +1413,36 @@ def get_fp_patterns(experiment_id: str) -> list[dict]:
     """Extract recurring false positive patterns from an experiment."""
     return coordinator.get_fp_patterns(experiment_id)
 
+# --- Trends ---
+
+@app.get("/trends")
+async def get_trends(
+    dataset: str,
+    limit: int = 10,
+    tool_ext: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+) -> dict:
+    """
+    Historical F1 trend series per (model, strategy, tool_variant, tool_extensions) cell.
+    Required: dataset. Optional: limit (1..200, default 10), tool_ext (filter by extension key),
+    since/until (ISO date strings YYYY-MM-DD). Returns 400 if dataset omitted or dates invalid.
+    """
+    return await coordinator.get_trends(dataset=dataset, limit=limit,
+                                        tool_ext=tool_ext, since=since, until=until)
+
+# --- Matrix ---
+
+@app.get("/matrix/accuracy")
+def get_accuracy_matrix() -> dict:
+    """Accuracy heatmap data: recall averaged across completed runs, grouped by model × strategy."""
+    return coordinator.get_accuracy_matrix()
+
 # --- Reference ---
 
 @app.get("/models")
 def list_models() -> list[dict]:
-    """List configured model providers."""
+    """List configured model providers (grouped by provider; pass ?format=flat for legacy flat list)."""
     return coordinator.list_models()
 
 @app.get("/strategies")
@@ -1362,7 +1460,21 @@ def list_templates() -> list[dict]:
     """List available vulnerability injection templates."""
     return coordinator.list_templates()
 
+@app.get("/tool-extensions")
+def list_tool_extensions() -> list[dict]:
+    """List available MCP tool extensions with availability status."""
+    return coordinator.list_tool_extensions()
+
 # --- Ops ---
+
+@app.post("/smoke-test")
+async def run_smoke_test() -> dict:
+    """
+    Submit a minimal 1-model × 1-strategy smoke test experiment.
+    Uses the first configured model, single_agent strategy, with_tools only, no verification.
+    Capped at $5.00. Returns 412 if no models or datasets are configured.
+    """
+    return await coordinator.run_smoke_test()
 
 @app.get("/health")
 def health() -> dict:
@@ -1477,8 +1589,12 @@ Wired into FastAPI startup:
 
 ```python
 @app.on_event("startup")
-async def startup():
-    await asyncio.get_event_loop().run_in_executor(None, coordinator.reconcile)
+async def startup() -> None:
+    global coordinator
+    if coordinator is None:
+        coordinator = build_coordinator_from_env()
+        await coordinator.db.init()
+    await coordinator.reconcile()
 ```
 
 #### Retention Cleanup
@@ -1516,7 +1632,7 @@ class ExperimentWorker:
     def run(self, run: ExperimentRun, output_dir: Path, datasets_dir: Path) -> None:
         target = self._load_target(run.dataset_name, datasets_dir)
         labels = LabelStore(datasets_dir).load(run.dataset_name, run.dataset_version)
-        model = ModelProviderFactory().create(run.model_id, run.model_config)
+        model = ModelProviderFactory().create(run.model_id, run.provider_kwargs)
         strategy = StrategyFactory().create(run.strategy)
         tools = ToolRegistryFactory().create(run.tool_variant, target)
         profile = ProfileRegistry().get(run.review_profile)
@@ -1557,7 +1673,7 @@ class ExperimentWorker:
         duration = time.monotonic() - start
 
         evaluation = (
-            Evaluator().evaluate(findings, labels)
+            FileLevelEvaluator().evaluate(findings, labels)
             if status == RunStatus.COMPLETED else None
         )
 
