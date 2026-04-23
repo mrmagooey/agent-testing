@@ -54,3 +54,6 @@ config/secrets/
 
 # Make incremental-redeploy stamps
 .build-stamps/
+
+# Claude Code harness (worktrees, settings, etc.)
+.claude/
