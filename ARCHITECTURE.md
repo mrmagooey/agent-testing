@@ -459,7 +459,6 @@ agent-testing-framework/
 │
 ├── config/
 │   ├── experiments.yaml          # primary experiment definition
-│   ├── models.yaml               # model provider credentials/settings
 │   ├── concurrency.yaml          # per-model concurrency caps
 │   ├── retry.yaml                # per-provider retry policies
 │   ├── pricing.yaml              # per-model token pricing for cost estimates
@@ -3711,45 +3710,28 @@ jobs:
 
 ### 14.4 Model Provider Configuration
 
-```yaml
-# config/models.yaml
+The model catalog is **probe-driven** — there is no static `config/models.yaml`.
+On startup, `ProviderCatalog` runs each provider's probe concurrently and builds a
+`ProviderSnapshot` per provider.  `build_effective_registry()` converts those
+snapshots into a `list[ModelProviderConfig]` which is then passed to
+`compute_availability()` to produce the grouped model list served at `GET /models`.
 
-providers:
-  gpt-4o:
-    provider_class: "OpenAIProvider"
-    model_name: "gpt-4o"
-    temperature: 0.2
-    max_tokens: 8192
-    api_key_env: "OPENAI_API_KEY"
+Flow:
 
-  claude-opus-4:
-    provider_class: "AnthropicProvider"
-    model_name: "claude-opus-4"
-    temperature: 0.2
-    max_tokens: 8192
-    api_key_env: "ANTHROPIC_API_KEY"
-
-  gemini-2.0-pro:
-    provider_class: "GeminiProvider"
-    model_name: "gemini-2.0-pro"
-    temperature: 0.2
-    max_tokens: 8192
-    api_key_env: "GEMINI_API_KEY"
-
-  mistral-large:
-    provider_class: "MistralProvider"
-    model_name: "mistral-large-latest"
-    temperature: 0.2
-    max_tokens: 8192
-    api_key_env: "MISTRAL_API_KEY"
-
-  command-r-plus:
-    provider_class: "CohereProvider"
-    model_name: "command-r-plus"
-    temperature: 0.2
-    max_tokens: 8192
-    api_key_env: "COHERE_API_KEY"
 ```
+ProviderCatalog.start()
+  └─ probes run concurrently (litellm_probe, bedrock_probe, openrouter_probe, …)
+       └─ each returns ProviderSnapshot(probe_status, model_ids, metadata)
+build_effective_registry(snapshots)
+  └─ synthesizes list[ModelProviderConfig] — one entry per discovered model_id
+compute_availability(registry, snapshots, env)
+  └─ annotates each entry with status (available / key_missing / not_listed / …)
+GET /models
+  └─ returns groups_to_dicts(groups) — grouped by provider with probe_status
+```
+
+See `src/sec_review_framework/models/probes/` for per-provider discovery logic and
+`src/sec_review_framework/models/availability.py` for the availability rules.
 
 ### 14.5 Vulnerability Class Definitions
 
@@ -4670,8 +4652,11 @@ One image, one deployment, one port. The coordinator serves the SPA at `/` and t
 1. Create `src/sec_review_framework/models/{provider_name}.py`
 2. Implement `ModelProvider` ABC
 3. Register in `ModelProviderFactory`
-4. Add entry to `config/models.yaml`
-5. Add pricing entry to `config/pricing.yaml`
+4. Create a probe in `src/sec_review_framework/models/probes/{provider_name}_probe.py`
+   implementing the `ProviderProbe` protocol and returning a `ProviderSnapshot`
+5. Register the probe in `coordinator.py` where `build_probes()` assembles the list
+6. Add an entry to `ENV_VAR_FOR_PROVIDER` in `src/sec_review_framework/models/providers.py`
+7. Add pricing entry to `config/pricing.yaml`
 
 ### Adding a New Strategy
 

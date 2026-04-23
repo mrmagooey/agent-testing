@@ -213,7 +213,6 @@ To add a spec to the live suite, tag its `describe` with `@live` and make it tol
 
 All config lives under `config/` as YAML, loaded via Pydantic:
 
-- `models.yaml` — enabled model IDs and per-model overrides
 - `pricing.yaml` — per-model token pricing ($/M tokens) for cost tracking
 - `concurrency.yaml` — per-model and global concurrency caps
 - `retry.yaml` — retry policy (max retries, backoff, retryable status codes)
@@ -246,21 +245,21 @@ See `helm/sec-review/values.yaml` for the full `workerTools` block. When enabled
 
 ### Models
 
-The framework ships with 29 LiteLLM-backed models across 7 major providers. Enable each via its required environment variable:
+The model catalog is **probe-driven**: models appear automatically based on which API keys (or AWS credentials) are configured at runtime. There is no static `config/models.yaml` registry — the coordinator queries each provider's live API at startup (and re-probes on a configurable TTL) and synthesizes the available model list from the responses. See `src/sec_review_framework/models/probes/` for how each provider is discovered.
 
-| Provider | Models | Auth | API Key Env |
-|---|---|---|---|
-| **OpenAI** | GPT-4o, GPT-4o mini, GPT-4.1, GPT-4.1 mini, o1, o3, o3-mini, o4-mini | API key | `OPENAI_API_KEY` |
-| **Anthropic** | Claude Opus 4.7, Sonnet 4.6, Haiku 4.5, Claude 3.5 Sonnet (latest), Claude 3.5 Haiku (latest) | API key | `ANTHROPIC_API_KEY` |
-| **Google Gemini** | Gemini 2.5 Pro, 2.0 Pro, 2.0 Flash, 1.5 Pro | API key | `GEMINI_API_KEY` |
-| **Mistral** | Large, Small, Codestral | API key | `MISTRAL_API_KEY` |
-| **Cohere** | Command R+, Command R | API key | `COHERE_API_KEY` |
-| **OpenRouter** | Llama 3.1 8B, Llama 3.2 3B | API key | `OPENROUTER_API_KEY` |
-| **AWS Bedrock** | Claude 3.5 Sonnet/Haiku, Amazon Nova Pro/Lite, Llama 3.1 70B | IAM + region | See below |
+Supported providers and their required credentials:
+
+| Provider | Auth | Required |
+|---|---|---|
+| **OpenAI** | API key | `OPENAI_API_KEY` |
+| **Anthropic** | API key | `ANTHROPIC_API_KEY` |
+| **Google Gemini** | API key | `GEMINI_API_KEY` |
+| **Mistral** | API key | `MISTRAL_API_KEY` |
+| **Cohere** | API key | `COHERE_API_KEY` |
+| **OpenRouter** | API key | `OPENROUTER_API_KEY` |
+| **AWS Bedrock** | IAM / AWS credential chain | See below |
 
 For AWS Bedrock, prefer IRSA (IAM Roles for Service Accounts): annotate the coordinator's ServiceAccount with `eks.amazonaws.com/role-arn: arn:aws:iam::...`. For development, set static credentials via `secrets.aws.accessKeyId` and `secrets.aws.secretAccessKey` in Helm values, but this is not recommended in production. All Bedrock models default to `us-east-1`; override via `helm/sec-review/values.yaml` (`providerConfig.bedrock.region`).
-
-Models inherit defaults from `config/models.yaml`: `temperature: 0.2`, `max_tokens: 8192`. Override per-model in the YAML or via the frontend picker.
 
 ### Provider availability probing
 
