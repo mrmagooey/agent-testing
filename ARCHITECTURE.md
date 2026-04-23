@@ -127,7 +127,14 @@
 │  /data/                                                                     │
 │  ├── datasets/                  (ReadOnlyMany — mounted by all workers)    │
 │  │   └── targets/{name}/repo, labels.jsonl, diff_spec.yaml                 │
-│  ├── config/                    (ReadOnlyMany — experiments, models, etc.)  │
+│  ├── config/                    (ReadOnlyMany — runtime configuration)      │
+│  │   ├── concurrency.yaml                                                   │
+│  │   ├── coordinator.yaml                                                   │
+│  │   ├── experiments.yaml                                                   │
+│  │   ├── pricing.yaml                                                       │
+│  │   ├── retry.yaml                                                         │
+│  │   ├── review_profiles.yaml                                               │
+│  │   └── vuln_classes.yaml                                                  │
 │  └── outputs/                   (ReadWriteMany — workers write, coord reads)│
 │      └── {experiment_id}/                                                        │
 │          ├── {run_id}/   (one dir per job)                           │
@@ -444,18 +451,10 @@ agent-testing-framework/
 │   │   └── hooks/                # useExperiment (polling), useEstimate (debounced)
 │   └── dist/                     # built output, bundled into coordinator image
 │
-├── k8s/                          # Kubernetes manifests
-│   ├── namespace.yaml
-│   ├── coordinator-deployment.yaml
-│   ├── coordinator-service.yaml
-│   ├── shared-pvc.yaml           # PersistentVolumeClaim for shared storage
-│   ├── network-policy.yaml       # egress rules for worker pods
-│   ├── secrets.yaml              # placeholder — actual keys via sealed-secrets or external
-│   ├── network-policy-dataset-builder.yaml  # egress for dataset-builder pods
-│   ├── gatekeeper-constraint.yaml  # image restriction for Jobs
-│   ├── fluentd-config.yaml       # Fluentd ConfigMap for worker log shipping
-│   ├── servicemonitor.yaml       # Prometheus ServiceMonitor for coordinator
-│   └── grafana-dashboard.json    # pre-built dashboard
+├── helm/sec-review/              # Helm chart for Kubernetes deployment
+│   ├── Chart.yaml
+│   ├── values.yaml               # default values (images, replicas, egress CIDRs, etc.)
+│   └── templates/                # coordinator, worker, PVC, network-policy, secrets, etc.
 │
 ├── config/
 │   ├── experiments.yaml          # primary experiment definition
@@ -3514,12 +3513,7 @@ The last point is structural: using an LLM to review code means the code reaches
 
 **Layer 1: Network Isolation (Primary Control)**
 
-Deploy within a VPC with no outbound internet except explicitly allowlisted endpoints:
-- LLM provider API endpoints (one per provider in use)
-- Internal artifact storage
-- Semgrep update endpoint (or use offline rules only)
-
-All other outbound traffic blocked at the network layer. This is the highest-value control because it is independent of application code correctness.
+Deploy within a VPC with outbound internet restricted at the network layer. The chart ships with a permissive default (`llmEgressCidrs: [0.0.0.0/0]`); operators are expected to narrow `llmEgressCidrs` in `values.yaml` to the specific provider CIDR ranges required for their deployment. This is the highest-value control because it is independent of application code correctness.
 
 **Layer 2: Tool Call Auditing (Detection and Forensics)**
 

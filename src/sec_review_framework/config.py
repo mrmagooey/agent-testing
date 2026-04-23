@@ -181,6 +181,7 @@ class ToolExtensionAvailability:
     Environment variables:
       TOOL_EXT_LSP_AVAILABLE          "true"|"false"  (default: "false")
       TOOL_EXT_TREE_SITTER_AVAILABLE  "true"|"false"  (default: "false")
+      TOOL_EXT_DEVDOCS_AVAILABLE      "true"|"false"  (default: "false")
     """
 
     def __init__(self) -> None:
