@@ -54,8 +54,9 @@ def test_list_models_items_have_id_field_if_nonempty(coordinator_client):
     """Each model entry (if present) has at least an 'id' field."""
     client, *_ = coordinator_client
     data = client.get("/models").json()
-    for item in data:
-        assert "id" in item, f"Model entry missing 'id': {item}"
+    for group in data:
+        for item in group.get("models", []):
+            assert "id" in item, f"Model entry missing 'id': {item}"
 
 
 # ---------------------------------------------------------------------------
