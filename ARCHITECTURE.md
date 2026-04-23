@@ -273,7 +273,18 @@ class ModelProvider(ABC):
         return True
 ```
 
-The five concrete providers (`OpenAIProvider`, `AnthropicProvider`, `GeminiProvider`, `MistralProvider`, `CohereProvider`) each implement `_do_complete()`. The base class handles retry logic, token logging, and rate limit backoff. Retry policies are loaded from `config/retry.yaml` and differ per provider (e.g., Anthropic uses 529 for overload, OpenAI returns Retry-After headers on 429).
+The ABC also initialises `conversation_log: list[dict[str, Any]]` in `__init__` (a structured record of every exchange, separate from `token_log`) and exposes a `clone()` method that produces an independent copy of the provider with its own logs — used by strategies that fan out to parallel subagents. The base class handles retry logic, token logging, and rate-limit backoff. Retry policies are loaded from `config/retry.yaml`.
+
+There is a single concrete provider: `LiteLLMProvider` in `models/litellm_provider.py`. It implements `_do_complete()` by dispatching to any LiteLLM-supported backend, so adding a new underlying model requires no new provider subclass. The supporting files in `models/` are:
+
+- `models/base.py` — `ModelProvider` ABC plus the dataclasses above (`Message`, `ToolDefinition`, `ModelResponse`, `RetryPolicy`).
+- `models/litellm_provider.py` — single concrete provider; delegates to any LiteLLM-supported backend.
+- `models/providers.py` — provider definitions, the `ENV_VAR_FOR_PROVIDER` mapping, and `build_probes()`.
+- `models/catalog.py` — synthesised catalog built from probe results.
+- `models/synthesized.py` — normalised model records emitted by probes.
+- `models/availability.py` — per-provider availability cache consulted before dispatch.
+- `models/aliases.py` — `LEGACY_ID_ALIASES` table for migrating old opaque model IDs to current LiteLLM identifiers.
+- `models/probes/` — probe implementations: `bedrock_probe.py`, `litellm_endpoint_probe.py`, `litellm_probe.py`, `openrouter_probe.py`.
 
 ### 2.2 Strategy
 
@@ -299,7 +310,7 @@ class ScanStrategy(ABC):
         target: "TargetCodebase",
         model: ModelProvider,
         tools: "ToolRegistry",
-        config: "StrategyConfig",
+        config: dict,
     ) -> "StrategyOutput":
         ...
 ```
@@ -326,11 +337,40 @@ class ToolRegistry:
         self.audit_log.record(name, input, call_id)
         return tool.invoke(input)
 
+    def clone(self) -> "ToolRegistry":
+        """Return an independent copy with a fresh audit log. Used by strategies
+        that fan out to parallel subagents so audit logs don't interleave."""
+        ...
+
+    def close(self) -> None:
+        """Run registered closer callbacks in reverse order (LIFO) and mark the
+        registry as closed. Safe to call multiple times — subsequent calls are
+        no-ops. Closers are used to terminate MCP subprocess servers when the
+        run finishes."""
+        ...
+
 class Tool(ABC):
     @abstractmethod
     def definition(self) -> ToolDefinition: ...
     @abstractmethod
     def invoke(self, input: dict[str, Any]) -> str: ...
+
+class ToolRegistryFactory:
+    @staticmethod
+    def create(
+        tool_variant: "ToolVariant",
+        target: "TargetCodebase",
+        tool_extensions: "frozenset[ToolExtension]" = frozenset(),
+    ) -> ToolRegistry:
+        """Build a configured ToolRegistry.
+
+        tool_variant controls whether standard tools (file read, grep, Semgrep, etc.)
+        are populated (WITH_TOOLS) or omitted (WITHOUT_TOOLS, for pure-text runs).
+        tool_extensions activates optional MCP-backed extension tools (TREE_SITTER,
+        LSP, DEVDOCS); each extension's builder must be registered via
+        register_extension_builder() before create() is called.
+        """
+        ...
 ```
 
 ### 2.4 Verifier
@@ -503,15 +543,23 @@ agent-testing-framework/
 │       ├── worker.py             # ExperimentWorker — K8s Job entry point
 │       ├── coordinator.py        # ExperimentCoordinator + FastAPI app (HTTP API)
 │       ├── config.py             # Pydantic config loaders
+│       ├── db.py                 # SQLAlchemy engine setup, session factory, migrations helper
 │       │
-│       ├── models/               # ModelProvider implementations
+│       ├── models/               # ModelProvider ABC + LiteLLM-backed implementation
 │       │   ├── __init__.py
-│       │   ├── base.py           # ModelProvider ABC, Message, ModelResponse
-│       │   ├── openai.py
-│       │   ├── anthropic.py
-│       │   ├── gemini.py
-│       │   ├── mistral.py
-│       │   └── cohere.py
+│       │   ├── base.py           # ModelProvider ABC, Message, ToolDefinition, ModelResponse, RetryPolicy
+│       │   ├── litellm_provider.py  # single concrete provider; dispatches to any LiteLLM backend
+│       │   ├── providers.py      # provider definitions, ENV_VAR_FOR_PROVIDER, build_probes()
+│       │   ├── catalog.py        # synthesised model catalog from probe results
+│       │   ├── synthesized.py    # normalised model records emitted by probes
+│       │   ├── availability.py   # per-provider availability cache
+│       │   ├── aliases.py        # LEGACY_ID_ALIASES for migrating old opaque model IDs
+│       │   └── probes/           # probe implementations
+│       │       ├── __init__.py
+│       │       ├── bedrock_probe.py
+│       │       ├── litellm_endpoint_probe.py
+│       │       ├── litellm_probe.py
+│       │       └── openrouter_probe.py
 │       │
 │       ├── strategies/           # ScanStrategy implementations
 │       │   ├── __init__.py
@@ -529,10 +577,19 @@ agent-testing-framework/
 │       │
 │       ├── tools/                # Tool implementations + registry
 │       │   ├── __init__.py
-│       │   ├── registry.py       # ToolRegistry, ToolCallAuditLog, factory
+│       │   ├── registry.py       # ToolRegistry, ToolCallAuditLog, ToolRegistryFactory
+│       │   ├── mcp_bridge.py     # MCPClient — bridges async MCP SDK onto sync Tool interface
 │       │   ├── repo_access.py    # file read, directory list, grep
 │       │   ├── semgrep.py        # Semgrep wrapper
-│       │   └── doc_lookup.py     # documentation retrieval
+│       │   ├── doc_lookup.py     # documentation retrieval
+│       │   └── extensions/       # optional MCP-backed tool extensions
+│       │       ├── __init__.py
+│       │       ├── tree_sitter_ext.py   # TREE_SITTER extension builder + registration
+│       │       ├── tree_sitter_server.py
+│       │       ├── lsp_ext.py           # LSP extension builder + registration
+│       │       ├── lsp_server.py
+│       │       ├── devdocs_ext.py       # DEVDOCS extension builder + registration
+│       │       └── devdocs_server.py
 │       │
 │       ├── ground_truth/
 │       │   ├── __init__.py
@@ -556,7 +613,8 @@ agent-testing-framework/
 │       │
 │       ├── cost/
 │       │   ├── __init__.py
-│       │   └── calculator.py     # CostCalculator, ModelPricing
+│       │   ├── calculator.py     # CostCalculator, ModelPricing
+│       │   └── pricing_view.py   # read-only pricing summary for the frontend API
 │       │
 │       ├── feedback/
 │       │   ├── __init__.py
@@ -568,25 +626,24 @@ agent-testing-framework/
 │       │
 │       ├── prompts/
 │       │   ├── __init__.py
+│       │   ├── loader.py         # loads prompt templates from disk (system/, user/ subdirs)
 │       │   └── registry.py       # PromptSnapshot, PromptRegistry
 │       │
-│       └── data/                 # Shared Pydantic/dataclass models
+│       └── data/                 # Shared Pydantic/dataclass models + sync utilities
 │           ├── __init__.py
 │           ├── findings.py       # Finding, FindingIdentity, Severity, VulnClass
 │           ├── experiment.py     # ExperimentRun, RunResult, ExperimentMatrix
-│           └── evaluation.py     # EvaluationResult, MatchedFinding
+│           ├── evaluation.py     # EvaluationResult, MatchedFinding
+│           └── devdocs_sync.py   # sync DevDocs documentation snapshots for offline use
 │
 └── tests/
-    ├── unit/
-    │   ├── test_evaluator.py
-    │   ├── test_verifier.py
-    │   ├── test_evidence_quality.py
-    │   ├── test_cost_calculator.py
-    │   ├── test_vuln_injector.py
-    │   └── test_label_store.py
-    └── integration/
-        ├── test_single_agent_strategy.py
-        └── test_full_run.py      # smoke test with a tiny synthetic target
+    ├── conftest.py               # shared fixtures (tmp dirs, synthetic targets, mock providers)
+    ├── unit/                     # fast, isolated tests — no network, no subprocesses
+    ├── integration/              # tests that exercise multiple components end-to-end
+    ├── e2e/                      # full-stack tests against a locally running coordinator
+    ├── performance/              # memory and throughput benchmarks
+    ├── infra/                    # helpers and test utilities shared across categories
+    └── fixtures/                 # reusable test data (labels, findings, synthetic repos)
 ```
 
 ---
