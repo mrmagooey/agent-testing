@@ -1,6 +1,6 @@
 """Model availability computation.
 
-Pure helper that combines the YAML registry (list[ModelProviderConfig]) with
+Pure helper that combines the probe-driven registry (list[ModelProviderConfig]) with
 ProviderCatalog snapshots to produce a grouped-by-provider availability list.
 
 The result is used by both GET /api/models and the submit-time validator.
@@ -15,7 +15,14 @@ from typing import Mapping
 
 from sec_review_framework.config import ModelProviderConfig
 from sec_review_framework.models.catalog import ProviderSnapshot
-from sec_review_framework.models.synthesized import synthesize_configs_from_snapshot
+from sec_review_framework.models.providers import ENV_VAR_FOR_PROVIDER
+from sec_review_framework.models.synthesized import (
+    ApiKeyAuth,
+    AuthSpec,
+    AwsAuth,
+    NoAuth,
+    synthesize_configs_from_snapshot,
+)
 
 ModelStatus = str  # "available" | "key_missing" | "not_listed" | "probe_failed"
 ProbeStatus = str  # "fresh" | "stale" | "failed" | "disabled"
@@ -37,12 +44,63 @@ class ProviderGroup:
     models: list[ModelEntry]
 
 
+def _auth_spec_for_provider(provider_key: str) -> AuthSpec:
+    """Return the appropriate AuthSpec for a given provider key.
+
+    Uses ENV_VAR_FOR_PROVIDER as the canonical source of truth for env-var
+    names.  Special-cases bedrock (AwsAuth) and local_llm (ApiKeyAuth with
+    api_base_env).
+    """
+    if provider_key == "bedrock":
+        return AwsAuth()
+    if provider_key == "local_llm":
+        return ApiKeyAuth(
+            api_key_env="LOCAL_LLM_API_KEY",
+            api_base_env="LOCAL_LLM_BASE_URL",
+        )
+    env_var = ENV_VAR_FOR_PROVIDER.get(provider_key)
+    if env_var is not None:
+        return ApiKeyAuth(api_key_env=env_var)
+    # Unknown provider — no auth, best-effort.
+    return NoAuth()
+
+
+def build_effective_registry(
+    snapshots: dict[str, ProviderSnapshot],
+) -> list[ModelProviderConfig]:
+    """Build the full model registry from probe snapshots.
+
+    Loops every snapshot, selects the appropriate AuthSpec, synthesizes
+    ModelProviderConfig objects, and concatenates them preserving insertion
+    order.
+
+    For local_llm, the base URL must be set in the environment
+    (LOCAL_LLM_BASE_URL) for any configs to be emitted.
+
+    Parameters
+    ----------
+    snapshots:
+        Provider snapshots from ProviderCatalog.snapshot().
+
+    Returns
+    -------
+    Flat ordered list of ModelProviderConfig covering all reachable models.
+    """
+    registry: list[ModelProviderConfig] = []
+    for provider_key, snapshot in snapshots.items():
+        auth_spec = _auth_spec_for_provider(provider_key)
+        configs = synthesize_configs_from_snapshot(provider_key, snapshot, auth_spec)
+        registry.extend(configs)
+    return registry
+
+
 def _derive_provider_key(cfg: ModelProviderConfig) -> str:
     """Derive a logical provider key from a ModelProviderConfig entry.
 
     - auth=aws  →  "bedrock"
     - auth=api_key with api_key_env="OPENAI_API_KEY"  →  "openai"
       (strip trailing _API_KEY and lowercase)
+    - Fallback: first segment of model id
     """
     if cfg.auth == "aws":
         return "bedrock"
@@ -50,8 +108,12 @@ def _derive_provider_key(cfg: ModelProviderConfig) -> str:
         # Strip trailing _API_KEY suffix (case-insensitive) then lowercase.
         key = re.sub(r"_API_KEY$", "", cfg.api_key_env, flags=re.IGNORECASE)
         return key.lower()
-    # Fallback: use the model id prefix (shouldn't normally happen after validation).
-    return cfg.id.split("-")[0].lower()
+    # No api_key_env (local keyless endpoint) — derive from model id prefix or api_base.
+    # For synthesized local_llm entries: id starts with "openai/" or similar.
+    model_id = cfg.id or ""
+    if "/" in model_id:
+        return model_id.split("/")[0].lower()
+    return model_id.split("-")[0].lower()
 
 
 def _compute_model_status(
@@ -131,30 +193,6 @@ def _enrich_entry(
     )
 
 
-def _effective_registry(
-    registry: list[ModelProviderConfig],
-    snapshots: dict[str, ProviderSnapshot],
-) -> list[ModelProviderConfig]:
-    """Return registry extended with synthesized local-LLM configs.
-
-    Registry entries win on id collision so hand-written YAML always takes
-    precedence over probe-synthesized entries.
-    """
-    synthesized: list[ModelProviderConfig] = []
-    if "local_llm" in snapshots and snapshots["local_llm"].probe_status in ("fresh", "stale"):
-        synthesized.extend(
-            synthesize_configs_from_snapshot(
-                provider_key="local_llm",
-                snapshot=snapshots["local_llm"],
-                api_key_env="LOCAL_LLM_API_KEY",
-                api_base_env="LOCAL_LLM_BASE_URL",
-            )
-        )
-
-    existing_ids = {r.id for r in registry}
-    return [*registry, *(c for c in synthesized if c.id not in existing_ids)]
-
-
 def compute_availability(
     registry: list[ModelProviderConfig],
     snapshots: dict[str, ProviderSnapshot],
@@ -165,7 +203,7 @@ def compute_availability(
     Parameters
     ----------
     registry:
-        Ordered list of ModelProviderConfig entries (from ModelsConfig.from_yaml).
+        Ordered list of ModelProviderConfig entries.
     snapshots:
         Provider snapshots from ProviderCatalog.snapshot().
     env:
@@ -179,7 +217,7 @@ def compute_availability(
     provider_order: list[str] = []
     groups: dict[str, list[ModelEntry]] = {}
 
-    for cfg in _effective_registry(registry, snapshots):
+    for cfg in registry:
         provider_key = _derive_provider_key(cfg)
         if provider_key not in groups:
             provider_order.append(provider_key)

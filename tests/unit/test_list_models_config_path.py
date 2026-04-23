@@ -1,24 +1,32 @@
-"""Unit tests for ExperimentCoordinator.list_models() config_dir handling."""
+"""Unit tests for ExperimentCoordinator.list_models() — probe-driven path.
 
-import json
-from pathlib import Path
+Phase 2 rewrite: list_models() now reads from ProviderCatalog snapshots rather
+than models.yaml.  Tests verify the probe-driven flow and empty-state handling.
+"""
+
+from __future__ import annotations
+
+from unittest.mock import MagicMock
 
 import pytest
-import yaml
 
 from sec_review_framework.coordinator import ExperimentCoordinator
 from sec_review_framework.cost.calculator import CostCalculator
 from sec_review_framework.db import Database
+from sec_review_framework.models.catalog import ModelMetadata, ProviderCatalog, ProviderSnapshot
+
+
+def _fake_catalog(snapshots: dict[str, ProviderSnapshot]) -> ProviderCatalog:
+    catalog = MagicMock(spec=ProviderCatalog)
+    catalog.snapshot.return_value = snapshots
+    return catalog
 
 
 @pytest.fixture
 def temp_coordinator(tmp_path):
-    """Create a ExperimentCoordinator with a temporary config_dir."""
+    """Create an ExperimentCoordinator with no catalog attached yet."""
     storage_root = tmp_path / "data"
     storage_root.mkdir(parents=True, exist_ok=True)
-
-    config_dir = tmp_path / "config"
-    config_dir.mkdir(parents=True, exist_ok=True)
 
     db = Database(storage_root / "test.db")
 
@@ -31,143 +39,104 @@ def temp_coordinator(tmp_path):
         db=db,
         reporter=None,
         cost_calculator=CostCalculator(pricing={}),
-        config_dir=config_dir,
+        config_dir=None,
         default_cap=1,
-    ), config_dir
+    )
 
 
-def test_list_models_reads_from_config_dir(temp_coordinator):
-    """list_models() should read models.yaml from config_dir, not storage_root.parent."""
-    coordinator, config_dir = temp_coordinator
+def test_list_models_returns_probe_discovered_models(temp_coordinator, monkeypatch):
+    """list_models() returns models from the catalog snapshot."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "ant-test")
 
-    # Write a models.yaml file with valid provider entries (Phase 2 schema).
-    models_yaml = config_dir / "models.yaml"
-    models_data = {
-        "defaults": {"temperature": 0.2, "max_tokens": 8192},
-        "providers": {
-            "gpt-4o": {
-                "model_name": "gpt-4o",
-                "api_key_env": "OPENAI_API_KEY",
-                "display_name": "GPT-4o",
-            },
-            "claude-opus": {
-                "model_name": "claude-opus-4",
-                "api_key_env": "ANTHROPIC_API_KEY",
-                "display_name": "Claude Opus",
-            },
-        },
-    }
-    models_yaml.write_text(yaml.dump(models_data))
+    coordinator = temp_coordinator
+    coordinator.catalog = _fake_catalog({
+        "openai": ProviderSnapshot(
+            probe_status="fresh",
+            model_ids=frozenset(["gpt-4o"]),
+            metadata={"gpt-4o": ModelMetadata(id="gpt-4o", raw_id="gpt-4o")},
+        ),
+        "anthropic": ProviderSnapshot(
+            probe_status="fresh",
+            model_ids=frozenset(["claude-opus-4"]),
+            metadata={"claude-opus-4": ModelMetadata(id="claude-opus-4", raw_id="claude-opus-4")},
+        ),
+    })
 
-    # Call list_models and verify it reads from config_dir.
-    # The new response shape is a grouped list; extract ids from models within groups.
     groups = coordinator.list_models()
     all_model_ids = {m["id"] for g in groups for m in g["models"]}
     assert len(all_model_ids) == 2
-    assert all_model_ids == {"gpt-4o", "claude-opus"}
+    assert "gpt-4o" in all_model_ids
+    assert "claude-opus-4" in all_model_ids
 
 
-def test_list_models_uses_env_var_config_dir(tmp_path, monkeypatch):
-    """list_models() should use CONFIG_DIR env var, falling back to /app/config."""
-    storage_root = tmp_path / "data"
-    storage_root.mkdir(parents=True, exist_ok=True)
+def test_list_models_returns_empty_when_no_catalog(temp_coordinator):
+    """When no catalog is set, list_models() returns []."""
+    coordinator = temp_coordinator
+    coordinator.catalog = None
 
-    config_dir = tmp_path / "custom_config"
-    config_dir.mkdir(parents=True, exist_ok=True)
+    result = coordinator.list_models()
+    assert result == []
 
-    # Monkeypatch CONFIG_DIR to point to our temp config dir
-    monkeypatch.setenv("CONFIG_DIR", str(config_dir))
 
-    db = Database(storage_root / "test.db")
+def test_list_models_returns_empty_when_all_snapshots_disabled(temp_coordinator):
+    """All snapshots disabled → empty registry → empty list."""
+    coordinator = temp_coordinator
+    coordinator.catalog = _fake_catalog({
+        "openai": ProviderSnapshot(probe_status="disabled"),
+        "anthropic": ProviderSnapshot(probe_status="disabled"),
+    })
 
-    # Create coordinator with config_dir from env
-    coordinator = ExperimentCoordinator(
-        k8s_client=None,
-        storage_root=storage_root,
-        concurrency_caps={},
-        worker_image="test:latest",
-        namespace="test",
-        db=db,
-        reporter=None,
-        cost_calculator=CostCalculator(pricing={}),
-        config_dir=config_dir,
-        default_cap=1,
-    )
+    result = coordinator.list_models()
+    assert result == []
 
-    # Write models.yaml to the env var location (valid Phase 2 schema).
-    models_yaml = config_dir / "models.yaml"
-    models_data = {
-        "defaults": {"temperature": 0.2, "max_tokens": 8192},
-        "providers": {
-            "test-model": {
-                "model_name": "gpt-4o",
-                "api_key_env": "OPENAI_API_KEY",
-                "display_name": "Test Model",
-            }
-        },
-    }
-    models_yaml.write_text(yaml.dump(models_data))
 
-    # Verify list_models reads from the env var location.
-    # New shape is grouped; extract all model ids.
+def test_list_models_returns_empty_when_snapshots_empty(temp_coordinator):
+    """No snapshots in catalog → no snapshots returns empty."""
+    coordinator = temp_coordinator
+    coordinator.catalog = _fake_catalog({})
+
+    result = coordinator.list_models()
+    assert result == []
+
+
+def test_list_models_flat_format(temp_coordinator, monkeypatch):
+    """list_models(flat=True) returns the legacy flat [{id, display_name}] shape."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    coordinator = temp_coordinator
+    coordinator.catalog = _fake_catalog({
+        "openai": ProviderSnapshot(
+            probe_status="fresh",
+            model_ids=frozenset(["gpt-4o"]),
+            metadata={"gpt-4o": ModelMetadata(id="gpt-4o", raw_id="gpt-4o")},
+        ),
+    })
+
+    result = coordinator.list_models(flat=True)
+    assert isinstance(result, list)
+    assert any(item["id"] == "gpt-4o" for item in result)
+    for item in result:
+        assert "provider" not in item
+        assert "probe_status" not in item
+
+
+def test_list_models_grouped_shape(temp_coordinator, monkeypatch):
+    """Grouped shape has provider, probe_status, and models keys."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    coordinator = temp_coordinator
+    coordinator.catalog = _fake_catalog({
+        "openai": ProviderSnapshot(
+            probe_status="fresh",
+            model_ids=frozenset(["gpt-4o"]),
+            metadata={"gpt-4o": ModelMetadata(id="gpt-4o", raw_id="gpt-4o")},
+        ),
+    })
+
     groups = coordinator.list_models()
-    all_model_ids = [m["id"] for g in groups for m in g["models"]]
-    assert len(all_model_ids) == 1
-    assert all_model_ids[0] == "test-model"
-
-
-def test_list_models_returns_empty_when_file_missing(temp_coordinator):
-    """list_models() should return [] if models.yaml does not exist."""
-    coordinator, config_dir = temp_coordinator
-
-    # Don't create models.yaml; it should return empty list
-    models = coordinator.list_models()
-    assert models == []
-
-
-def test_list_models_returns_empty_on_parse_error(temp_coordinator):
-    """list_models() should return [] if models.yaml is invalid YAML."""
-    coordinator, config_dir = temp_coordinator
-
-    # Write invalid YAML
-    models_yaml = config_dir / "models.yaml"
-    models_yaml.write_text("{ invalid: yaml: syntax:")
-
-    # Should return [] without raising
-    models = coordinator.list_models()
-    assert models == []
-
-
-def test_list_models_does_not_read_from_storage_root_parent(tmp_path):
-    """list_models() should NOT fall back to storage_root.parent/config."""
-    storage_root = tmp_path / "storage" / "data"
-    storage_root.mkdir(parents=True, exist_ok=True)
-
-    config_dir = tmp_path / "app" / "config"
-    config_dir.mkdir(parents=True, exist_ok=True)
-
-    # Write a file to storage_root.parent/config that should NOT be read
-    wrong_path = storage_root.parent / "config"
-    wrong_path.mkdir(parents=True, exist_ok=True)
-    wrong_models = wrong_path / "models.yaml"
-    wrong_models.write_text(yaml.dump({
-        "providers": {"should-not-read": {"display_name": "Wrong", "cost": 1.0}}
-    }))
-
-    db = Database(storage_root / "test.db")
-    coordinator = ExperimentCoordinator(
-        k8s_client=None,
-        storage_root=storage_root,
-        concurrency_caps={},
-        worker_image="test:latest",
-        namespace="test",
-        db=db,
-        reporter=None,
-        cost_calculator=CostCalculator(pricing={}),
-        config_dir=config_dir,
-        default_cap=1,
-    )
-
-    # list_models should return empty (not read from wrong_path)
-    models = coordinator.list_models()
-    assert models == []
+    assert len(groups) > 0
+    for group in groups:
+        assert "provider" in group
+        assert "probe_status" in group
+        assert "models" in group

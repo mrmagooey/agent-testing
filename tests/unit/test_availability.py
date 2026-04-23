@@ -15,6 +15,7 @@ from sec_review_framework.config import ModelProviderConfig
 from sec_review_framework.models.availability import (
     ModelEntry,
     ProviderGroup,
+    build_effective_registry,
     build_id_to_status,
     compute_availability,
     flat_model_list,
@@ -425,7 +426,7 @@ class TestOpenRouterAvailability:
 # ---------------------------------------------------------------------------
 
 class TestSynthesizedLocalLLM:
-    """compute_availability layers probe-discovered local models onto the registry."""
+    """build_effective_registry + compute_availability handles local_llm snapshots."""
 
     def _local_snap(self, *model_ids: str, status: str = "fresh") -> ProviderSnapshot:
         return ProviderSnapshot(
@@ -433,40 +434,21 @@ class TestSynthesizedLocalLLM:
             model_ids=frozenset(model_ids),
         )
 
-    def test_compute_availability_emits_synthesized_local_models(self, monkeypatch):
+    def test_build_effective_registry_emits_local_models(self, monkeypatch):
         monkeypatch.setenv("LOCAL_LLM_BASE_URL", "http://x")
         monkeypatch.delenv("LOCAL_LLM_API_KEY", raising=False)
 
         snap = self._local_snap("openai/foo", "openai/bar")
-        groups = compute_availability([], {"local_llm": snap}, {})
+        snapshots = {"local_llm": snap}
+        registry = build_effective_registry(snapshots)
+        groups = compute_availability(registry, snapshots, {})
 
         local_group = next((g for g in groups if g.provider == "local_llm"), None)
         assert local_group is not None, "expected a local_llm provider group"
         ids = {m.id for m in local_group.models}
-        assert "local_llm-foo" in ids
-        assert "local_llm-bar" in ids
+        assert "openai/foo" in ids
+        assert "openai/bar" in ids
         assert all(m.status == "available" for m in local_group.models)
-
-    def test_registry_entry_wins_over_synthesized_same_id(self, monkeypatch):
-        monkeypatch.setenv("LOCAL_LLM_BASE_URL", "http://x")
-
-        # Registry has an entry whose id would collide with the synthesized one.
-        registry_cfg = ModelProviderConfig.model_construct(
-            id="local_llm-foo",
-            model_name="openai/foo",
-            api_base="http://registry-override",
-            api_key_env="LOCAL_LLM_API_KEY",
-            auth="api_key",
-            display_name="registry-foo",
-        )
-        snap = self._local_snap("openai/foo")
-        groups = compute_availability([registry_cfg], {"local_llm": snap}, {})
-
-        local_group = next(g for g in groups if g.provider == "local_llm")
-        foo_entries = [m for m in local_group.models if m.id == "local_llm-foo"]
-        assert len(foo_entries) == 1
-        # Registry display_name must win, not the synthesized raw id.
-        assert foo_entries[0].display_name == "registry-foo"
 
     def test_synthesized_available_without_api_key_env_set_in_os_environ(self, monkeypatch):
         """Synthesized config has api_key_env set but the key is absent from env —
@@ -475,7 +457,9 @@ class TestSynthesizedLocalLLM:
         monkeypatch.delenv("LOCAL_LLM_API_KEY", raising=False)
 
         snap = self._local_snap("openai/mymodel")
-        groups = compute_availability([], {"local_llm": snap}, {})
+        snapshots = {"local_llm": snap}
+        registry = build_effective_registry(snapshots)
+        groups = compute_availability(registry, snapshots, {})
 
         local_group = next(g for g in groups if g.provider == "local_llm")
         assert local_group.models[0].status == "available"
@@ -484,12 +468,15 @@ class TestSynthesizedLocalLLM:
         monkeypatch.setenv("LOCAL_LLM_BASE_URL", "http://x")
 
         snap = ProviderSnapshot(probe_status="disabled")
-        groups = compute_availability([], {"local_llm": snap}, {})
+        snapshots = {"local_llm": snap}
+        registry = build_effective_registry(snapshots)
+        groups = compute_availability(registry, snapshots, {})
 
         provider_keys = {g.provider for g in groups}
         assert "local_llm" not in provider_keys
 
-    def test_hand_written_api_base_entry_without_api_key_env_does_not_crash(self):
+    def test_hand_written_cfg_without_api_key_env_does_not_crash(self):
+        """Manually constructed config with api_base but no api_key_env is fine."""
         cfg = ModelProviderConfig(
             id="local-hand",
             model_name="openai/hand-model",

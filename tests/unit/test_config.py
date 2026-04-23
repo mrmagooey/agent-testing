@@ -12,7 +12,6 @@ from sec_review_framework.config import (
     ConcurrencyConfig,
     ExperimentFileConfig,
     ModelProviderConfig,
-    ModelsConfig,
     PricingConfig,
     RetryConfig,
 )
@@ -26,31 +25,6 @@ from sec_review_framework.config import (
 def _write_yaml(path: Path, data: dict) -> Path:
     path.write_text(yaml.dump(data, default_flow_style=False))
     return path
-
-
-# ---------------------------------------------------------------------------
-# ModelsConfig
-# ---------------------------------------------------------------------------
-
-
-def test_models_config_from_yaml_loads_correctly(tmp_path: Path):
-    cfg_path = _write_yaml(
-        tmp_path / "models.yaml",
-        {
-            "providers": {
-                "gpt4o": {
-                    "id": "gpt-4o",
-                    "model_name": "gpt-4o",
-                    "temperature": 0.2,
-                    "max_tokens": 4096,
-                    "api_key_env": "OPENAI_API_KEY",
-                }
-            }
-        },
-    )
-    cfg = ModelsConfig.from_yaml(cfg_path)
-    assert "gpt4o" in cfg.providers
-    assert cfg.providers["gpt4o"].model_name == "gpt-4o"
 
 
 # ---------------------------------------------------------------------------
@@ -102,65 +76,6 @@ def test_model_provider_config_api_base_defaults_to_none():
         id="m5", model_name="gpt-4o", auth="api_key", api_key_env="OPENAI_API_KEY"
     )
     assert cfg.api_base is None
-
-
-# ---------------------------------------------------------------------------
-# ModelsConfig defaults merging
-# ---------------------------------------------------------------------------
-
-
-def test_models_config_defaults_merging(tmp_path: Path):
-    """A YAML with 'defaults' merges correctly; per-entry fields override."""
-    cfg_path = _write_yaml(
-        tmp_path / "models.yaml",
-        {
-            "defaults": {
-                "temperature": 0.1,
-                "max_tokens": 4096,
-            },
-            "providers": {
-                "m1": {
-                    "id": "m1",
-                    "model_name": "gpt-4o",
-                    "api_key_env": "OPENAI_API_KEY",
-                    # temperature not set — should inherit default 0.1
-                    "max_tokens": 2048,  # override default
-                },
-                "m2": {
-                    "id": "m2",
-                    "model_name": "claude",
-                    "api_key_env": "ANTHROPIC_API_KEY",
-                    # both temperature and max_tokens inherited from defaults
-                },
-            },
-        },
-    )
-    cfg = ModelsConfig.from_yaml(cfg_path)
-    assert cfg.providers["m1"].temperature == 0.1
-    assert cfg.providers["m1"].max_tokens == 2048  # per-entry override
-    assert cfg.providers["m2"].temperature == 0.1
-    assert cfg.providers["m2"].max_tokens == 4096  # from defaults
-
-
-def test_models_config_no_defaults_backwards_compat(tmp_path: Path):
-    """A YAML without 'defaults' still loads correctly."""
-    cfg_path = _write_yaml(
-        tmp_path / "models.yaml",
-        {
-            "providers": {
-                "gpt4o": {
-                    "id": "gpt-4o",
-                    "model_name": "gpt-4o",
-                    "api_key_env": "OPENAI_API_KEY",
-                }
-            }
-        },
-    )
-    cfg = ModelsConfig.from_yaml(cfg_path)
-    assert cfg.providers["gpt4o"].model_name == "gpt-4o"
-    # defaults from ModelProviderConfig field defaults apply
-    assert cfg.providers["gpt4o"].temperature == 0.2
-    assert cfg.providers["gpt4o"].max_tokens == 8192
 
 
 # ---------------------------------------------------------------------------
@@ -264,12 +179,3 @@ def test_experiment_file_config_from_yaml_loads(tmp_path: Path):
     assert len(cfg.strategies) == 1
 
 
-# ---------------------------------------------------------------------------
-# File not found
-# ---------------------------------------------------------------------------
-
-
-def test_config_file_not_found_raises_error(tmp_path: Path):
-    missing = tmp_path / "does_not_exist.yaml"
-    with pytest.raises((FileNotFoundError, OSError)):
-        ModelsConfig.from_yaml(missing)

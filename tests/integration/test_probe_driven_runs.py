@@ -16,7 +16,6 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-import yaml
 
 from sec_review_framework.coordinator import ExperimentCoordinator
 from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
@@ -119,22 +118,12 @@ def fake_server() -> Iterator[str]:
 # Shared test helpers
 # ---------------------------------------------------------------------------
 
-def _write_models_yaml(config_dir: Path, providers: dict) -> None:
-    data = {
-        "defaults": {"temperature": 0.2, "max_tokens": 8192},
-        "providers": providers,
-    }
-    (config_dir / "models.yaml").write_text(yaml.dump(data))
-
-
 def _make_coordinator(
     tmp_path: Path, db: Database, catalog: ProviderCatalog | None = None
 ) -> ExperimentCoordinator:
     cost_calc = CostCalculator(
         pricing={"gpt-4o": ModelPricing(input_per_million=5.0, output_per_million=15.0)},
     )
-    config_dir = tmp_path / "config"
-    config_dir.mkdir(parents=True, exist_ok=True)
     c = ExperimentCoordinator(
         k8s_client=None,
         storage_root=tmp_path / "storage",
@@ -144,7 +133,7 @@ def _make_coordinator(
         db=db,
         reporter=MarkdownReportGenerator(),
         cost_calculator=cost_calc,
-        config_dir=config_dir,
+        config_dir=None,
         default_cap=4,
     )
     if catalog is not None:
@@ -208,12 +197,13 @@ async def test_submit_flow_populates_model_config_api_base_from_live_endpoint(
         db = Database(tmp_path / "test.db")
         await db.init()
         c = _make_coordinator(tmp_path, db, catalog=catalog)
-        _write_models_yaml(c.config_dir, {})
 
-        matrix = _minimal_matrix(["local_llm-fake-model-a"])
+        # In the new probe-driven design, model ids are the full LiteLLM routing
+        # strings (raw_ids).  The probe returns "openai/fake-model-a".
+        matrix = _minimal_matrix(["openai/fake-model-a"])
         c.enrich_model_configs(matrix)
 
-        assert matrix.model_configs["local_llm-fake-model-a"] == {
+        assert matrix.model_configs["openai/fake-model-a"] == {
             "api_base": fake_server,
             "api_key": "dummy",
         }
@@ -235,11 +225,11 @@ async def test_expanded_runs_carry_api_base_through_model_dump_json(
         db = Database(tmp_path / "test.db")
         await db.init()
         c = _make_coordinator(tmp_path, db, catalog=catalog)
-        _write_models_yaml(c.config_dir, {})
 
-        matrix = _minimal_matrix(["local_llm-fake-model-a"])
+        # In the new probe-driven design, model ids are the full LiteLLM routing strings.
+        matrix = _minimal_matrix(["openai/fake-model-a"])
         c.enrich_model_configs(matrix)
-        assert matrix.model_configs["local_llm-fake-model-a"]["api_base"] == fake_server
+        assert matrix.model_configs["openai/fake-model-a"]["api_base"] == fake_server
 
         restored_matrix = ExperimentMatrix.model_validate_json(matrix.model_dump_json())
         runs = restored_matrix.expand()

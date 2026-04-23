@@ -42,23 +42,6 @@ class ModelProviderConfig(BaseModel):
         return self
 
 
-class ModelsConfig(BaseModel):
-    providers: dict[str, ModelProviderConfig]
-
-    @classmethod
-    def from_yaml(cls, path: Path) -> "ModelsConfig":
-        raw = load_yaml(path)
-        defaults: dict = raw.get("defaults", {})
-        providers_raw: dict = raw.get("providers", {})
-        # Merge defaults under each provider entry; per-entry fields take priority.
-        merged_providers: dict[str, dict] = {}
-        for name, entry in providers_raw.items():
-            merged = {**defaults, **entry}
-            # Inject id from key if not already present
-            if "id" not in merged:
-                merged["id"] = name
-            merged_providers[name] = merged
-        return cls.model_validate({"providers": merged_providers})
 
 
 # --- Retry Config ---

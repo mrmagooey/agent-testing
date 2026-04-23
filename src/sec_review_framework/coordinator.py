@@ -56,16 +56,17 @@ from sec_review_framework.db import Database
 from sec_review_framework.profiles.review_profiles import BUILTIN_PROFILES, ProfileRegistry
 from sec_review_framework.feedback.tracker import FeedbackTracker
 from sec_review_framework.cost.calculator import CostCalculator
-from sec_review_framework.config import ModelsConfig, ToolExtensionAvailability
+from sec_review_framework.config import ToolExtensionAvailability
 from sec_review_framework.models.catalog import ProviderCatalog
 from sec_review_framework.models.probes import build_probes
 from sec_review_framework.models.availability import (
+    build_effective_registry,
     compute_availability,
     flat_model_list,
     groups_to_dicts,
     build_id_to_status,
-    _effective_registry,
 )
+from sec_review_framework.models.aliases import rewrite_legacy_ids
 from sec_review_framework.data.evaluation import GroundTruthLabel
 from sec_review_framework.ground_truth.cve_importer import (
     CVECandidate as _CVECandidate,
@@ -1830,6 +1831,15 @@ class ExperimentCoordinator:
                     zf.write(f, f.relative_to(output_dir))
         return zip_path
 
+    def effective_registry(self) -> list["ModelProviderConfig"]:  # type: ignore[name-defined]
+        """Return the probe-driven model registry.
+
+        Builds ModelProviderConfig objects from the current ProviderCatalog
+        snapshots.  Returns an empty list when no catalog is attached.
+        """
+        snapshots = self.catalog.snapshot() if self.catalog is not None else {}
+        return build_effective_registry(snapshots)
+
     def list_models(
         self,
         *,
@@ -1845,17 +1855,9 @@ class ExperimentCoordinator:
         """
         import os as _os
 
-        if self.config_dir is None:
+        registry = self.effective_registry()
+        if not registry:
             return []
-        config_file = self.config_dir / "models.yaml"
-        if not config_file.exists():
-            return []
-        try:
-            models_cfg = ModelsConfig.from_yaml(config_file)
-        except Exception:
-            return []
-
-        registry = list(models_cfg.providers.values())
         snapshots = self.catalog.snapshot() if self.catalog is not None else {}
         groups = compute_availability(registry, snapshots, _os.environ)
 
@@ -1871,6 +1873,11 @@ class ExperimentCoordinator:
     ) -> list[dict]:
         """Validate that every requested model id is available.
 
+        Legacy short model ids (e.g. ``bedrock-claude-3-5-sonnet``) are
+        transparently rewritten to their canonical LiteLLM routing strings via
+        ``rewrite_legacy_ids()``.  A deprecation warning is emitted once per
+        aliased id per process.
+
         Returns a (possibly empty) list of problem dicts:
             [{"id": ..., "status": ..., "reason": ...}]
 
@@ -1878,26 +1885,19 @@ class ExperimentCoordinator:
         """
         import os as _os
 
-        if self.config_dir is None:
-            return []
-        config_file = self.config_dir / "models.yaml"
-        if not config_file.exists():
-            return []
-        try:
-            models_cfg = ModelsConfig.from_yaml(config_file)
-        except Exception:
+        registry = self.effective_registry()
+        if not registry:
             return []
 
-        registry = list(models_cfg.providers.values())
         snapshots = self.catalog.snapshot() if self.catalog is not None else {}
         groups = compute_availability(registry, snapshots, _os.environ)
         id_to_status = build_id_to_status(groups)
         known_ids = set(id_to_status.keys())
 
         problems: list[dict] = []
-        all_requested = list(model_ids)
+        all_requested = rewrite_legacy_ids(list(model_ids))
         if verifier_model_id:
-            all_requested.append(verifier_model_id)
+            all_requested.append(rewrite_legacy_ids([verifier_model_id])[0])
 
         _reason_map = {
             "key_missing": "API key or AWS credentials not configured",
@@ -1935,17 +1935,7 @@ class ExperimentCoordinator:
         """
         import os as _os
 
-        if self.config_dir is None:
-            return
-        config_file = self.config_dir / "models.yaml"
-        try:
-            models_cfg = ModelsConfig.from_yaml(config_file)
-        except Exception:
-            return
-
-        registry = list(models_cfg.providers.values())
-        snapshots = self.catalog.snapshot() if self.catalog is not None else {}
-        effective = _effective_registry(registry, snapshots)
+        effective = self.effective_registry()
 
         ids_to_enrich: set[str] = set(matrix.model_ids)
         if matrix.verifier_model_id is not None:

@@ -9,7 +9,7 @@ Routes covered:
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch, AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -18,42 +18,56 @@ import sec_review_framework.coordinator as coord_module
 from sec_review_framework.coordinator import app
 from sec_review_framework.db import Database
 
+from sec_review_framework.models.catalog import ModelMetadata, ProviderCatalog, ProviderSnapshot
+
 from tests.integration.test_coordinator_api import _make_coordinator
 
 
-def _seed_coordinator_prerequisites(tmp_path: Path) -> None:
-    """Seed a minimal models.yaml and dataset directory so smoke-test preconditions pass."""
-    import yaml
+def _fake_catalog(snapshots: dict) -> ProviderCatalog:
+    catalog = MagicMock(spec=ProviderCatalog)
+    catalog.snapshot.return_value = snapshots
+    return catalog
 
-    config_dir = tmp_path / "config"
-    config_dir.mkdir(parents=True, exist_ok=True)
-    models_yaml = config_dir / "models.yaml"
-    models_yaml.write_text(yaml.dump({
-        "defaults": {"temperature": 0.2, "max_tokens": 8192},
-        "providers": {
-            "gpt-4o-mini": {
-                "model_name": "gpt-4o-mini",
-                "api_key_env": "OPENAI_API_KEY",
-                "display_name": "GPT-4o mini",
-            }
-        },
-    }))
 
-    dataset_dir = tmp_path / "storage" / "datasets" / "smoke-test-dataset"
-    dataset_dir.mkdir(parents=True, exist_ok=True)
-    (dataset_dir / "labels.json").write_text("[]")
+def _seed_coordinator_prerequisites(tmp_path: Path, coordinator) -> None:
+    """Attach a minimal catalog stub so list_models() returns non-empty."""
+    coordinator.catalog = _fake_catalog({
+        "openai": ProviderSnapshot(
+            probe_status="fresh",
+            model_ids=frozenset(["gpt-4o-mini"]),
+            metadata={"gpt-4o-mini": ModelMetadata(id="gpt-4o-mini", raw_id="gpt-4o-mini")},
+        )
+    })
 
 
 @pytest.fixture
 async def coordinator_client(tmp_path: Path):
     db = Database(tmp_path / "test.db")
     await db.init()
-    _seed_coordinator_prerequisites(tmp_path)
     c = _make_coordinator(tmp_path, db)
+    fake_cat = _fake_catalog({
+        "openai": ProviderSnapshot(
+            probe_status="fresh",
+            model_ids=frozenset(["gpt-4o-mini"]),
+            metadata={"gpt-4o-mini": ModelMetadata(id="gpt-4o-mini", raw_id="gpt-4o-mini")},
+        )
+    })
+    _seed_coordinator_prerequisites(tmp_path, c)
+
+    dataset_dir = tmp_path / "storage" / "datasets" / "smoke-test-dataset"
+    dataset_dir.mkdir(parents=True, exist_ok=True)
+    (dataset_dir / "labels.json").write_text("[]")
+
+    # Patch the startup event so it doesn't overwrite our fake catalog with a real one.
     with patch.object(coord_module, "coordinator", c):
         with patch.object(c, "reconcile", return_value=None):
-            with TestClient(app, raise_server_exceptions=True) as client:
-                yield client, c, tmp_path
+            with patch("sec_review_framework.coordinator.ProviderCatalog") as mock_cat_cls:
+                mock_cat_cls.return_value = fake_cat
+                fake_cat.start = AsyncMock(return_value=None)
+                with TestClient(app, raise_server_exceptions=True) as client:
+                    # Ensure our catalog is set even after startup.
+                    c.catalog = fake_cat
+                    yield client, c, tmp_path
 
 
 # ---------------------------------------------------------------------------
@@ -113,8 +127,6 @@ def test_smoke_test_503_when_coordinator_none():
     trying to create /data (PermissionError), and then force coordinator back to
     None so the route's guard fires the 503.
     """
-    from unittest.mock import AsyncMock
-
     # build_coordinator_from_env would be called by startup() when coordinator is None
     # Intercept it so it returns a dummy, then override coordinator to None again
     # so the /smoke-test guard triggers 503.
@@ -193,24 +205,38 @@ async def test_smoke_test_allows_new_after_previous_completes(tmp_path: Path):
 
     db = Database(tmp_path / "test.db")
     await db.init()
-    _seed_coordinator_prerequisites(tmp_path)
     c = _make_coordinator(tmp_path, db)
+    fake_cat = _fake_catalog({
+        "openai": ProviderSnapshot(
+            probe_status="fresh",
+            model_ids=frozenset(["gpt-4o-mini"]),
+            metadata={"gpt-4o-mini": ModelMetadata(id="gpt-4o-mini", raw_id="gpt-4o-mini")},
+        )
+    })
+    _seed_coordinator_prerequisites(tmp_path, c)
+    dataset_dir = tmp_path / "storage" / "datasets" / "smoke-test-dataset"
+    dataset_dir.mkdir(parents=True, exist_ok=True)
+    (dataset_dir / "labels.json").write_text("[]")
 
     with patch.object(coord_module, "coordinator", c):
         with patch.object(c, "reconcile", return_value=None):
-            with TestClient(app, raise_server_exceptions=True) as client:
-                with _patch("sec_review_framework.coordinator.datetime") as mock_dt:
-                    mock_dt.utcnow.return_value.timestamp.return_value = 1000000
-                    first = client.post("/smoke-test")
-                assert first.status_code == 200
-                first_id = first.json()["experiment_id"]
+            with patch("sec_review_framework.coordinator.ProviderCatalog") as mock_cat_cls:
+                mock_cat_cls.return_value = fake_cat
+                fake_cat.start = AsyncMock(return_value=None)
+                with TestClient(app, raise_server_exceptions=True) as client:
+                    c.catalog = fake_cat
+                    with _patch("sec_review_framework.coordinator.datetime") as mock_dt:
+                        mock_dt.utcnow.return_value.timestamp.return_value = 1000000
+                        first = client.post("/smoke-test")
+                    assert first.status_code == 200
+                    first_id = first.json()["experiment_id"]
 
-                await c.db.update_experiment_status(first_id, "completed")
+                    await c.db.update_experiment_status(first_id, "completed")
 
-                with _patch("sec_review_framework.coordinator.datetime") as mock_dt:
-                    mock_dt.utcnow.return_value.timestamp.return_value = 1000001
-                    second = client.post("/smoke-test")
-                assert second.status_code == 200
+                    with _patch("sec_review_framework.coordinator.datetime") as mock_dt:
+                        mock_dt.utcnow.return_value.timestamp.return_value = 1000001
+                        second = client.post("/smoke-test")
+                    assert second.status_code == 200
 
 
 # ---------------------------------------------------------------------------
