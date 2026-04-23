@@ -1,10 +1,16 @@
 """Cost calculation — ModelPricing and CostCalculator."""
 
+from __future__ import annotations
+
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import litellm
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from sec_review_framework.cost.pricing_view import PricingView
 
 logger = logging.getLogger(__name__)
 
@@ -45,20 +51,31 @@ class CostCalculator:
     directly as a dict[str, ModelPricing] for testing.
     """
 
-    def __init__(self, pricing: dict[str, ModelPricing]) -> None:
+    def __init__(
+        self,
+        pricing: dict[str, ModelPricing],
+        pricing_view: "PricingView | None" = None,
+    ) -> None:
         self.pricing = pricing
+        self._pricing_view = pricing_view
 
     def price_per_token(self, model_id: str) -> tuple[float, float]:
         """Return (input_cost_per_token, output_cost_per_token) in USD.
 
         Resolution order:
         1. pricing.yaml entry (YAML is the authoritative override).
-        2. litellm.model_cost entry (broadens coverage without YAML maintenance).
-        3. Log warning and return (0.0, 0.0) — same behaviour as before fallback existed.
+        2. Catalog snapshot metadata (dynamic pricing from probes, e.g. OpenRouter).
+        3. litellm.model_cost entry (broadens coverage without YAML maintenance).
+        4. Log warning and return (0.0, 0.0) — same behaviour as before fallback existed.
         """
         p = self.pricing.get(model_id)
         if p is not None:
             return (p.input_per_million / 1_000_000, p.output_per_million / 1_000_000)
+
+        if self._pricing_view is not None:
+            catalog_result = self._pricing_view.get(model_id)
+            if catalog_result is not None:
+                return catalog_result
 
         litellm_result = _from_model_cost(model_id)
         if litellm_result is not None:

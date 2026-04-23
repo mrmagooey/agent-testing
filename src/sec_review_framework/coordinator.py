@@ -56,6 +56,7 @@ from sec_review_framework.db import Database
 from sec_review_framework.profiles.review_profiles import BUILTIN_PROFILES, ProfileRegistry
 from sec_review_framework.feedback.tracker import FeedbackTracker
 from sec_review_framework.cost.calculator import CostCalculator
+from sec_review_framework.cost.pricing_view import CatalogPricingView
 from sec_review_framework.config import ToolExtensionAvailability
 from sec_review_framework.models.catalog import ProviderCatalog
 from sec_review_framework.models.probes import build_probes
@@ -2289,6 +2290,7 @@ async def startup() -> None:
     )
     await catalog.start()
     coordinator.catalog = catalog
+    coordinator.cost_calculator._pricing_view = CatalogPricingView(catalog)
 
     _background_tasks.add(asyncio.create_task(
         retention_cleanup_loop(coordinator.storage_root, retention_days=30)

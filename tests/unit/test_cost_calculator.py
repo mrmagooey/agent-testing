@@ -4,6 +4,7 @@ import litellm
 import pytest
 
 from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
+from sec_review_framework.cost.pricing_view import PricingView
 
 
 @pytest.fixture
@@ -157,3 +158,89 @@ def test_fallback_rejects_bool_pricing_values(monkeypatch):
     )
     calc = CostCalculator(pricing={})
     assert calc.price_per_token("bool-model") == (0.0, 0.0)
+
+
+# ---------------------------------------------------------------------------
+# TestDynamicPricingTier — pricing_view (tier 2) integration
+# ---------------------------------------------------------------------------
+
+
+class _FixedPricingView:
+    """Stub PricingView returning a fixed value for one model, None for others."""
+
+    def __init__(self, model_id: str, pricing: tuple[float, float] | None) -> None:
+        self._model_id = model_id
+        self._pricing = pricing
+
+    def get(self, model_id: str) -> tuple[float, float] | None:
+        if model_id == self._model_id:
+            return self._pricing
+        return None
+
+
+class TestDynamicPricingTier:
+    """Tests for the three-tier pricing resolution introduced in Phase 3."""
+
+    def test_pricing_view_wins_over_litellm(self, monkeypatch):
+        """pricing_view (tier 2) beats litellm.model_cost (tier 3)."""
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "dynamic-model",
+            {"input_cost_per_token": 999e-6, "output_cost_per_token": 999e-6},
+        )
+        view = _FixedPricingView("dynamic-model", (1.5e-6, 2.0e-6))
+        calc = CostCalculator(pricing={}, pricing_view=view)
+
+        result = calc.price_per_token("dynamic-model")
+        assert result == pytest.approx((1.5e-6, 2.0e-6))
+
+    def test_yaml_override_beats_pricing_view(self, monkeypatch):
+        """pricing.yaml (tier 1) is still authoritative even when pricing_view has data."""
+        view = _FixedPricingView("gpt-4o", (999e-6, 999e-6))
+        calc = CostCalculator(
+            pricing={"gpt-4o": ModelPricing(input_per_million=5.0, output_per_million=15.0)},
+            pricing_view=view,
+        )
+
+        result = calc.price_per_token("gpt-4o")
+        # Should come from YAML (5.0/1e6, 15.0/1e6), not the pricing view.
+        assert result == pytest.approx((5e-6, 15e-6))
+
+    def test_pricing_view_none_falls_through_to_litellm(self, monkeypatch):
+        """When pricing_view returns None, tier 3 (litellm.model_cost) is used."""
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "litellm-only-model",
+            {"input_cost_per_token": 1.0e-6, "output_cost_per_token": 2.0e-6},
+        )
+        view = _FixedPricingView("other-model", (999e-6, 999e-6))  # won't match
+        calc = CostCalculator(pricing={}, pricing_view=view)
+
+        result = calc.price_per_token("litellm-only-model")
+        assert result == pytest.approx((1.0e-6, 2.0e-6))
+
+    def test_no_pricing_view_preserves_existing_behaviour(self, monkeypatch):
+        """Without pricing_view, behaviour is byte-identical to pre-Phase-3."""
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "classic-model",
+            {"input_cost_per_token": 3.0e-6, "output_cost_per_token": 6.0e-6},
+        )
+        calc = CostCalculator(pricing={})  # no pricing_view
+
+        result = calc.price_per_token("classic-model")
+        assert result == pytest.approx((3.0e-6, 6.0e-6))
+
+    def test_all_tiers_miss_returns_zero_with_warning(self, monkeypatch, caplog):
+        """All three tiers miss → (0.0, 0.0) with a warning (existing behaviour)."""
+        import logging
+
+        monkeypatch.delitem(litellm.model_cost, "ghost-model", raising=False)
+        view = _FixedPricingView("ghost-model", None)
+        calc = CostCalculator(pricing={}, pricing_view=view)
+
+        with caplog.at_level(logging.WARNING, logger="sec_review_framework.cost.calculator"):
+            result = calc.price_per_token("ghost-model")
+
+        assert result == (0.0, 0.0)
+        assert any("ghost-model" in r.message for r in caplog.records)
