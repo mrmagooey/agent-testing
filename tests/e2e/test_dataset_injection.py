@@ -8,6 +8,13 @@ Uses TestClient + minimal dataset fixture, following the pattern from
 test_coordinator_smoke.py. No Kubernetes, no real LLM calls.
 """
 
+# BUG: Backend InjectionPreview returns before_snippet/after_snippet/unified_diff,
+# but the frontend API client expects before/after/language/warnings (no adapter
+# layer). These backend tests assert the REAL backend shape (before_snippet etc.).
+# The frontend e2e tests in frontend/e2e/dataset-inject.spec.ts assert the
+# mock shape (before/after) — the two test suites together surface the
+# divergence. Reconciliation is tracked as a separate product fix.
+
 from __future__ import annotations
 
 import asyncio
