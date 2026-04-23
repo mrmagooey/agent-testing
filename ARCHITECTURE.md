@@ -116,7 +116,7 @@
 │  │    - CPU/memory limits per pod                                        │  │
 │  │    - Deadline: activeDeadlineSeconds on the Job                       │  │
 │  │  Network:                                                             │  │
-│  │    - NetworkPolicy: egress only to LLM provider endpoints             │  │
+│  │    - NetworkPolicy: egress gated by values.yaml llmEgressCidrs        │  │
 │  └────────────────────────────────────────────────────────────────────────┘  │
 └──────────────────────────────────────────────────────────────────────────────┘
            │
@@ -286,7 +286,8 @@ There is a single concrete provider: `LiteLLMProvider` in `models/litellm_provid
 
 - `models/base.py` — `ModelProvider` ABC plus the dataclasses above (`Message`, `ToolDefinition`, `ModelResponse`, `RetryPolicy`).
 - `models/litellm_provider.py` — single concrete provider; delegates to any LiteLLM-supported backend.
-- `models/providers.py` — provider definitions, the `ENV_VAR_FOR_PROVIDER` mapping, and `build_probes()`.
+- `models/providers.py` — provider definitions and the `ENV_VAR_FOR_PROVIDER` mapping.
+- `models/probes/__init__.py` — `build_probes()` which reads environment variables and returns the assembled list of probes.
 - `models/catalog.py` — synthesised catalog built from probe results.
 - `models/synthesized.py` — normalised model records emitted by probes.
 - `models/availability.py` — per-provider availability cache consulted before dispatch.
@@ -548,7 +549,7 @@ agent-testing-framework/
 │       │   ├── __init__.py
 │       │   ├── base.py           # ModelProvider ABC, Message, ToolDefinition, ModelResponse, RetryPolicy
 │       │   ├── litellm_provider.py  # single concrete provider; dispatches to any LiteLLM backend
-│       │   ├── providers.py      # provider definitions, ENV_VAR_FOR_PROVIDER, build_probes()
+│       │   ├── providers.py      # provider definitions, ENV_VAR_FOR_PROVIDER
 │       │   ├── catalog.py        # synthesised model catalog from probe results
 │       │   ├── synthesized.py    # normalised model records emitted by probes
 │       │   ├── availability.py   # per-provider availability cache
@@ -989,6 +990,10 @@ class ExperimentMatrix(BaseModel):
 
     strategy_configs: dict[str, dict] = {}
     model_configs: dict[str, dict] = {}
+
+    # Submit-time override: bypass the availability guard and run against models
+    # that the probe layer has marked unavailable. Excluded from serialization.
+    allow_unavailable_models: bool = Field(default=False, exclude=True)
 
     # Repetitions — run each cell N times for statistical significance
     num_repetitions: int = 1
@@ -1473,16 +1478,17 @@ def get_fp_patterns(experiment_id: str) -> list[dict]:
 
 @app.get("/trends")
 async def get_trends(
-    dataset: str,
-    limit: int = 10,
+    dataset: str | None = None,
+    limit: int = Query(default=10, ge=1, le=200),
     tool_ext: str | None = None,
     since: str | None = None,
     until: str | None = None,
 ) -> dict:
     """
     Historical F1 trend series per (model, strategy, tool_variant, tool_extensions) cell.
-    Required: dataset. Optional: limit (1..200, default 10), tool_ext (filter by extension key),
-    since/until (ISO date strings YYYY-MM-DD). Returns 400 if dataset omitted or dates invalid.
+    `dataset` is required and enforced at runtime — a missing value returns 400.
+    Optional: limit (1..200, default 10), tool_ext (filter by extension key),
+    since/until (ISO date strings YYYY-MM-DD). Returns 400 if dates invalid.
     """
     return await coordinator.get_trends(dataset=dataset, limit=limit,
                                         tool_ext=tool_ext, since=since, until=until)
@@ -1846,6 +1852,8 @@ class LabelStore:
             for label in labels:
                 f.write(label.model_dump_json() + "\n")
 ```
+
+> **Known divergence:** the coordinator's `import_cve` handler currently writes via a private `_append_labels` helper that targets `storage_root/datasets/{name}/labels.json` (a single JSON array), while `LabelStore.load()` — used by the evaluator and every other reader — expects `datasets_root/targets/{name}/labels.jsonl` (newline-delimited). Unless `storage_root` and `datasets_root` resolve to the same directory and the reader tolerates the format mismatch, labels written through `import_cve` will not be visible to downstream consumers. This needs reconciliation in the coordinator; the canonical layout is the one shown above.
 
 ### 6.2 CVE Selection Pipeline
 
@@ -2221,7 +2229,7 @@ def discover_cves(criteria: CVESelectionCriteria, max_results: int = 50) -> list
     return [c.model_dump() for c in candidates]
 
 @app.get("/datasets/resolve-cve")
-def resolve_cve(id: str) -> dict:
+def resolve_cve(id: str) -> CVECandidateResponse:
     """
     Manual mode: given a CVE ID, find the GitHub repo, fix commit, and metadata.
     Returns a ResolvedCVE that can be reviewed before import.
@@ -2229,7 +2237,7 @@ def resolve_cve(id: str) -> dict:
     resolved = coordinator.cve_resolver.resolve(id)
     if not resolved:
         raise HTTPException(404, f"Could not resolve {id}")
-    return resolved.model_dump()
+    return resolved
 
 @app.post("/datasets/import-cve", status_code=201)
 def import_cve(spec: dict) -> dict:
@@ -2277,7 +2285,7 @@ curl -X POST $COORD/datasets/import-cve \
 
 ```bash
 # User has a specific CVE in mind
-curl -X POST "$COORD/datasets/resolve-cve?cve_id=CVE-2023-45678"
+curl "$COORD/datasets/resolve-cve?id=CVE-2023-45678"
 
 # Response: resolved metadata for review
 # {
@@ -3553,7 +3561,7 @@ models:
 ```
 
 **Tier 2 — `CatalogPricingView` from probe metadata** (`src/sec_review_framework/cost/pricing_view.py`)  
-When a model is absent from `pricing.yaml`, `CostCalculator` consults an optional `PricingView` (typically `CatalogPricingView`) backed by the live `ProviderCatalog` snapshots populated by probes (e.g. OpenRouter). The view searches each snapshot's `ModelMetadata.pricing` dict, accepting keys `"prompt"`/`"completion"` (OpenRouter canonical) or `"input"`/`"output"`. Values may be strings or floats (USD per token). Returns `None` on any parse failure, which causes fall-through to tier 3.
+When a model is absent from `pricing.yaml`, `CostCalculator` consults an optional `PricingView` (typically `CatalogPricingView`) backed by the live `ProviderCatalog` snapshots populated by probes (e.g. OpenRouter). The view searches each snapshot's `ModelMetadata.pricing` dict, trying three key pairs in order: `"prompt"`/`"completion"` (OpenRouter canonical), `"input"`/`"output"`, and `"input_cost_per_token"`/`"output_cost_per_token"`. Values may be strings or floats (USD per token). Returns `None` on any parse failure, which causes fall-through to tier 3.
 
 **Tier 3 — `litellm.model_cost` fallback** (`litellm` package, bundled pricing table)  
 The broadest coverage tier. `_from_model_cost()` reads `litellm.model_cost[model_id]` for `input_cost_per_token` and `output_cost_per_token` (already USD per token, no conversion needed). Returns `None` when either field is absent or non-numeric.
@@ -4655,7 +4663,7 @@ One image, one deployment, one port. The coordinator serves the SPA at `/` and t
 3. Register in `ModelProviderFactory`
 4. Create a probe in `src/sec_review_framework/models/probes/{provider_name}_probe.py`
    implementing the `ProviderProbe` protocol and returning a `ProviderSnapshot`
-5. Register the probe in `coordinator.py` where `build_probes()` assembles the list
+5. Register the probe in `src/sec_review_framework/models/probes/__init__.py` where `build_probes()` assembles the list
 6. Add an entry to `ENV_VAR_FOR_PROVIDER` in `src/sec_review_framework/models/providers.py`
 7. Add pricing entry to `config/pricing.yaml`
 
