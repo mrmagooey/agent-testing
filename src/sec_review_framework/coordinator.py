@@ -8,7 +8,8 @@ import shutil
 import subprocess
 import threading
 import zipfile
-from datetime import date, datetime, timedelta
+from contextlib import asynccontextmanager
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 RECONCILE_INTERVAL_S = int(os.environ.get("RECONCILE_INTERVAL_S", "5"))
@@ -509,7 +510,7 @@ class ExperimentCoordinator:
         if results and self.reporter:
             self.reporter.render_matrix(results, output_dir)
         await self.db.update_experiment_status(
-            experiment_id, "completed", completed_at=datetime.utcnow().isoformat()
+            experiment_id, "completed", completed_at=datetime.now(UTC).replace(tzinfo=None).isoformat()
         )
         # Invalidate the trend cache so the next request reflects this new data.
         self._invalidate_trends_cache()
@@ -714,7 +715,7 @@ class ExperimentCoordinator:
                         run_id,
                         status="failed",
                         error=f"run_result.json parse error: {exc}",
-                        completed_at=datetime.utcnow().isoformat(),
+                        completed_at=datetime.now(UTC).replace(tzinfo=None).isoformat(),
                     )
                     continue
 
@@ -726,7 +727,7 @@ class ExperimentCoordinator:
                     completed_at=(
                         result.completed_at.isoformat()
                         if result.completed_at
-                        else datetime.utcnow().isoformat()
+                        else datetime.now(UTC).replace(tzinfo=None).isoformat()
                     ),
                     estimated_cost_usd=result.estimated_cost_usd,
                 )
@@ -790,7 +791,7 @@ class ExperimentCoordinator:
                                 run_id,
                                 status="failed",
                                 error="K8s Job not found (TTL-reaped or creation failed)",
-                                completed_at=datetime.utcnow().isoformat(),
+                                completed_at=datetime.now(UTC).replace(tzinfo=None).isoformat(),
                             )
                         else:
                             job = run_jobs[0]
@@ -809,7 +810,7 @@ class ExperimentCoordinator:
                                     error=(
                                         "K8s Job finished but run_result.json not found"
                                     ),
-                                    completed_at=datetime.utcnow().isoformat(),
+                                    completed_at=datetime.now(UTC).replace(tzinfo=None).isoformat(),
                                 )
                             else:
                                 # Job appears active but may be stalled (no live pods)
@@ -906,7 +907,7 @@ class ExperimentCoordinator:
             run_id,
             status="failed",
             error="Job has no active pods; likely OOM or eviction",
-            completed_at=datetime.utcnow().isoformat(),
+            completed_at=datetime.now(UTC).replace(tzinfo=None).isoformat(),
         )
         try:
             self.k8s_client.delete_namespaced_job(
@@ -2078,14 +2079,14 @@ async def retention_cleanup_loop(
     """Background task: deletes experiment directories older than retention_days."""
     while True:
         await asyncio.sleep(interval_s)
-        cutoff = datetime.utcnow() - timedelta(days=retention_days)
+        cutoff = datetime.now(UTC) - timedelta(days=retention_days)
         outputs_dir = storage_root / "outputs"
         if not outputs_dir.exists():
             continue
         for experiment_dir in outputs_dir.iterdir():
             if not experiment_dir.is_dir():
                 continue
-            mtime = datetime.utcfromtimestamp(experiment_dir.stat().st_mtime)
+            mtime = datetime.fromtimestamp(experiment_dir.stat().st_mtime, UTC)
             if mtime < cutoff:
                 shutil.rmtree(experiment_dir, ignore_errors=True)
                 logger.info(f"Retention cleanup: deleted {experiment_dir.name}")
@@ -2169,7 +2170,6 @@ AVG_TOKENS_PER_KLOC = 1400  # prompt + completion, calibrated empirically
 # FastAPI application
 # ---------------------------------------------------------------------------
 
-app = FastAPI(title="Security Review Framework", version="1.0.0")
 coordinator: ExperimentCoordinator = None  # type: ignore[assignment]  # initialized at startup
 _background_tasks: set[asyncio.Task] = set()
 # One-shot fire-and-forget tasks (e.g. _maybe_backfill).  Not cancelled on
@@ -2177,6 +2177,80 @@ _background_tasks: set[asyncio.Task] = set()
 # so the GC doesn't collect them while they're running.  Each task removes
 # itself via add_done_callback when it finishes.
 _ephemeral_tasks: set[asyncio.Task] = set()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global coordinator
+    if coordinator is None:
+        coordinator = build_coordinator_from_env()
+        await coordinator.db.init()
+    await coordinator.reconcile()
+
+    # --- ProviderCatalog ---
+    _probe_enabled_env = os.environ.get("PROVIDER_PROBE_ENABLED", "true").strip().lower()
+    _probe_enabled = _probe_enabled_env != "false"
+    _ttl_seconds = int(os.environ.get("PROVIDER_PROBE_TTL_SECONDS", "600"))
+    _max_stale_env = os.environ.get("PROVIDER_PROBE_MAX_STALE_SECONDS")
+    _max_stale_seconds = int(_max_stale_env) if _max_stale_env is not None else None
+    catalog = ProviderCatalog(
+        probes=build_probes(),
+        ttl_seconds=_ttl_seconds,
+        probe_enabled=_probe_enabled,
+        max_stale_seconds=_max_stale_seconds,
+    )
+    await catalog.start()
+    coordinator.catalog = catalog
+    coordinator.cost_calculator._pricing_view = CatalogPricingView(catalog)
+
+    _background_tasks.add(asyncio.create_task(
+        retention_cleanup_loop(coordinator.storage_root, retention_days=30)
+    ))
+    # Periodic reconcile loop is only needed when there's an active scheduler
+    # (K8s cluster) or when explicitly enabled for integration tests.
+    _enable_loop = os.environ.get("ENABLE_RECONCILE_LOOP", "").strip().lower()
+    if K8S_AVAILABLE or _enable_loop in ("1", "true", "yes"):
+        _background_tasks.add(asyncio.create_task(coordinator._reconcile_loop()))
+
+    # Backfill findings index if the table is empty but experiments exist.
+    # Runs asynchronously to not block startup.
+    async def _maybe_backfill() -> None:
+        try:
+            finding_count = await coordinator.db.count_all_findings()
+            if finding_count == 0:
+                experiments = await coordinator.db.list_experiments()
+                if experiments:
+                    logger.info(
+                        "findings table empty but experiments exist — running backfill"
+                    )
+                    n = await coordinator.backfill_findings_index()
+                    logger.info("backfill_findings_index indexed %d runs", n)
+        except Exception as exc:
+            logger.warning("backfill check failed: %s", exc)
+
+    # _maybe_backfill is a one-shot task: it completes on its own and must NOT
+    # be cancelled by the shutdown handler (that could interrupt a partial DB
+    # write).  Track it in _ephemeral_tasks so the GC doesn't collect it, and
+    # remove it automatically when it finishes.
+    _t = asyncio.create_task(_maybe_backfill())
+    _ephemeral_tasks.add(_t)
+    _t.add_done_callback(_ephemeral_tasks.discard)
+
+    yield
+
+    # Stop ProviderCatalog background task.
+    if coordinator is not None and coordinator.catalog is not None:
+        await coordinator.catalog.stop()
+    # Cancel all tracked tasks so TestClient teardown (and real SIGTERM) doesn't
+    # leave behind coroutines holding closures over per-test storage roots.
+    for task in _background_tasks:
+        task.cancel()
+    if _background_tasks:
+        await asyncio.gather(*_background_tasks, return_exceptions=True)
+    _background_tasks.clear()
+
+
+app = FastAPI(title="Security Review Framework", version="1.0.0", lifespan=lifespan)
 
 
 @app.middleware("http")
@@ -2273,78 +2347,6 @@ def build_coordinator_from_env() -> ExperimentCoordinator:
     )
 
 
-@app.on_event("startup")
-async def startup() -> None:
-    global coordinator
-    if coordinator is None:
-        coordinator = build_coordinator_from_env()
-        await coordinator.db.init()
-    await coordinator.reconcile()
-
-    # --- ProviderCatalog ---
-    _probe_enabled_env = os.environ.get("PROVIDER_PROBE_ENABLED", "true").strip().lower()
-    _probe_enabled = _probe_enabled_env != "false"
-    _ttl_seconds = int(os.environ.get("PROVIDER_PROBE_TTL_SECONDS", "600"))
-    _max_stale_env = os.environ.get("PROVIDER_PROBE_MAX_STALE_SECONDS")
-    _max_stale_seconds = int(_max_stale_env) if _max_stale_env is not None else None
-    catalog = ProviderCatalog(
-        probes=build_probes(),
-        ttl_seconds=_ttl_seconds,
-        probe_enabled=_probe_enabled,
-        max_stale_seconds=_max_stale_seconds,
-    )
-    await catalog.start()
-    coordinator.catalog = catalog
-    coordinator.cost_calculator._pricing_view = CatalogPricingView(catalog)
-
-    _background_tasks.add(asyncio.create_task(
-        retention_cleanup_loop(coordinator.storage_root, retention_days=30)
-    ))
-    # Periodic reconcile loop is only needed when there's an active scheduler
-    # (K8s cluster) or when explicitly enabled for integration tests.
-    _enable_loop = os.environ.get("ENABLE_RECONCILE_LOOP", "").strip().lower()
-    if K8S_AVAILABLE or _enable_loop in ("1", "true", "yes"):
-        _background_tasks.add(asyncio.create_task(coordinator._reconcile_loop()))
-
-    # Backfill findings index if the table is empty but experiments exist.
-    # Runs asynchronously to not block startup.
-    async def _maybe_backfill() -> None:
-        try:
-            finding_count = await coordinator.db.count_all_findings()
-            if finding_count == 0:
-                experiments = await coordinator.db.list_experiments()
-                if experiments:
-                    logger.info(
-                        "findings table empty but experiments exist — running backfill"
-                    )
-                    n = await coordinator.backfill_findings_index()
-                    logger.info("backfill_findings_index indexed %d runs", n)
-        except Exception as exc:
-            logger.warning("backfill check failed: %s", exc)
-
-    # _maybe_backfill is a one-shot task: it completes on its own and must NOT
-    # be cancelled by the shutdown handler (that could interrupt a partial DB
-    # write).  Track it in _ephemeral_tasks so the GC doesn't collect it, and
-    # remove it automatically when it finishes.
-    _t = asyncio.create_task(_maybe_backfill())
-    _ephemeral_tasks.add(_t)
-    _t.add_done_callback(_ephemeral_tasks.discard)
-
-
-@app.on_event("shutdown")
-async def shutdown() -> None:
-    # Stop ProviderCatalog background task.
-    if coordinator is not None and coordinator.catalog is not None:
-        await coordinator.catalog.stop()
-    # Cancel all tracked tasks so TestClient teardown (and real SIGTERM) doesn't
-    # leave behind coroutines holding closures over per-test storage roots.
-    for task in _background_tasks:
-        task.cancel()
-    if _background_tasks:
-        await asyncio.gather(*_background_tasks, return_exceptions=True)
-    _background_tasks.clear()
-
-
 # --- Health ---
 
 @app.get("/health")
@@ -2385,7 +2387,7 @@ async def run_smoke_test() -> dict:
         )
     dataset_name = datasets[0]["name"]
 
-    timestamp = int(datetime.utcnow().timestamp())
+    timestamp = int(datetime.now(UTC).timestamp())
     experiment_id = f"smoke-test-{timestamp}"
 
     existing_experiments = await coordinator.list_experiments()

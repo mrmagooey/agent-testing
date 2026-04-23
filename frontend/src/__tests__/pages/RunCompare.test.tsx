@@ -204,12 +204,14 @@ describe('RunCompare — legacy route (/experiments/:id/compare)', () => {
     })
   })
 
-  it('does NOT show the picker on the legacy route', () => {
+  it('shows the picker on the legacy route so users can switch runs', () => {
     mockCompareRunsCross.mockResolvedValue(makeComparison())
 
     renderCompare('/experiments/:id/compare', '/experiments/exp-legacy/compare?a=run-a&b=run-b')
 
-    expect(screen.queryAllByLabelText('Experiment')).toHaveLength(0)
+    // Picker is always rendered on both routes (see RunCompare.tsx comment
+    // "Pickers — always shown so users can select/change runs on any route").
+    expect(screen.queryAllByLabelText('Experiment')).toHaveLength(2)
   })
 
   it('shows experiment ID in breadcrumb on legacy route', () => {

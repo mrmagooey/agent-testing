@@ -7,7 +7,7 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel
@@ -45,7 +45,7 @@ class ToolCallAuditLog:
             call_id=call_id,
             tool_name=name,
             input=input,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(UTC).replace(tzinfo=None),
             duration_ms=duration_ms,
             output_truncated=output_truncated,
         )

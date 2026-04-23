@@ -1,7 +1,7 @@
 """Experiment configuration and run result data models."""
 
 import hashlib
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 from pydantic import BaseModel, Field, field_serializer, field_validator
 
@@ -59,7 +59,7 @@ class PromptSnapshot(BaseModel):
     def capture(cls, **kwargs: str | None) -> "PromptSnapshot":
         blob = "".join(str(v) for v in kwargs.values() if v)
         snap_id = hashlib.sha256(blob.encode()).hexdigest()[:16]
-        return cls(snapshot_id=snap_id, captured_at=datetime.utcnow(), **kwargs)
+        return cls(snapshot_id=snap_id, captured_at=datetime.now(UTC).replace(tzinfo=None), **kwargs)
 
 
 class ExperimentRun(BaseModel):

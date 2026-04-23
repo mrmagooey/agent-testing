@@ -124,31 +124,25 @@ def test_smoke_test_creates_experiment_in_db(coordinator_client):
 def test_smoke_test_503_when_coordinator_none():
     """POST /smoke-test returns 503 when coordinator is None.
 
-    We must patch build_coordinator_from_env to prevent the startup event from
-    trying to create /data (PermissionError), and then force coordinator back to
-    None so the route's guard fires the 503.
+    Replace the app's lifespan with a no-op so the real startup won't try to
+    build a coordinator (which would fail trying to create /data), then force
+    coordinator to None so the route's guard fires the 503.
     """
-    # build_coordinator_from_env would be called by startup() when coordinator is None
-    # Intercept it so it returns a dummy, then override coordinator to None again
-    # so the /smoke-test guard triggers 503.
-    sentinel = object()  # anything non-None to satisfy startup
+    from contextlib import asynccontextmanager
 
-    async def _patched_startup():
-        # Skip all real startup; coordinator stays None
-        pass
+    @asynccontextmanager
+    async def _noop_lifespan(_app):
+        yield
 
-    # Replace the registered startup handler by patching at the router level
-    original_handlers = app.router.on_startup[:]
-    app.router.on_startup.clear()
-    app.router.on_startup.append(_patched_startup)
+    original_lifespan = app.router.lifespan_context
+    app.router.lifespan_context = _noop_lifespan
     try:
         with patch.object(coord_module, "coordinator", None):
             with TestClient(app, raise_server_exceptions=False) as client:
                 resp = client.post("/smoke-test")
         assert resp.status_code == 503
     finally:
-        app.router.on_startup.clear()
-        app.router.on_startup.extend(original_handlers)
+        app.router.lifespan_context = original_lifespan
 
 
 def test_smoke_test_sets_max_turns_10(coordinator_client):
@@ -227,7 +221,7 @@ async def test_smoke_test_allows_new_after_previous_completes(tmp_path: Path):
                 with TestClient(app, raise_server_exceptions=True) as client:
                     c.catalog = fake_cat
                     with _patch("sec_review_framework.coordinator.datetime") as mock_dt:
-                        mock_dt.utcnow.return_value.timestamp.return_value = 1000000
+                        mock_dt.now.return_value.timestamp.return_value = 1000000
                         first = client.post("/smoke-test")
                     assert first.status_code == 200
                     first_id = first.json()["experiment_id"]
@@ -235,7 +229,7 @@ async def test_smoke_test_allows_new_after_previous_completes(tmp_path: Path):
                     await c.db.update_experiment_status(first_id, "completed")
 
                     with _patch("sec_review_framework.coordinator.datetime") as mock_dt:
-                        mock_dt.utcnow.return_value.timestamp.return_value = 1000001
+                        mock_dt.now.return_value.timestamp.return_value = 1000001
                         second = client.post("/smoke-test")
                     assert second.status_code == 200
 

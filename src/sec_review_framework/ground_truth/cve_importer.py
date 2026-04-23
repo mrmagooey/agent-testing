@@ -5,7 +5,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import tempfile
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -672,7 +672,7 @@ class CVEImporter:
                 source=GroundTruthSource.CVE_PATCH,
                 source_ref=spec.cve_id,
                 confidence="confirmed",
-                created_at=datetime.utcnow(),
+                created_at=datetime.now(UTC).replace(tzinfo=None),
                 patch_lines_changed=spec.patch_lines_changed,
             )
             labels.append(label)

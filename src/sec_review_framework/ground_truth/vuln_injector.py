@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import difflib
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -183,7 +183,7 @@ class VulnInjector:
             source=GroundTruthSource.INJECTED,
             source_ref=template.id,
             confidence="confirmed",
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(UTC),
             introduced_in_diff=None,
             patch_lines_changed=result.lines_added if result.lines_added > 0 else None,
         )
@@ -275,6 +275,6 @@ class VulnInjector:
             source=GroundTruthSource.INJECTED,
             source_ref=template.id,
             confidence="confirmed",
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(UTC),
             patch_lines_changed=lines_added if lines_added > 0 else None,
         )

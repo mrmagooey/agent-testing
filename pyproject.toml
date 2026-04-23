@@ -62,6 +62,15 @@ markers = [
     "infra: requires Docker or K8s tools",
     "k8s_live: requires a live Kubernetes cluster via scripts/e2e-live/bootstrap.sh",
 ]
+# aiosqlite 0.22.1 race: its _connection_worker_thread signals completion via
+# call_soon_threadsafe, which raises "Event loop is closed" when the starlette
+# TestClient's portal loop is torn down between the last request and fixture
+# teardown. Pytest surfaces this as PytestUnhandledThreadExceptionWarning. The
+# product code is fine — the noise is test-infrastructure only — so we filter
+# the specific worker-thread trace.
+filterwarnings = [
+    "ignore:Exception in thread Thread-\\d+ \\(_connection_worker_thread\\):pytest.PytestUnhandledThreadExceptionWarning",
+]
 
 [dependency-groups]
 dev = [

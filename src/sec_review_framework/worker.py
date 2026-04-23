@@ -4,7 +4,7 @@ import argparse
 import json
 import os
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from sec_review_framework.data.experiment import (
@@ -142,7 +142,7 @@ class ExperimentWorker:
             estimated_cost_usd=estimated_cost,
             duration_seconds=duration,
             error=error,
-            completed_at=datetime.utcnow(),
+            completed_at=datetime.now(UTC).replace(tzinfo=None),
         )
 
         output_dir.mkdir(parents=True, exist_ok=True)
