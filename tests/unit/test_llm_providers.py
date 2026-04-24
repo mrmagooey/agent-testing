@@ -292,6 +292,55 @@ async def test_db_app_settings_patch(db_with_key):
 # Coordinator startup — fernet must be loaded eagerly (finding #2)
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Probe error scrubbing (finding #4)
+# ---------------------------------------------------------------------------
+
+def test_scrub_error_removes_sk_key():
+    """_scrub_error must remove sk-… style API keys."""
+    from sec_review_framework.llm_providers import _scrub_error
+    raw = "AuthenticationError: Invalid key sk-abc123verylongkey for model gpt-4"
+    result = _scrub_error(raw)
+    assert "abc123verylongkey" not in result
+    assert "[REDACTED]" in result
+
+
+def test_scrub_error_removes_bearer():
+    from sec_review_framework.llm_providers import _scrub_error
+    raw = "Request failed: Authorization: Bearer mySecretToken123"
+    result = _scrub_error(raw)
+    assert "mySecretToken123" not in result
+    assert "[REDACTED]" in result
+
+
+def test_scrub_error_removes_key_equals():
+    from sec_review_framework.llm_providers import _scrub_error
+    raw = "Request failed: key=super_secret_value, status=401"
+    result = _scrub_error(raw)
+    assert "super_secret_value" not in result
+
+
+def test_scrub_error_removes_api_key_colon():
+    from sec_review_framework.llm_providers import _scrub_error
+    raw = "Error: api_key: sk-proj-mysecretapikey123"
+    result = _scrub_error(raw)
+    assert "mysecretapikey123" not in result
+
+
+def test_scrub_error_truncates_to_200_chars():
+    from sec_review_framework.llm_providers import _scrub_error
+    raw = "x" * 500
+    result = _scrub_error(raw)
+    assert len(result) <= 200
+
+
+def test_scrub_error_preserves_non_secret_text():
+    from sec_review_framework.llm_providers import _scrub_error
+    raw = "Connection timed out after 15s"
+    result = _scrub_error(raw)
+    assert "Connection timed out" in result
+
+
 def test_fernet_imported_eagerly_in_lifespan():
     """Importing the fernet module with a missing env var must raise RuntimeError.
 

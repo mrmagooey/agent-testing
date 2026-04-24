@@ -27,6 +27,28 @@ from pydantic import BaseModel, field_validator, model_validator
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# API-key scrubbing for probe error messages
+# ---------------------------------------------------------------------------
+
+# Patterns that may embed raw API keys in exception messages.
+_SCRUB_PATTERNS: list[re.Pattern] = [
+    re.compile(r"sk-[A-Za-z0-9_-]+", re.IGNORECASE),
+    re.compile(r"Bearer\s+[A-Za-z0-9_.\-]+", re.IGNORECASE),
+    re.compile(r"key=[^\s,]+", re.IGNORECASE),
+    re.compile(r"api[_-]?key[=:]\s*[^\s,]+", re.IGNORECASE),
+]
+
+_SCRUB_MAX_LEN = 200
+
+
+def _scrub_error(raw: str) -> str:
+    """Remove API-key patterns from an error string and truncate."""
+    scrubbed = raw
+    for pattern in _SCRUB_PATTERNS:
+        scrubbed = pattern.sub("[REDACTED]", scrubbed)
+    return scrubbed[:_SCRUB_MAX_LEN]
+
 router = APIRouter()
 
 # ---------------------------------------------------------------------------
@@ -245,12 +267,17 @@ async def _probe_custom_provider(row: dict) -> dict:
             "last_probe_error": None,
         }
     except Exception as exc:
-        err = str(exc)[:500]
-        logger.debug("Custom provider probe failed for %s: %s", row.get("name"), err)
+        full_err = str(exc)
+        logger.warning(
+            "Custom provider probe failed for %s: %s",
+            row.get("name"),
+            full_err,
+        )
+        scrubbed_err = _scrub_error(full_err)
         return {
             "last_probe_at": now_iso,
             "last_probe_status": "failed",
-            "last_probe_error": err,
+            "last_probe_error": scrubbed_err,
         }
 
 
