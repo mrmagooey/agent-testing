@@ -367,7 +367,7 @@ describe('ProvidersPanel — Delete', () => {
     fireEvent.click(screen.getByTitle('Delete'))
 
     await waitFor(() => {
-      expect(screen.getByRole('dialog')).toBeInTheDocument()
+      expect(screen.getByRole('alertdialog')).toBeInTheDocument()
     })
     // Dialog should have a destructive Delete button (in addition to Cancel)
     const deleteButtons = screen.getAllByRole('button', { name: /^Delete$/i })
@@ -387,7 +387,7 @@ describe('ProvidersPanel — Delete', () => {
 
     fireEvent.click(screen.getByTitle('Delete'))
     await waitFor(() => {
-      expect(screen.getByRole('dialog')).toBeInTheDocument()
+      expect(screen.getByRole('alertdialog')).toBeInTheDocument()
     })
 
     fireEvent.click(screen.getByRole('button', { name: /^Delete$/i }))

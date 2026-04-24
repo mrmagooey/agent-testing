@@ -504,7 +504,7 @@ function DeleteConfirmDialog({ provider, onClose, onDeleted }: DeleteConfirmProp
 
   return (
     <Dialog open={provider !== null} onOpenChange={(v) => { if (!v) onClose() }}>
-      <DialogContent className="sm:max-w-sm rounded-sm">
+      <DialogContent className="sm:max-w-sm rounded-sm" role="alertdialog">
         <DialogHeader>
           <DialogTitle className="font-mono text-sm uppercase tracking-wider text-signal-danger">
             Delete Provider
