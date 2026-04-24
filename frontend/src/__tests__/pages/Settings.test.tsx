@@ -300,6 +300,8 @@ describe('ProvidersPanel — Add modal', () => {
     expect(createCall.display_name).toBe('Acme LLM')
     expect(createCall.adapter).toBe('anthropic_compat')
     expect(createCall.model_id).toBe('gpt-4o-mini')
+    // auth_type is none — api_key must not appear in the body
+    expect('api_key' in createCall).toBe(false)
 
     // List was refreshed after creation
     expect(mockListLlmProviders).toHaveBeenCalledTimes(2)
@@ -788,5 +790,101 @@ describe('ProvidersPanel — stale field cleanup', () => {
     const createCall = mockCreateLlmProvider.mock.calls[0][0]
     expect(createCall.auth_type).toBe('api_key')
     expect('region' in createCall).toBe(false)
+  })
+})
+
+// ─── Edit modal ───────────────────────────────────────────────────────────
+
+describe('ProvidersPanel — Edit modal', () => {
+  it('calls patchLlmProvider without api_key key when api_key is blank and only display_name changes', async () => {
+    const editedProvider = makeCustomProvider({ display_name: 'My LLM Renamed' })
+    mockPatchLlmProvider.mockResolvedValue(editedProvider)
+    mockListLlmProviders
+      .mockResolvedValueOnce(DEFAULT_PROVIDER_LIST)
+      .mockResolvedValueOnce({
+        builtin: DEFAULT_PROVIDER_LIST.builtin,
+        custom: [editedProvider],
+      })
+
+    renderSettings()
+    await waitFor(() => {
+      expect(screen.getByText('My LLM')).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByTitle('Edit'))
+    await waitFor(() => {
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+    })
+
+    // Change only display_name; leave api_key blank
+    const displayNameInput = screen.getByPlaceholderText('My Provider')
+    fireEvent.change(displayNameInput, { target: { value: 'My LLM Renamed' } })
+
+    fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }))
+
+    await waitFor(() => {
+      expect(mockPatchLlmProvider).toHaveBeenCalled()
+    })
+
+    const patchCall = mockPatchLlmProvider.mock.calls[0][1]
+    expect(patchCall.display_name).toBe('My LLM Renamed')
+    // api_key must not be present in the patch when the field was left blank
+    expect('api_key' in patchCall).toBe(false)
+  })
+})
+
+// ─── POST body assertion gap ──────────────────────────────────────────────
+
+describe('ProvidersPanel — POST body field absence', () => {
+  it('does not include api_key in POST body when auth_type is none', async () => {
+    const newProvider = makeCustomProvider({ id: 'no-key-uuid', name: 'no-key-prov', display_name: 'No Key Prov', auth_type: 'none' })
+    mockCreateLlmProvider.mockResolvedValue(newProvider)
+    mockListLlmProviders
+      .mockResolvedValueOnce(DEFAULT_PROVIDER_LIST)
+      .mockResolvedValueOnce({
+        builtin: DEFAULT_PROVIDER_LIST.builtin,
+        custom: [...DEFAULT_PROVIDER_LIST.custom, newProvider],
+      })
+
+    renderSettings()
+    await waitFor(() => {
+      expect(screen.getByText('My LLM')).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /Add Custom Provider/i }))
+    await waitFor(() => {
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+    })
+
+    fireEvent.change(screen.getByPlaceholderText('my-provider'), {
+      target: { value: 'no-key-prov' },
+    })
+    fireEvent.change(screen.getByPlaceholderText('My Provider'), {
+      target: { value: 'No Key Prov' },
+    })
+    fireEvent.change(screen.getByPlaceholderText('gpt-4o'), {
+      target: { value: 'gpt-4o-mini' },
+    })
+
+    const adapterSelect = screen.getAllByRole('combobox')[0]
+    fireEvent.click(adapterSelect)
+    await waitFor(() => screen.getByText('anthropic_compat'))
+    fireEvent.click(screen.getByText('anthropic_compat'))
+
+    const authSelect = screen.getAllByRole('combobox')[screen.getAllByRole('combobox').length - 1]
+    fireEvent.click(authSelect)
+    await waitFor(() => screen.getAllByText('none'))
+    const noneItems = screen.getAllByText('none')
+    fireEvent.click(noneItems[noneItems.length - 1])
+
+    fireEvent.click(screen.getByRole('button', { name: /Add Provider/i }))
+
+    await waitFor(() => {
+      expect(mockCreateLlmProvider).toHaveBeenCalled()
+    })
+
+    const createCall = mockCreateLlmProvider.mock.calls[0][0]
+    expect(createCall.auth_type).toBe('none')
+    expect('api_key' in createCall).toBe(false)
   })
 })
