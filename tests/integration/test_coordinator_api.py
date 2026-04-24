@@ -86,8 +86,12 @@ def _minimal_matrix() -> dict:
 @pytest.fixture
 async def coordinator_client(tmp_path: Path):
     """TestClient with the global coordinator patched to a temp instance."""
+    from sec_review_framework.coordinator import _seed_builtin_strategies
+
     db = Database(tmp_path / "test.db")
     await db.init()
+    # Seed builtin strategies so /strategies endpoint returns populated data.
+    await _seed_builtin_strategies(db)
 
     c = _make_coordinator(tmp_path, db)
 
@@ -131,18 +135,28 @@ def test_list_strategies(coordinator_client):
     assert resp.status_code == 200
     data = resp.json()
     assert isinstance(data, list)
-    names = {s["name"] for s in data}
-    # All StrategyName enum values should be present
-    for strategy in StrategyName:
-        assert strategy.value in names, f"{strategy.value} missing from /strategies"
+    # Builtins are seeded — the list should contain at least one entry.
+    assert len(data) > 0
+    # Each summary must have the required fields.
+    for item in data:
+        assert "id" in item
+        assert "name" in item
+        assert "orchestration_shape" in item
+        assert "is_builtin" in item
 
 
-def test_list_strategies_has_description(coordinator_client):
+def test_list_strategies_builtins_present(coordinator_client):
     client, *_ = coordinator_client
     data = client.get("/strategies").json()
-    for item in data:
-        assert "name" in item
-        assert "description" in item
+    ids = {s["id"] for s in data}
+    for builtin_id in (
+        "builtin.single_agent",
+        "builtin.per_file",
+        "builtin.per_vuln_class",
+        "builtin.sast_first",
+        "builtin.diff_review",
+    ):
+        assert builtin_id in ids, f"{builtin_id} missing from /strategies"
 
 
 # ---------------------------------------------------------------------------

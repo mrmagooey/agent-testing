@@ -6,6 +6,10 @@ import re
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from sec_review_framework.data.strategy_bundle import UserStrategy
 
 
 # ---------------------------------------------------------------------------
@@ -81,6 +85,21 @@ class Database:
                 await db.commit()
             except Exception:
                 pass  # Column already exists — safe to ignore
+
+            # ---------------------------------------------------------------------------
+            # User strategies table
+            # ---------------------------------------------------------------------------
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS user_strategies (
+                    id TEXT PRIMARY KEY,
+                    parent_strategy_id TEXT,
+                    is_builtin INTEGER NOT NULL DEFAULT 0,
+                    orchestration_shape TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    bundle_json TEXT NOT NULL,
+                    created_at TIMESTAMP NOT NULL
+                )
+            """)
 
             # ---------------------------------------------------------------------------
             # Findings index table
@@ -568,6 +587,89 @@ class Database:
                 result[facet_col] = {row[0]: row[1] for row in rows if row[0]}
 
         return result
+
+
+    # ---------------------------------------------------------------------------
+    # User strategies
+    # ---------------------------------------------------------------------------
+
+    async def insert_user_strategy(self, strategy: "UserStrategy") -> None:
+        """Persist a UserStrategy to the database.
+
+        Serialises the full UserStrategy via canonical_json so round-trips
+        via get_user_strategy reconstruct the complete object.
+        """
+        from sec_review_framework.data.strategy_bundle import canonical_json
+
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                INSERT INTO user_strategies
+                    (id, parent_strategy_id, is_builtin, orchestration_shape,
+                     name, bundle_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    strategy.id,
+                    strategy.parent_strategy_id,
+                    1 if strategy.is_builtin else 0,
+                    strategy.orchestration_shape.value,
+                    strategy.name,
+                    canonical_json(strategy),
+                    strategy.created_at.isoformat(),
+                ),
+            )
+            await db.commit()
+
+    async def get_user_strategy(self, strategy_id: str) -> "UserStrategy | None":
+        """Return the UserStrategy with *strategy_id*, or None if not found."""
+        from sec_review_framework.data.strategy_bundle import UserStrategy
+
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT bundle_json FROM user_strategies WHERE id = ?",
+                (strategy_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+                if row is None:
+                    return None
+                return UserStrategy.model_validate_json(row["bundle_json"])
+
+    async def list_user_strategies(self) -> "list[UserStrategy]":
+        """Return all UserStrategy objects, ordered by created_at then id."""
+        from sec_review_framework.data.strategy_bundle import UserStrategy
+
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT bundle_json FROM user_strategies ORDER BY created_at, id"
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [UserStrategy.model_validate_json(row["bundle_json"]) for row in rows]
+
+    async def delete_user_strategy(self, strategy_id: str) -> bool:
+        """Hard-delete the strategy with *strategy_id*.
+
+        Returns True if a row was deleted, False if no such strategy existed.
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                "DELETE FROM user_strategies WHERE id = ?",
+                (strategy_id,),
+            ) as cursor:
+                deleted = cursor.rowcount > 0
+            await db.commit()
+            return deleted
+
+    async def strategy_is_referenced_by_runs(self, strategy_id: str) -> bool:
+        """Return True if any run references *strategy_id*.
+
+        TODO: The runs table does not yet have a strategy_id column — this will
+        be added by a follow-up agent that wires UserStrategy into run creation.
+        Until then this always returns False so DELETE works on all user strategies.
+        """
+        return False
 
 
 def _infer_match_status(finding: dict) -> str | None:

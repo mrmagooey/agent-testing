@@ -79,6 +79,13 @@ from sec_review_framework.ground_truth.cve_importer import (
     CVESelectionCriteria,
 )
 from sec_review_framework.ground_truth.vuln_injector import VulnInjector
+from sec_review_framework.data.strategy_bundle import (
+    OrchestrationShape,
+    OverrideRule,
+    StrategyBundleDefault,
+    UserStrategy,
+    canonical_json,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -2167,6 +2174,60 @@ AVG_TOKENS_PER_KLOC = 1400  # prompt + completion, calibrated empirically
 
 
 # ---------------------------------------------------------------------------
+# Strategy API response models
+# ---------------------------------------------------------------------------
+
+
+class StrategySummary(BaseModel):
+    """Lightweight summary returned by GET /strategies (list view)."""
+
+    id: str
+    name: str
+    orchestration_shape: str
+    is_builtin: bool
+    parent_strategy_id: str | None
+
+
+class StrategyCreateRequest(BaseModel):
+    """Body for POST /strategies."""
+
+    parent_strategy_id: str | None = None
+    name: str
+    default: StrategyBundleDefault
+    overrides: list[OverrideRule] = []
+    orchestration_shape: OrchestrationShape
+
+
+class StrategyValidateRequest(BaseModel):
+    """Body for POST /strategies/{id}/validate.
+
+    Mirrors StrategyCreateRequest but all fields optional so partial objects
+    can be validated.
+    """
+
+    name: str | None = None
+    default: StrategyBundleDefault | None = None
+    overrides: list[OverrideRule] | None = None
+    orchestration_shape: OrchestrationShape | None = None
+
+
+# ---------------------------------------------------------------------------
+# Builtin seeding helper
+# ---------------------------------------------------------------------------
+
+
+async def _seed_builtin_strategies(db: "Database") -> None:
+    """Insert any builtin strategies that are not yet in the database."""
+    from sec_review_framework.strategies.strategy_registry import load_default_registry
+
+    registry = load_default_registry()
+    for strategy in registry.list_all():
+        existing = await db.get_user_strategy(strategy.id)
+        if existing is None:
+            await db.insert_user_strategy(strategy)
+
+
+# ---------------------------------------------------------------------------
 # FastAPI application
 # ---------------------------------------------------------------------------
 
@@ -2186,6 +2247,9 @@ async def lifespan(app: FastAPI):
         coordinator = build_coordinator_from_env()
         await coordinator.db.init()
     await coordinator.reconcile()
+
+    # Seed builtin strategies into the DB if they aren't already present.
+    await _seed_builtin_strategies(coordinator.db)
 
     # --- ProviderCatalog ---
     _probe_enabled_env = os.environ.get("PROVIDER_PROBE_ENABLED", "true").strip().lower()
@@ -2780,10 +2844,179 @@ def list_models(
     return coordinator.list_models(flat=use_flat)
 
 
-@app.get("/strategies")
-def list_strategies() -> list[dict]:
-    """List available scan strategies."""
-    return coordinator.list_strategies()
+@app.get("/strategies", response_model=list[StrategySummary])
+async def list_strategies() -> list[StrategySummary]:
+    """List all builtin and user strategies (summary view)."""
+    strategies = await coordinator.db.list_user_strategies()
+    return [
+        StrategySummary(
+            id=s.id,
+            name=s.name,
+            orchestration_shape=s.orchestration_shape.value,
+            is_builtin=s.is_builtin,
+            parent_strategy_id=s.parent_strategy_id,
+        )
+        for s in strategies
+    ]
+
+
+@app.get("/strategies/{strategy_id}", response_model=UserStrategy)
+async def get_strategy(strategy_id: str) -> UserStrategy:
+    """Return the full UserStrategy including overrides. 404 if not found."""
+    strategy = await coordinator.db.get_user_strategy(strategy_id)
+    if strategy is None:
+        raise HTTPException(status_code=404, detail=f"Strategy {strategy_id!r} not found.")
+    return strategy
+
+
+@app.post("/strategies", response_model=UserStrategy, status_code=201)
+async def create_strategy(body: StrategyCreateRequest) -> UserStrategy:
+    """Create a new user strategy.
+
+    The server mints an id of the form ``user.<slug>.<6-char-hash>``.
+    The hash is derived from the content (name, shape, default, overrides,
+    parent_strategy_id) — NOT from created_at — so identical submissions
+    produce the same id and 409 on the second attempt.
+    Returns 409 if a strategy with the same computed id already exists.
+    """
+    import hashlib
+    import json as _json
+    import re as _re
+
+    from fastapi.exceptions import RequestValidationError
+    from pydantic import ValidationError as _ValidationError
+    from sec_review_framework.data.strategy_bundle import _make_json_serializable
+
+    # Compute stable id: user.<slug>.<6-char-hex-of-hash>
+    slug = _re.sub(r"[^a-z0-9]+", "-", body.name.lower()).strip("-") or "strategy"
+
+    # Hash content-only fields (exclude created_at and id which vary per call).
+    content_dict = {
+        "name": body.name,
+        "parent_strategy_id": body.parent_strategy_id,
+        "orchestration_shape": body.orchestration_shape.value,
+        "default": body.default.model_dump(),
+        "overrides": [r.model_dump() for r in body.overrides],
+    }
+    content_json = _json.dumps(
+        _make_json_serializable(content_dict), sort_keys=True, separators=(",", ":")
+    )
+    content_hash = hashlib.sha256(content_json.encode()).hexdigest()[:6]
+    strategy_id = f"user.{slug}.{content_hash}"
+
+    # Validate the full UserStrategy via pydantic (runs shape-specific validators).
+    try:
+        strategy = UserStrategy(
+            id=strategy_id,
+            name=body.name,
+            parent_strategy_id=body.parent_strategy_id,
+            orchestration_shape=body.orchestration_shape,
+            default=body.default,
+            overrides=body.overrides,
+            created_at=datetime.now(UTC),
+            is_builtin=False,
+        )
+    except _ValidationError as exc:
+        raise RequestValidationError(errors=exc.errors())
+
+    existing = await coordinator.db.get_user_strategy(strategy_id)
+    if existing is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"A strategy with id {strategy_id!r} already exists.",
+        )
+
+    await coordinator.db.insert_user_strategy(strategy)
+    return strategy
+
+
+@app.post("/strategies/{strategy_id}/validate")
+async def validate_strategy(strategy_id: str, body: StrategyValidateRequest) -> dict:
+    """Dry-run validation of a strategy-like object without persisting.
+
+    Returns ``{valid: true}`` or ``{valid: false, errors: [...]}``.
+
+    Checks performed:
+    - Template placeholders in user_prompt_template resolve without KeyError.
+    - Glob patterns in overrides compile via fnmatch.translate without error.
+    - Override keys are valid for the given orchestration_shape.
+    """
+    import fnmatch as _fnmatch
+
+    errors: list[str] = []
+
+    # Determine shape from body or from the existing strategy
+    shape = body.orchestration_shape
+    if shape is None:
+        existing = await coordinator.db.get_user_strategy(strategy_id)
+        if existing is not None:
+            shape = existing.orchestration_shape
+
+    # Validate user_prompt_template placeholders
+    if body.default is not None:
+        template = body.default.user_prompt_template
+        try:
+            template.format(repo_summary="__test__", finding_output_format="__fmt__")
+        except KeyError as exc:
+            errors.append(f"user_prompt_template missing placeholder: {exc}")
+        except Exception as exc:
+            errors.append(f"user_prompt_template invalid: {exc}")
+
+    # Validate override keys if overrides and shape are provided
+    if body.overrides is not None and shape is not None:
+        if shape in (OrchestrationShape.SINGLE_AGENT, OrchestrationShape.DIFF_REVIEW):
+            if body.overrides:
+                errors.append(
+                    f"orchestration_shape={shape.value!r} must have no overrides, "
+                    f"but {len(body.overrides)} override(s) were provided."
+                )
+        elif shape == OrchestrationShape.PER_VULN_CLASS:
+            from sec_review_framework.data.strategy_bundle import _VALID_VULN_CLASS_VALUES
+            for rule in body.overrides:
+                if rule.key not in _VALID_VULN_CLASS_VALUES:
+                    errors.append(
+                        f"Override key {rule.key!r} is not a valid VulnClass name."
+                    )
+        elif shape in (OrchestrationShape.PER_FILE, OrchestrationShape.SAST_FIRST):
+            for rule in body.overrides:
+                try:
+                    _fnmatch.translate(rule.key)
+                except Exception as exc:
+                    errors.append(
+                        f"Override key {rule.key!r} is not a valid glob pattern: {exc}"
+                    )
+
+    if errors:
+        return {"valid": False, "errors": errors}
+    return {"valid": True}
+
+
+@app.delete("/strategies/{strategy_id}", status_code=204)
+async def delete_strategy(strategy_id: str) -> None:
+    """Delete a user strategy.
+
+    Returns 403 if the strategy is a builtin.
+    Returns 409 if any run references the strategy.
+    Returns 404 if not found.
+    Returns 204 on success.
+    """
+    strategy = await coordinator.db.get_user_strategy(strategy_id)
+    if strategy is None:
+        raise HTTPException(status_code=404, detail=f"Strategy {strategy_id!r} not found.")
+    if strategy.is_builtin:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Strategy {strategy_id!r} is a builtin and cannot be deleted.",
+        )
+    if await coordinator.db.strategy_is_referenced_by_runs(strategy_id):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Strategy {strategy_id!r} is referenced by one or more runs "
+                "and cannot be deleted."
+            ),
+        )
+    await coordinator.db.delete_user_strategy(strategy_id)
 
 
 @app.get("/profiles")
