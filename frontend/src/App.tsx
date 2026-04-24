@@ -14,6 +14,7 @@ import StrategiesList from './pages/StrategiesList'
 import StrategyViewer from './pages/StrategyViewer'
 import StrategyEditor from './pages/StrategyEditor'
 import ExperimentImport from './pages/ExperimentImport'
+import Settings from './pages/Settings'
 import ThemeToggle from './components/ThemeToggle'
 
 const NAV_LINKS = [
@@ -26,6 +27,7 @@ const NAV_LINKS = [
   { to: '/datasets/discover', label: 'CVE Discovery', end: false },
   { to: '/findings', label: 'Findings', end: false },
   { to: '/feedback', label: 'Feedback', end: false },
+  { to: '/settings', label: 'Settings', end: false },
 ]
 
 function NavBar() {
@@ -124,6 +126,7 @@ export default function App() {
             <Route path="/datasets" element={<Datasets />} />
             <Route path="/findings" element={<Findings />} />
             <Route path="/feedback" element={<Feedback />} />
+            <Route path="/settings" element={<Settings />} />
           </Routes>
         </main>
       </div>
