@@ -276,6 +276,35 @@ Helm knobs in `values.yaml` under `providerProbe`:
 
 ---
 
+## Moving experiments between deployments
+
+Experiments can be exported as `.secrev.zip` bundles (containing all on-disk artifacts, DB rows, and optionally embedded datasets) and imported into another deployment. The bundle preserves run IDs and tool extension metadata; datasets are optional (default: reference-only).
+
+**Export:**
+
+```bash
+curl -o my-experiment.secrev.zip https://coordinator-url/api/experiments/{experiment_id}/export
+# Or with datasets embedded:
+curl -o my-experiment.secrev.zip 'https://coordinator-url/api/experiments/{experiment_id}/export?include_datasets=true'
+```
+
+**Import:**
+
+```bash
+curl -F 'file=@my-experiment.secrev.zip' \
+     -F 'conflict_policy=reject' \
+     https://new-coordinator-url/api/experiments/import
+# Response: {"experiment_id": "...", "runs_imported": N, "findings_indexed": true, ...}
+```
+
+Conflict policies: `reject` (default, 409 on existing experiment ID), `rename` (append `_imported_<uuid>`), or `merge` (add new runs to existing experiment; requires no run-ID collisions).
+
+Import is gated by the `IMPORT_ENABLED` environment variable (default `true` in dev, `false` in production Helm values); when disabled, returns 503.
+
+CLI helpers are available: `scripts/export_experiment.py` and `scripts/import_experiment.py` for scripted workflows.
+
+---
+
 ## Makefile targets
 
 ```
