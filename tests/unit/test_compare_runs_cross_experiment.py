@@ -48,10 +48,13 @@ def _make_run_result(
     dataset_name: str = "test-dataset",
 ) -> dict:
     findings_list = findings or []
+    # strategy_id is required in the new ExperimentRun schema.
+    strategy_id = "builtin.single_agent"
     return {
         "experiment": {
             "id": run_id,
             "experiment_id": experiment_id,
+            "strategy_id": strategy_id,
             "model_id": "gpt-4o",
             "strategy": "single_agent",
             "tool_variant": "with_tools",
@@ -69,12 +72,12 @@ def _make_run_result(
             "post_dedup_count": len(findings_list),
             "dedup_log": [],
         },
-        "prompt_snapshot": {
+        # BundleSnapshot replaces PromptSnapshot in the new schema.
+        "bundle_snapshot": {
             "snapshot_id": "deadbeef00000000",
+            "strategy_id": strategy_id,
             "captured_at": "2026-04-20T00:00:00",
-            "system_prompt": "",
-            "user_message_template": "",
-            "finding_output_format": "",
+            "bundle_json": "{}",
         },
         "tool_call_count": 0,
         "total_input_tokens": 100,

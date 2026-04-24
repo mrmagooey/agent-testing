@@ -69,11 +69,15 @@ def _make_coordinator(tmp_path: Path, db: Database) -> ExperimentCoordinator:
     )
 
 
+STRATEGY_ID = "builtin.single_agent"
+
+
 def _make_run(run_id: str | None = None) -> ExperimentRun:
-    rid = run_id or f"{EXPERIMENT_ID}_{MODEL_ID}_single_agent_with_tools_default_none"
+    rid = run_id or f"{EXPERIMENT_ID}_{STRATEGY_ID}"
     return ExperimentRun(
         id=rid,
         experiment_id=EXPERIMENT_ID,
+        strategy_id=STRATEGY_ID,
         model_id=MODEL_ID,
         strategy=StrategyName.SINGLE_AGENT,
         tool_variant=ToolVariant.WITH_TOOLS,

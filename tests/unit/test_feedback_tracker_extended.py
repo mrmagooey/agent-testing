@@ -35,10 +35,14 @@ def _make_run(
     f1: float | None = 0.75,
     tool_extensions: frozenset | None = None,
 ) -> MagicMock:
+    # Derive a deterministic strategy_id from model + strategy so different
+    # combinations produce distinct experiment keys via _experiment_key().
+    strategy_id = f"test.{model_id.replace('/', '-')}.{strategy.value}"
     run = MagicMock()
     run.experiment = ExperimentRun(
-        id=f"{experiment_id}_{model_id}_{strategy.value}_with_tools_default_none",
+        id=f"{experiment_id}_{strategy_id}",
         experiment_id=experiment_id,
+        strategy_id=strategy_id,
         model_id=model_id,
         strategy=strategy,
         tool_variant=ToolVariant.WITH_TOOLS,
