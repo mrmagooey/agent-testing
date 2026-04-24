@@ -165,6 +165,49 @@ class Database:
                 END
             """)
 
+            # ---------------------------------------------------------------------------
+            # LLM providers (user-configurable)
+            # ---------------------------------------------------------------------------
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS llm_providers (
+                    id TEXT PRIMARY KEY,
+                    name TEXT UNIQUE NOT NULL,
+                    display_name TEXT NOT NULL,
+                    adapter TEXT NOT NULL,
+                    model_id TEXT NOT NULL,
+                    api_base TEXT,
+                    api_key_ciphertext BLOB,
+                    auth_type TEXT NOT NULL DEFAULT 'api_key',
+                    region TEXT,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    last_probe_at TEXT,
+                    last_probe_status TEXT,
+                    last_probe_error TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+            """)
+            await db.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_llm_providers_name ON llm_providers(name)"
+            )
+
+            # ---------------------------------------------------------------------------
+            # App settings — single-row keyed by id=1
+            # ---------------------------------------------------------------------------
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS app_settings (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    allow_unavailable_models INTEGER NOT NULL DEFAULT 0,
+                    evidence_assessor TEXT NOT NULL DEFAULT 'heuristic',
+                    evidence_judge_model TEXT
+                )
+            """)
+            # Ensure the singleton row exists.
+            await db.execute("""
+                INSERT OR IGNORE INTO app_settings (id, allow_unavailable_models, evidence_assessor, evidence_judge_model)
+                VALUES (1, 0, 'heuristic', NULL)
+            """)
+
             await db.commit()
 
     async def create_experiment(
@@ -568,6 +611,116 @@ class Database:
                 result[facet_col] = {row[0]: row[1] for row in rows if row[0]}
 
         return result
+
+    # ---------------------------------------------------------------------------
+    # LLM providers CRUD
+    # ---------------------------------------------------------------------------
+
+    async def create_llm_provider(self, row: dict) -> None:
+        """Insert a new row into llm_providers. ``row`` must have all required fields."""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                INSERT INTO llm_providers (
+                    id, name, display_name, adapter, model_id, api_base,
+                    api_key_ciphertext, auth_type, region, enabled,
+                    last_probe_at, last_probe_status, last_probe_error,
+                    created_at, updated_at
+                ) VALUES (
+                    :id, :name, :display_name, :adapter, :model_id, :api_base,
+                    :api_key_ciphertext, :auth_type, :region, :enabled,
+                    :last_probe_at, :last_probe_status, :last_probe_error,
+                    :created_at, :updated_at
+                )
+                """,
+                row,
+            )
+            await db.commit()
+
+    async def get_llm_provider(self, provider_id: str) -> dict | None:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM llm_providers WHERE id = ?", (provider_id,)
+            ) as cursor:
+                row = await cursor.fetchone()
+                return dict(row) if row else None
+
+    async def get_llm_provider_by_name(self, name: str) -> dict | None:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM llm_providers WHERE name = ?", (name,)
+            ) as cursor:
+                row = await cursor.fetchone()
+                return dict(row) if row else None
+
+    async def list_llm_providers(self) -> list[dict]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM llm_providers ORDER BY created_at"
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
+
+    async def update_llm_provider(self, provider_id: str, fields: dict) -> None:
+        """Partial update. ``fields`` must not include ``id``."""
+        if not fields:
+            return
+        set_clauses = ", ".join(f"{k} = :{k}" for k in fields)
+        fields["_id"] = provider_id
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                f"UPDATE llm_providers SET {set_clauses} WHERE id = :_id",
+                fields,
+            )
+            await db.commit()
+
+    async def delete_llm_provider(self, provider_id: str) -> bool:
+        """Hard delete. Returns True if a row was deleted."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "DELETE FROM llm_providers WHERE id = ?", (provider_id,)
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
+    # ---------------------------------------------------------------------------
+    # App settings
+    # ---------------------------------------------------------------------------
+
+    async def get_app_settings(self) -> dict:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT * FROM app_settings WHERE id = 1") as cursor:
+                row = await cursor.fetchone()
+                if row is None:
+                    return {
+                        "allow_unavailable_models": False,
+                        "evidence_assessor": "heuristic",
+                        "evidence_judge_model": None,
+                    }
+                d = dict(row)
+                d.pop("id", None)
+                d["allow_unavailable_models"] = bool(d["allow_unavailable_models"])
+                return d
+
+    async def update_app_settings(self, fields: dict) -> dict:
+        """Partial update. Returns the updated row."""
+        if fields:
+            # Coerce bool → int for SQLite
+            row = dict(fields)
+            if "allow_unavailable_models" in row:
+                row["allow_unavailable_models"] = int(bool(row["allow_unavailable_models"]))
+            set_clauses = ", ".join(f"{k} = :{k}" for k in row)
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute(
+                    f"UPDATE app_settings SET {set_clauses} WHERE id = 1",
+                    row,
+                )
+                await db.commit()
+        return await self.get_app_settings()
 
 
 def _infer_match_status(finding: dict) -> str | None:

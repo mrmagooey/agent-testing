@@ -88,6 +88,13 @@ spec:
               value: {{ .Values.workerTools.devdocs.docsetsPath | quote }}
             - name: DEVDOCS_ALLOW_DOCSETS
               value: {{ .Values.workerTools.devdocs.docsets | join "," | quote }}
+            {{- if .Values.secrets.create }}
+            - name: LLM_PROVIDER_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.name }}
+                  key: LLM_PROVIDER_ENCRYPTION_KEY
+            {{- end }}
             {{- with .Values.coordinator.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

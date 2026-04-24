@@ -79,6 +79,7 @@ from sec_review_framework.ground_truth.cve_importer import (
     CVESelectionCriteria,
 )
 from sec_review_framework.ground_truth.vuln_injector import VulnInjector
+from sec_review_framework.llm_providers import router as llm_providers_router
 
 logger = logging.getLogger(__name__)
 
@@ -2203,6 +2204,18 @@ async def lifespan(app: FastAPI):
     coordinator.catalog = catalog
     coordinator.cost_calculator._pricing_view = CatalogPricingView(catalog)
 
+    # Load enabled custom providers into the catalog alongside built-ins.
+    try:
+        from sec_review_framework.llm_providers import _inject_custom_into_catalog
+        custom_rows = await coordinator.db.list_llm_providers()
+        for _row in custom_rows:
+            if _row.get("enabled", 1):
+                _inject_custom_into_catalog(_row, catalog)
+        if custom_rows:
+            logger.info("Loaded %d custom provider(s) into catalog", len(custom_rows))
+    except Exception as _exc:
+        logger.warning("Failed to load custom providers into catalog: %s", _exc)
+
     _background_tasks.add(asyncio.create_task(
         retention_cleanup_loop(coordinator.storage_root, retention_days=30)
     ))
@@ -2251,6 +2264,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Security Review Framework", version="1.0.0", lifespan=lifespan)
+app.include_router(llm_providers_router)
 
 
 @app.middleware("http")

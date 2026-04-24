@@ -21,6 +21,7 @@ coordinator = [
     "prometheus-client>=0.22",
     "aiosqlite>=0.21",
     "python-multipart>=0.0.18",
+    "cryptography>=42.0",
 ]
 worker = [
     "semgrep>=1.100",
