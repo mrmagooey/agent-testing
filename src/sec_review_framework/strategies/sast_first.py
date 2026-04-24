@@ -6,17 +6,16 @@ from collections import defaultdict
 from typing import TYPE_CHECKING
 
 from sec_review_framework.data.findings import StrategyOutput
-from sec_review_framework.prompts.loader import load_system_prompt, load_user_prompt
 from sec_review_framework.strategies.base import ScanStrategy
 from sec_review_framework.strategies.common import (
     FINDING_OUTPUT_FORMAT,
     FindingParser,
-    build_system_prompt,
     run_subagents,
 )
 from sec_review_framework.tools.semgrep import SemgrepTool
 
 if TYPE_CHECKING:
+    from sec_review_framework.data.strategy_bundle import UserStrategy
     from sec_review_framework.models.base import ModelProvider
     from sec_review_framework.tools.registry import ToolRegistry
 
@@ -43,9 +42,6 @@ class SASTFirstStrategy(ScanStrategy):
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _base_system_prompt(self) -> str:
-        return load_system_prompt("sast_first.txt")
-
     def _format_sast_matches(self, matches: list) -> str:
         """Format a list of SASTMatch objects into a readable summary."""
         lines = []
@@ -70,7 +66,8 @@ class SASTFirstStrategy(ScanStrategy):
         target,
         model: "ModelProvider",
         tools: "ToolRegistry",
-        config: dict,
+        strategy: "UserStrategy",
+        parallel: bool = False,
     ) -> StrategyOutput:
         # ----------------------------------------------------------------
         # Phase 1: Run Semgrep unconditionally
@@ -79,12 +76,16 @@ class SASTFirstStrategy(ScanStrategy):
         sast_results = semgrep_tool.run_full_scan()
 
         if not sast_results:
+            resolved = strategy.default
+            system_prompt = resolved.system_prompt
+            if resolved.profile_modifier:
+                system_prompt = f"{system_prompt}\n\n{resolved.profile_modifier}"
             return StrategyOutput(
                 findings=[],
                 pre_dedup_count=0,
                 post_dedup_count=0,
                 dedup_log=[],
-                system_prompt=build_system_prompt(self._base_system_prompt(), config),
+                system_prompt=system_prompt,
             )
 
         # Group SAST matches by file
@@ -95,12 +96,8 @@ class SASTFirstStrategy(ScanStrategy):
         # ----------------------------------------------------------------
         # Phase 2: LLM triage — one subagent per flagged file
         # ----------------------------------------------------------------
-        system_prompt = build_system_prompt(self._base_system_prompt(), config)
-        experiment_id = config.get("experiment_id", "")
-        max_turns_per_file = config.get("max_turns_per_file", 25)
-        parallel = config.get("parallel", False)
+        experiment_id = ""  # experiment_id is not in UserStrategy; use empty string
 
-        user_template = load_user_prompt("sast_first.txt")
         tasks = []
         file_paths = []
         for file_path, matches in by_file.items():
@@ -108,21 +105,18 @@ class SASTFirstStrategy(ScanStrategy):
             sast_summary = self._format_sast_matches(matches)
             tasks.append(
                 {
-                    "system_prompt": system_prompt,
-                    "user_message": user_template.format(
+                    "key": file_path,
+                    "user_message": strategy.default.user_prompt_template.format(
                         file_path=file_path,
                         sast_summary=sast_summary,
                         file_content=file_content,
                         finding_output_format=FINDING_OUTPUT_FORMAT,
                     ),
-                    "max_turns": max_turns_per_file,
                 }
             )
             file_paths.append(file_path)
 
-        first_user_message = tasks[0]["user_message"] if tasks else None
-
-        outputs = run_subagents(tasks, model, tools, parallel=parallel)
+        outputs = run_subagents(tasks, model, tools, parallel=parallel, strategy=strategy)
 
         all_findings = []
         for file_path, raw_output in zip(file_paths, outputs):
@@ -139,6 +133,4 @@ class SASTFirstStrategy(ScanStrategy):
             pre_dedup_count=len(all_findings),
             post_dedup_count=len(all_findings),
             dedup_log=[],
-            system_prompt=system_prompt,
-            user_message=first_user_message,
         )

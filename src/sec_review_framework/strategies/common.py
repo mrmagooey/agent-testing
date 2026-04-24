@@ -2,11 +2,14 @@
 
 Provides:
 - FINDING_OUTPUT_FORMAT: format instructions injected into every strategy prompt
-- build_system_prompt(): injects review profile modifier
+- build_system_prompt(): injects review profile modifier (legacy; kept for callers
+  that still pass a ``config`` dict directly)
 - run_agentic_loop(): standard tool-use loop
-- run_subagents(): sequential or parallel multi-agent execution
+- run_subagents(): sequential or parallel multi-agent execution (bundle-keyed only)
 - FindingParser: extracts and validates Finding objects from LLM output
 - deduplicate(): merges overlapping findings, returns StrategyOutput with dedup log
+- ModelProviderCache: per-run cache of ModelProvider instances keyed by model_id
+- filter_tools(): returns a ToolRegistry clone limited to allowed tool names
 """
 
 from __future__ import annotations
@@ -27,6 +30,7 @@ from sec_review_framework.data.findings import (
 from sec_review_framework.models.base import Message
 
 if TYPE_CHECKING:
+    from sec_review_framework.data.strategy_bundle import ResolvedBundle, UserStrategy
     from sec_review_framework.models.base import ModelProvider
     from sec_review_framework.tools.registry import ToolRegistry
 
@@ -55,7 +59,7 @@ Include all genuine findings. Do not include false alarms you are uncertain abou
 
 
 # ---------------------------------------------------------------------------
-# System prompt construction
+# System prompt construction (legacy helper — kept for external callers)
 # ---------------------------------------------------------------------------
 
 def build_system_prompt(base_prompt: str, config: dict) -> str:
@@ -124,8 +128,100 @@ def run_agentic_loop(
 
 
 # ---------------------------------------------------------------------------
+# Model provider cache
+# ---------------------------------------------------------------------------
+
+
+class ModelProviderCache:
+    """Per-run cache of ModelProvider instances keyed by model_id.
+
+    Prevents redundant re-instantiation when multiple subagents within the
+    same run use different models.
+
+    Usage::
+
+        cache = ModelProviderCache(factory)
+        provider = cache.get("claude-opus-4-5")
+    """
+
+    def __init__(self, factory: "ModelProviderFactory | None" = None) -> None:
+        self._factory = factory
+        self._cache: dict[str, "ModelProvider"] = {}
+
+    def get(self, model_id: str) -> "ModelProvider":
+        """Return (and cache) a ModelProvider for *model_id*.
+
+        Raises ValueError if no factory was provided at construction time and
+        the model_id is not already cached.
+        """
+        if model_id not in self._cache:
+            if self._factory is None:
+                raise ValueError(
+                    f"ModelProviderCache has no factory; cannot create provider "
+                    f"for model_id={model_id!r}."
+                )
+            self._cache[model_id] = self._factory(model_id)
+        return self._cache[model_id]
+
+    def put(self, model_id: str, provider: "ModelProvider") -> None:
+        """Explicitly store a pre-constructed provider (useful for testing)."""
+        self._cache[model_id] = provider
+
+    def __contains__(self, model_id: str) -> bool:
+        return model_id in self._cache
+
+
+# Type alias kept for forward compatibility
+ModelProviderFactory = None  # noqa: F841 — used only in annotations above
+
+
+# ---------------------------------------------------------------------------
+# Tool filtering
+# ---------------------------------------------------------------------------
+
+
+def filter_tools(tools: "ToolRegistry", allowed: frozenset[str]) -> "ToolRegistry":
+    """Return a clone of *tools* containing only tools whose names are in *allowed*.
+
+    Args:
+        tools: The source ToolRegistry.
+        allowed: Set of tool names to retain.
+
+    Returns:
+        A new ToolRegistry with a fresh audit log and only the allowed tools.
+    """
+    clone = tools.clone()
+    clone.tools = {name: tool for name, tool in clone.tools.items() if name in allowed}
+    return clone
+
+
+# ---------------------------------------------------------------------------
 # Parallel / sequential subagent execution
 # ---------------------------------------------------------------------------
+
+def _resolve_task_fields(
+    task: dict,
+    strategy: "UserStrategy",
+) -> tuple[str, str, int]:
+    """Extract system_prompt, user_message, max_turns from a bundle-keyed task dict.
+
+    Each task dict must contain:
+        ``{"key": <str>, "user_message": <str>}``
+
+    *strategy* is used to resolve the bundle for the given key.  The task
+    dict may override ``max_turns`` directly; otherwise the bundle's default
+    is used.
+    """
+    from sec_review_framework.data.strategy_bundle import resolve_bundle
+
+    bundle = resolve_bundle(strategy, task["key"])
+    system_prompt = bundle.system_prompt
+    if bundle.profile_modifier:
+        system_prompt = f"{system_prompt}\n\n{bundle.profile_modifier}"
+    user_message = task.get("user_message", "")
+    max_turns = task.get("max_turns", bundle.max_turns)
+    return system_prompt, user_message, max_turns
+
 
 def run_subagents(
     tasks: list[dict],
@@ -133,13 +229,13 @@ def run_subagents(
     tools: "ToolRegistry",
     parallel: bool,
     max_workers: int = 4,
+    strategy: "UserStrategy | None" = None,
 ) -> list[str]:
     """Run multiple agentic loops either sequentially or in parallel.
 
-    Each task dict must contain:
-        - ``system_prompt`` (str)
-        - ``user_message`` (str)
-        - ``max_turns`` (int)
+    Each task dict must contain ``key`` (str) and ``user_message`` (str).
+    ``strategy`` must be provided so the bundle can be resolved per task.
+    ``max_turns`` in the task dict overrides the bundle's default if present.
 
     When ``parallel=True``, each subagent receives a cloned ToolRegistry so
     audit logs do not interleave.
@@ -150,31 +246,28 @@ def run_subagents(
         tools: Tool registry; cloned per thread when parallel=True.
         parallel: If True, use ThreadPoolExecutor.
         max_workers: Maximum worker threads when parallel=True.
+        strategy: UserStrategy for bundle resolution.
 
     Returns:
         List of raw LLM output strings, in the same order as ``tasks``.
     """
+    if strategy is None:
+        raise ValueError(
+            "run_subagents() requires a UserStrategy for bundle resolution. "
+            "Pass strategy=<UserStrategy>."
+        )
+
     if not parallel:
-        return [
-            run_agentic_loop(
-                model,
-                tools,
-                t["system_prompt"],
-                t["user_message"],
-                t["max_turns"],
-            )
-            for t in tasks
-        ]
+        results = []
+        for t in tasks:
+            sys_prompt, user_msg, max_turns = _resolve_task_fields(t, strategy)
+            results.append(run_agentic_loop(model, tools, sys_prompt, user_msg, max_turns))
+        return results
 
     def _run_one(task: dict) -> str:
         tools_clone = tools.clone()  # independent audit log per subagent
-        return run_agentic_loop(
-            model,
-            tools_clone,
-            task["system_prompt"],
-            task["user_message"],
-            task["max_turns"],
-        )
+        sys_prompt, user_msg, max_turns = _resolve_task_fields(task, strategy)
+        return run_agentic_loop(model, tools_clone, sys_prompt, user_msg, max_turns)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
         return list(pool.map(_run_one, tasks))

@@ -3,12 +3,15 @@
 Replaces the original placeholder. Each test wires a real strategy class to
 FakeModelProvider + a real ToolRegistry + a real TargetCodebase in a tmp dir.
 No real LLM or K8s calls are made.
+
+All strategies now accept a UserStrategy bundle instead of a raw config dict.
 """
 
 from __future__ import annotations
 
 import json
 import subprocess
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -16,6 +19,13 @@ import pytest
 from tests.conftest import FakeModelProvider
 from sec_review_framework.data.experiment import ToolVariant
 from sec_review_framework.data.findings import StrategyOutput, VulnClass
+from sec_review_framework.data.strategy_bundle import (
+    OrchestrationShape,
+    OverrideRule,
+    StrategyBundleDefault,
+    StrategyBundleOverride,
+    UserStrategy,
+)
 from sec_review_framework.models.base import ModelResponse, RetryPolicy
 from sec_review_framework.ground_truth.models import TargetCodebase
 from sec_review_framework.strategies.single_agent import SingleAgentStrategy
@@ -24,6 +34,143 @@ from sec_review_framework.strategies.per_vuln_class import PerVulnClassStrategy
 from sec_review_framework.strategies.sast_first import SASTFirstStrategy
 from sec_review_framework.strategies.diff_review import DiffReviewStrategy
 from sec_review_framework.tools.registry import ToolRegistryFactory
+
+
+# ---------------------------------------------------------------------------
+# Strategy fixture factories
+# ---------------------------------------------------------------------------
+
+_CREATED_AT = datetime(2026, 1, 1, 0, 0, 0)
+
+
+def _make_single_agent_strategy() -> UserStrategy:
+    return UserStrategy(
+        id="test.single_agent",
+        name="Test Single Agent",
+        parent_strategy_id=None,
+        orchestration_shape=OrchestrationShape.SINGLE_AGENT,
+        default=StrategyBundleDefault(
+            system_prompt="You are a security reviewer.",
+            user_prompt_template="Review this repo:\n{repo_summary}\n\n{finding_output_format}",
+            profile_modifier="",
+            model_id="fake-model",
+            tools=frozenset(),
+            verification="none",
+            max_turns=5,
+            tool_extensions=frozenset(),
+        ),
+        overrides=[],
+        created_at=_CREATED_AT,
+        is_builtin=False,
+    )
+
+
+def _make_per_file_strategy() -> UserStrategy:
+    return UserStrategy(
+        id="test.per_file",
+        name="Test Per File",
+        parent_strategy_id=None,
+        orchestration_shape=OrchestrationShape.PER_FILE,
+        default=StrategyBundleDefault(
+            system_prompt="You are a per-file security reviewer.",
+            user_prompt_template=(
+                "Review {file_path}:\n{file_content}\n\n{finding_output_format}"
+            ),
+            profile_modifier="",
+            model_id="fake-model",
+            tools=frozenset(),
+            verification="none",
+            max_turns=5,
+            tool_extensions=frozenset(),
+        ),
+        overrides=[],
+        created_at=_CREATED_AT,
+        is_builtin=False,
+    )
+
+
+def _make_per_vuln_class_strategy(vuln_classes: list[str] | None = None) -> UserStrategy:
+    """Build a per_vuln_class strategy with overrides for each vuln class."""
+    from sec_review_framework.data.findings import VulnClass as VC
+    classes = vuln_classes or [v.value for v in VC]
+    overrides = [
+        OverrideRule(
+            key=vc,
+            override=StrategyBundleOverride(
+                system_prompt=f"You are an expert in {vc} vulnerabilities.",
+            ),
+        )
+        for vc in classes
+    ]
+    return UserStrategy(
+        id="test.per_vuln_class",
+        name="Test Per Vuln Class",
+        parent_strategy_id=None,
+        orchestration_shape=OrchestrationShape.PER_VULN_CLASS,
+        default=StrategyBundleDefault(
+            system_prompt="",
+            user_prompt_template=(
+                "Review for {vuln_class}:\n{repo_summary}\n\n{finding_output_format}"
+            ),
+            profile_modifier="",
+            model_id="fake-model",
+            tools=frozenset(),
+            verification="none",
+            max_turns=5,
+            tool_extensions=frozenset(),
+        ),
+        overrides=overrides,
+        created_at=_CREATED_AT,
+        is_builtin=False,
+    )
+
+
+def _make_sast_first_strategy() -> UserStrategy:
+    return UserStrategy(
+        id="test.sast_first",
+        name="Test SAST First",
+        parent_strategy_id=None,
+        orchestration_shape=OrchestrationShape.SAST_FIRST,
+        default=StrategyBundleDefault(
+            system_prompt="You are a SAST triage reviewer.",
+            user_prompt_template=(
+                "Triage {file_path}:\n{sast_summary}\n{file_content}\n\n{finding_output_format}"
+            ),
+            profile_modifier="",
+            model_id="fake-model",
+            tools=frozenset(),
+            verification="none",
+            max_turns=5,
+            tool_extensions=frozenset(),
+        ),
+        overrides=[],
+        created_at=_CREATED_AT,
+        is_builtin=False,
+    )
+
+
+def _make_diff_review_strategy() -> UserStrategy:
+    return UserStrategy(
+        id="test.diff_review",
+        name="Test Diff Review",
+        parent_strategy_id=None,
+        orchestration_shape=OrchestrationShape.DIFF_REVIEW,
+        default=StrategyBundleDefault(
+            system_prompt="You are a diff reviewer.",
+            user_prompt_template=(
+                "Review diff:\n{diff_text}\n\nFiles:\n{file_context}\n\n{finding_output_format}"
+            ),
+            profile_modifier="",
+            model_id="fake-model",
+            tools=frozenset(),
+            verification="none",
+            max_turns=5,
+            tool_extensions=frozenset(),
+        ),
+        overrides=[],
+        created_at=_CREATED_AT,
+        is_builtin=False,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -94,10 +241,6 @@ def _make_tools(target: TargetCodebase, with_tools: bool = False) -> object:
     return ToolRegistryFactory.create(variant, target)
 
 
-def _base_config() -> dict:
-    return {"experiment_id": "test-exp", "parallel": False}
-
-
 # ---------------------------------------------------------------------------
 # Test 1: SingleAgent with FakeModelProvider produces parseable StrategyOutput
 # ---------------------------------------------------------------------------
@@ -109,8 +252,9 @@ def test_single_agent_produces_strategy_output(tmp_path):
         [_finding_response([_SQLI_FINDING])],
         retry_policy=RetryPolicy(max_retries=0),
     )
+    strategy = _make_single_agent_strategy()
 
-    output = SingleAgentStrategy().run(target, model, tools, _base_config())
+    output = SingleAgentStrategy().run(target, model, tools, strategy)
 
     assert isinstance(output, StrategyOutput)
     assert output.post_dedup_count == 1
@@ -129,8 +273,9 @@ def test_single_agent_empty_response_yields_no_findings(tmp_path):
         [_empty_response()],
         retry_policy=RetryPolicy(max_retries=0),
     )
+    strategy = _make_single_agent_strategy()
 
-    output = SingleAgentStrategy().run(target, model, tools, _base_config())
+    output = SingleAgentStrategy().run(target, model, tools, strategy)
 
     assert isinstance(output, StrategyOutput)
     assert output.findings == []
@@ -149,8 +294,9 @@ def test_per_file_invokes_model_per_file(tmp_path):
     responses = [_empty_response() for _ in range(n_files)]
     model = FakeModelProvider(responses, retry_policy=RetryPolicy(max_retries=0))
     tools = _make_tools(target)
+    strategy = _make_per_file_strategy()
 
-    output = PerFileStrategy().run(target, model, tools, _base_config())
+    output = PerFileStrategy().run(target, model, tools, strategy)
 
     assert isinstance(output, StrategyOutput)
     # All canned responses consumed means model was called once per file
@@ -168,8 +314,9 @@ def test_per_file_collects_findings_from_each_file(tmp_path):
     ]
     model = FakeModelProvider(responses, retry_policy=RetryPolicy(max_retries=0))
     tools = _make_tools(target)
+    strategy = _make_per_file_strategy()
 
-    output = PerFileStrategy().run(target, model, tools, _base_config())
+    output = PerFileStrategy().run(target, model, tools, strategy)
 
     assert isinstance(output, StrategyOutput)
     assert len(output.findings) >= 1
@@ -189,25 +336,27 @@ def test_per_vuln_class_invokes_model_per_class(tmp_path):
     responses = [_empty_response() for _ in range(n_classes)]
     model = FakeModelProvider(responses, retry_policy=RetryPolicy(max_retries=0))
     tools = _make_tools(target)
+    strategy = _make_per_vuln_class_strategy()
 
-    config = {**_base_config(), "vuln_classes": active_classes}
-    output = PerVulnClassStrategy().run(target, model, tools, config)
+    output = PerVulnClassStrategy().run(target, model, tools, strategy)
 
     assert isinstance(output, StrategyOutput)
     assert len(model._responses) == 0, "Model was not called for every vuln class"
 
 
 def test_per_vuln_class_restricted_to_subset(tmp_path):
-    """With vuln_classes=[sqli], only one model call is made."""
+    """With active_classes=[sqli], only one model call is made."""
     target = _make_target(tmp_path)
     model = FakeModelProvider(
         [_finding_response([_SQLI_FINDING])],
         retry_policy=RetryPolicy(max_retries=0),
     )
     tools = _make_tools(target)
+    strategy = _make_per_vuln_class_strategy(vuln_classes=["sqli"])
 
-    config = {**_base_config(), "vuln_classes": [VulnClass.SQLI]}
-    output = PerVulnClassStrategy().run(target, model, tools, config)
+    output = PerVulnClassStrategy().run(
+        target, model, tools, strategy, active_classes=[VulnClass.SQLI]
+    )
 
     assert isinstance(output, StrategyOutput)
     assert len(output.findings) == 1
@@ -228,10 +377,11 @@ def test_sast_first_no_semgrep_results_returns_empty(tmp_path):
     target = _make_target(tmp_path)
     model = FakeModelProvider([], retry_policy=RetryPolicy(max_retries=0))
     tools = _make_tools(target)
+    strategy = _make_sast_first_strategy()
 
     # Patch SemgrepTool so it returns no matches (no semgrep binary needed)
     with patch.object(SemgrepTool, "run_full_scan", return_value=[]):
-        output = SASTFirstStrategy().run(target, model, tools, _base_config())
+        output = SASTFirstStrategy().run(target, model, tools, strategy)
 
     assert isinstance(output, StrategyOutput)
     assert output.findings == []
@@ -261,9 +411,10 @@ def test_sast_first_with_semgrep_results_invokes_model(tmp_path):
         retry_policy=RetryPolicy(max_retries=0),
     )
     tools = _make_tools(target)
+    strategy = _make_sast_first_strategy()
 
     with patch.object(SemgrepTool, "run_full_scan", return_value=[mock_match]):
-        output = SASTFirstStrategy().run(target, model, tools, _base_config())
+        output = SASTFirstStrategy().run(target, model, tools, strategy)
 
     assert isinstance(output, StrategyOutput)
     assert len(output.findings) == 1
@@ -340,8 +491,9 @@ def test_diff_review_with_git_repo(tmp_path):
         retry_policy=RetryPolicy(max_retries=0),
     )
     tools = _make_tools(target)
+    strategy = _make_diff_review_strategy()
 
-    output = DiffReviewStrategy().run(target, model, tools, _base_config())
+    output = DiffReviewStrategy().run(target, model, tools, strategy)
 
     assert isinstance(output, StrategyOutput)
     assert len(output.findings) == 1

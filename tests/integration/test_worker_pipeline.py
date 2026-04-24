@@ -114,10 +114,11 @@ def datasets_dir(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def base_run() -> ExperimentRun:
-    """A minimal ExperimentRun for single_agent / with_tools."""
+    """A minimal ExperimentRun for builtin.single_agent."""
     return ExperimentRun(
         id="experiment-w_fake-model_single_agent_with_tools_default_none",
         experiment_id="experiment-w",
+        strategy_id="builtin.single_agent",
         model_id="fake-model",
         strategy=StrategyName.SINGLE_AGENT,
         tool_variant=ToolVariant.WITHOUT_TOOLS,  # avoids real semgrep/file tools
@@ -221,12 +222,13 @@ def test_worker_writes_conversation_jsonl(base_run, datasets_dir, tmp_path):
 def test_worker_failed_strategy_captured(datasets_dir, tmp_path):
     """When the strategy raises, the worker captures the error and writes FAILED status."""
     from unittest.mock import patch, MagicMock
-    from sec_review_framework.worker import StrategyFactory, ModelProviderFactory
+    from sec_review_framework.worker import ModelProviderFactory
     from sec_review_framework.models.base import RetryPolicy
 
     run = ExperimentRun(
         id="experiment-fail_single_agent",
         experiment_id="experiment-fail",
+        strategy_id="builtin.single_agent",
         model_id="fake-model",
         strategy=StrategyName.SINGLE_AGENT,
         tool_variant=ToolVariant.WITHOUT_TOOLS,
@@ -241,15 +243,12 @@ def test_worker_failed_strategy_captured(datasets_dir, tmp_path):
     def _fake_create_model(self, model_id, model_config):  # noqa: ANN001
         return fake
 
-    def _fake_create_strategy(self, strategy_name):  # noqa: ANN001
-        strategy = MagicMock()
-        strategy.run.side_effect = RuntimeError("Strategy deliberately failed")
-        return strategy
-
+    # Patch the SingleAgentStrategy.run to raise an error
     output_dir = tmp_path / "output" / run.id
 
     with patch.object(ModelProviderFactory, "create", _fake_create_model):
-        with patch.object(StrategyFactory, "create", _fake_create_strategy):
+        from sec_review_framework.strategies.single_agent import SingleAgentStrategy
+        with patch.object(SingleAgentStrategy, "run", side_effect=RuntimeError("Strategy deliberately failed")):
             worker = ExperimentWorker()
             worker.run(run, output_dir, datasets_dir)
 
@@ -272,3 +271,89 @@ def test_worker_creates_output_dir(base_run, datasets_dir, tmp_path):
 
     assert output_dir.exists()
     assert (output_dir / "run_result.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# Test 7: Worker with builtin.single_agent strategy_id dispatches correctly
+# ---------------------------------------------------------------------------
+
+def test_worker_dispatches_builtin_single_agent(datasets_dir, tmp_path):
+    """Worker with builtin.single_agent strategy_id constructs SingleAgentStrategy."""
+    from unittest.mock import patch, MagicMock
+    from sec_review_framework.worker import ModelProviderFactory, _SHAPE_TO_STRATEGY
+    from sec_review_framework.data.strategy_bundle import OrchestrationShape
+    from sec_review_framework.strategies.single_agent import SingleAgentStrategy
+
+    run = ExperimentRun(
+        id="test-dispatch_builtin.single_agent",
+        experiment_id="test-dispatch",
+        strategy_id="builtin.single_agent",
+        model_id="fake-model",
+        strategy=StrategyName.SINGLE_AGENT,
+        tool_variant=ToolVariant.WITHOUT_TOOLS,
+        review_profile=ReviewProfileName.DEFAULT,
+        verification_variant=VerificationVariant.NONE,
+        dataset_name="test-dataset",
+        dataset_version="1.0.0",
+    )
+
+    fake = FakeModelProvider(
+        [_canned_response(EMPTY_FINDINGS_JSON)],
+        retry_policy=RetryPolicy(max_retries=0),
+    )
+
+    dispatched = []
+
+    original_run = SingleAgentStrategy.run
+
+    def spy_run(self, *args, **kwargs):
+        dispatched.append(type(self).__name__)
+        return original_run(self, *args, **kwargs)
+
+    output_dir = tmp_path / "output" / run.id
+
+    with patch.object(ModelProviderFactory, "create", lambda self, mid, mkw: fake):
+        with patch.object(SingleAgentStrategy, "run", spy_run):
+            worker = ExperimentWorker()
+            worker.run(run, output_dir, datasets_dir)
+
+    assert dispatched == ["SingleAgentStrategy"], (
+        f"Expected SingleAgentStrategy to be dispatched, got {dispatched}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 8: Worker with unknown strategy_id raises a clear error
+# ---------------------------------------------------------------------------
+
+def test_worker_unknown_strategy_id_raises(datasets_dir, tmp_path):
+    """Worker with an unknown strategy_id raises a clear KeyError."""
+    from unittest.mock import patch
+    from sec_review_framework.worker import ModelProviderFactory
+
+    run = ExperimentRun(
+        id="test-unknown-strategy",
+        experiment_id="test-unknown",
+        strategy_id="nonexistent.strategy.id.xyz",
+        model_id="fake-model",
+        strategy=StrategyName.SINGLE_AGENT,
+        tool_variant=ToolVariant.WITHOUT_TOOLS,
+        review_profile=ReviewProfileName.DEFAULT,
+        verification_variant=VerificationVariant.NONE,
+        dataset_name="test-dataset",
+        dataset_version="1.0.0",
+    )
+
+    fake = FakeModelProvider([], retry_policy=RetryPolicy(max_retries=0))
+    output_dir = tmp_path / "output" / run.id
+
+    with patch.object(ModelProviderFactory, "create", lambda self, mid, mkw: fake):
+        worker = ExperimentWorker()
+        worker.run(run, output_dir, datasets_dir)
+
+    # The worker catches the error and writes FAILED status
+    from sec_review_framework.data.experiment import RunResult
+    result = RunResult.model_validate_json((output_dir / "run_result.json").read_text())
+    assert result.status == RunStatus.FAILED
+    assert result.error is not None
+    assert "nonexistent.strategy.id.xyz" in result.error

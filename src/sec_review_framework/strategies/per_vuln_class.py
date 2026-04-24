@@ -5,29 +5,18 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from sec_review_framework.data.findings import StrategyOutput, VulnClass
-from sec_review_framework.prompts.loader import load_system_prompt, load_user_prompt
 from sec_review_framework.strategies.base import ScanStrategy
 from sec_review_framework.strategies.common import (
     FINDING_OUTPUT_FORMAT,
     FindingParser,
-    build_system_prompt,
     deduplicate,
     run_subagents,
 )
 
 if TYPE_CHECKING:
+    from sec_review_framework.data.strategy_bundle import UserStrategy
     from sec_review_framework.models.base import ModelProvider
     from sec_review_framework.tools.registry import ToolRegistry
-
-
-# ---------------------------------------------------------------------------
-# Specialist system prompts — one per VulnClass, loaded from
-# prompts/system/per_vuln_class/{value}.txt
-# ---------------------------------------------------------------------------
-
-VULN_CLASS_SYSTEM_PROMPTS: dict[VulnClass, str] = {
-    vc: load_system_prompt("per_vuln_class", f"{vc.value}.txt") for vc in VulnClass
-}
 
 
 class PerVulnClassStrategy(ScanStrategy):
@@ -35,7 +24,11 @@ class PerVulnClassStrategy(ScanStrategy):
 
     Each subagent focuses exclusively on its assigned vulnerability class and
     scans the entire repository.  All findings are merged and deduplicated.
-    Supports parallel execution via ``config["parallel"]``.
+    Supports parallel execution.
+
+    The per-class system prompt comes from the strategy's overrides keyed by
+    VulnClass name (e.g. ``"sqli"``).  The default bundle's system_prompt is
+    used as a fallback when no override exists for a class.
     """
 
     def name(self) -> str:
@@ -62,35 +55,30 @@ class PerVulnClassStrategy(ScanStrategy):
         target,
         model: "ModelProvider",
         tools: "ToolRegistry",
-        config: dict,
+        strategy: "UserStrategy",
+        active_classes: list[VulnClass] | None = None,
+        parallel: bool = False,
     ) -> StrategyOutput:
-        active_classes: list[VulnClass] = config.get("vuln_classes", list(VulnClass))
-        repo_summary = self._build_repo_summary(target)
-        experiment_id = config.get("experiment_id", "")
-        max_turns_per_class = config.get("max_turns_per_class", 40)
-        parallel = config.get("parallel", False)
+        if active_classes is None:
+            active_classes = list(VulnClass)
 
-        user_template = load_user_prompt("per_vuln_class.txt")
+        repo_summary = self._build_repo_summary(target)
+        experiment_id = ""  # experiment_id is not in UserStrategy; use empty string
+
         tasks = []
         for vuln_class in active_classes:
-            base_prompt = VULN_CLASS_SYSTEM_PROMPTS[vuln_class]
-            system_prompt = build_system_prompt(base_prompt, config)
             tasks.append(
                 {
-                    "system_prompt": system_prompt,
-                    "user_message": user_template.format(
+                    "key": vuln_class.value,
+                    "user_message": strategy.default.user_prompt_template.format(
                         vuln_class=vuln_class,
                         repo_summary=repo_summary,
                         finding_output_format=FINDING_OUTPUT_FORMAT,
                     ),
-                    "max_turns": max_turns_per_class,
                 }
             )
 
-        first_system_prompt = tasks[0]["system_prompt"] if tasks else None
-        first_user_message = tasks[0]["user_message"] if tasks else None
-
-        outputs = run_subagents(tasks, model, tools, parallel=parallel)
+        outputs = run_subagents(tasks, model, tools, parallel=parallel, strategy=strategy)
 
         all_findings = []
         for vuln_class, raw_output in zip(active_classes, outputs):
@@ -102,6 +90,4 @@ class PerVulnClassStrategy(ScanStrategy):
             all_findings.extend(findings)
 
         result = deduplicate(all_findings)
-        result.system_prompt = first_system_prompt
-        result.user_message = first_user_message
         return result
