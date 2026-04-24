@@ -118,6 +118,7 @@ def base_run() -> ExperimentRun:
     return ExperimentRun(
         id="experiment-w_fake-model_single_agent_with_tools_default_none",
         experiment_id="experiment-w",
+        strategy_id="builtin.single_agent",
         model_id="fake-model",
         strategy=StrategyName.SINGLE_AGENT,
         tool_variant=ToolVariant.WITHOUT_TOOLS,  # avoids real semgrep/file tools
@@ -227,6 +228,7 @@ def test_worker_failed_strategy_captured(datasets_dir, tmp_path):
     run = ExperimentRun(
         id="experiment-fail_single_agent",
         experiment_id="experiment-fail",
+        strategy_id="builtin.single_agent",
         model_id="fake-model",
         strategy=StrategyName.SINGLE_AGENT,
         tool_variant=ToolVariant.WITHOUT_TOOLS,

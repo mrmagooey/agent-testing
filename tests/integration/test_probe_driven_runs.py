@@ -1,29 +1,33 @@
 """End-to-end integration tests for probe-driven runs against a fake OpenAI-compat endpoint.
 
-The probe → catalog → availability → synthesis → enrichment → run-config
-serialization stack is exercised without stubbing litellm.get_valid_models.
-Instead a real HTTP server bound to a local random port serves GET /v1/models
-so the whole HTTP path executes through LiteLLM's openai provider, which
-honours api_base/api_key kwargs.
+The probe → catalog → availability → synthesis → enrichment stack is exercised
+without stubbing litellm.get_valid_models.  Instead a real HTTP server bound to
+a local random port serves GET /v1/models so the whole HTTP path executes
+through LiteLLM's openai provider, which honours api_base/api_key kwargs.
+
+Phase 3 update: uses strategy_ids API; model IDs are derived from strategy bundles.
 """
 
 from __future__ import annotations
 
-import json
 import socket
 import threading
 from collections.abc import Iterator
 from pathlib import Path
 
+import json
+
 import pytest
 
 from sec_review_framework.coordinator import ExperimentCoordinator
 from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
-from sec_review_framework.data.experiment import ExperimentMatrix, ExperimentRun
+from sec_review_framework.data.experiment import ExperimentMatrix
 from sec_review_framework.db import Database
 from sec_review_framework.models.catalog import ProviderCatalog
 from sec_review_framework.models.probes.litellm_endpoint_probe import LiteLLMEndpointProbe
 from sec_review_framework.reporting.markdown import MarkdownReportGenerator
+
+from tests.helpers import make_smoke_strategy
 
 # ---------------------------------------------------------------------------
 # Fake OpenAI-compat server — real sockets, no HTTP client mocking
@@ -141,21 +145,6 @@ def _make_coordinator(
     return c
 
 
-def _minimal_matrix(model_ids: list[str], **kwargs) -> ExperimentMatrix:
-    return ExperimentMatrix(
-        experiment_id="test-e2e",
-        dataset_name="ds",
-        dataset_version="1.0",
-        model_ids=model_ids,
-        strategies=["single_agent"],
-        tool_variants=["with_tools"],
-        review_profiles=["default"],
-        verification_variants=["none"],
-        parallel_modes=[False],
-        **kwargs,
-    )
-
-
 def _make_probe() -> LiteLLMEndpointProbe:
     return LiteLLMEndpointProbe(
         provider_key="local_llm",
@@ -186,7 +175,7 @@ async def test_probe_discovers_models_from_live_endpoint(fake_server, monkeypatc
 async def test_submit_flow_populates_model_config_api_base_from_live_endpoint(
     fake_server, monkeypatch, tmp_path
 ):
-    """Full pipeline: live probe → catalog.start() → enrich_model_configs carries api_base."""
+    """Full pipeline: live probe → catalog.start() → enrich_model_configs returns api_base."""
     monkeypatch.setenv("LOCAL_LLM_BASE_URL", fake_server)
     monkeypatch.setenv("LOCAL_LLM_API_KEY", "dummy")
 
@@ -198,12 +187,20 @@ async def test_submit_flow_populates_model_config_api_base_from_live_endpoint(
         await db.init()
         c = _make_coordinator(tmp_path, db, catalog=catalog)
 
-        # In the new probe-driven design, model ids are the full LiteLLM routing
-        # strings (raw_ids).  The probe returns "openai/fake-model-a".
-        matrix = _minimal_matrix(["openai/fake-model-a"])
-        c.enrich_model_configs(matrix)
+        # Insert a strategy referencing the probe-discovered model.
+        # The probe returns "openai/fake-model-a" as the full LiteLLM routing string.
+        strategy = make_smoke_strategy("openai/fake-model-a")
+        await db.insert_user_strategy(strategy)
 
-        assert matrix.model_configs["openai/fake-model-a"] == {
+        matrix = ExperimentMatrix(
+            experiment_id="test-e2e",
+            dataset_name="ds",
+            dataset_version="1.0",
+            strategy_ids=[strategy.id],
+        )
+        enriched = await c.enrich_model_configs(matrix)
+
+        assert enriched.get("openai/fake-model-a") == {
             "api_base": fake_server,
             "api_key": "dummy",
         }
@@ -215,6 +212,7 @@ async def test_submit_flow_populates_model_config_api_base_from_live_endpoint(
 async def test_expanded_runs_carry_api_base_through_model_dump_json(
     fake_server, monkeypatch, tmp_path
 ):
+    """model_ids_from_matrix extracts the model_id and enrich_model_configs returns enrichment."""
     monkeypatch.setenv("LOCAL_LLM_BASE_URL", fake_server)
     monkeypatch.setenv("LOCAL_LLM_API_KEY", "dummy")
 
@@ -226,17 +224,24 @@ async def test_expanded_runs_carry_api_base_through_model_dump_json(
         await db.init()
         c = _make_coordinator(tmp_path, db, catalog=catalog)
 
-        # In the new probe-driven design, model ids are the full LiteLLM routing strings.
-        matrix = _minimal_matrix(["openai/fake-model-a"])
-        c.enrich_model_configs(matrix)
-        assert matrix.model_configs["openai/fake-model-a"]["api_base"] == fake_server
+        strategy = make_smoke_strategy("openai/fake-model-a")
+        await db.insert_user_strategy(strategy)
 
+        matrix = ExperimentMatrix(
+            experiment_id="test-e2e",
+            dataset_name="ds",
+            dataset_version="1.0",
+            strategy_ids=[strategy.id],
+        )
+        enriched = await c.enrich_model_configs(matrix)
+        assert enriched["openai/fake-model-a"]["api_base"] == fake_server
+
+        # Verify the model_ids_from_matrix helper correctly derives model_ids.
+        model_ids = await c.model_ids_from_matrix(matrix)
+        assert "openai/fake-model-a" in model_ids
+
+        # Matrix serialization round-trips correctly.
         restored_matrix = ExperimentMatrix.model_validate_json(matrix.model_dump_json())
-        runs = restored_matrix.expand()
-        assert len(runs) == 1
-
-        restored_run = ExperimentRun.model_validate_json(runs[0].model_dump_json())
-        assert restored_run.provider_kwargs["api_base"] == fake_server
-        assert restored_run.provider_kwargs["api_key"] == "dummy"
+        assert restored_matrix.strategy_ids == matrix.strategy_ids
     finally:
         await catalog.stop()

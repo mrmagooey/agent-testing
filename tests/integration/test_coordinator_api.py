@@ -46,6 +46,8 @@ def _make_coordinator(tmp_path: Path, db: Database) -> ExperimentCoordinator:
         pricing={
             "gpt-4o": ModelPricing(input_per_million=5.0, output_per_million=15.0),
             "claude-opus-4": ModelPricing(input_per_million=15.0, output_per_million=75.0),
+            # Builtin strategies use this model by default
+            "claude-opus-4-5": ModelPricing(input_per_million=15.0, output_per_million=75.0),
         }
     )
     config_dir = tmp_path / "config"
@@ -65,17 +67,16 @@ def _make_coordinator(tmp_path: Path, db: Database) -> ExperimentCoordinator:
 
 
 def _minimal_matrix() -> dict:
-    """Minimal ExperimentMatrix payload for API calls."""
+    """Minimal ExperimentMatrix payload for API calls.
+
+    Uses the builtin.single_agent strategy which is seeded in the coordinator_client
+    fixture via _seed_builtin_strategies().
+    """
     return {
         "experiment_id": "test-experiment",
         "dataset_name": "test-dataset",
         "dataset_version": "1.0.0",
-        "model_ids": ["gpt-4o"],
-        "strategies": ["single_agent"],
-        "tool_variants": ["with_tools"],
-        "review_profiles": ["default"],
-        "verification_variants": ["none"],
-        "parallel_modes": [False],
+        "strategy_ids": ["builtin.single_agent"],
     }
 
 
@@ -215,7 +216,7 @@ def test_estimate_experiment_returns_cost(coordinator_client):
     assert "estimated_cost_usd" in data
     assert "by_model" in data
     assert "warning" in data
-    assert data["total_runs"] == 1  # 1 model * 1 strategy * 1 tool * 1 profile * 1 verif
+    assert data["total_runs"] == 1  # 1 strategy → 1 run
 
 
 def test_estimate_experiment_cost_is_positive_for_known_model(coordinator_client):
@@ -226,23 +227,24 @@ def test_estimate_experiment_cost_is_positive_for_known_model(coordinator_client
     }
     data = client.post("/experiments/estimate", json=payload).json()
     assert data["estimated_cost_usd"] >= 0.0
-    assert "gpt-4o" in data["by_model"]
+    # Builtin strategies use claude-opus-4-5 as default model
+    assert "claude-opus-4-5" in data["by_model"]
 
 
 def test_estimate_experiment_larger_matrix(coordinator_client):
     client, *_ = coordinator_client
     payload = {
         "matrix": {
-            **_minimal_matrix(),
             "experiment_id": "big-experiment",
-            "model_ids": ["gpt-4o", "claude-opus-4"],
-            "strategies": ["single_agent", "per_file"],
+            "dataset_name": "test-dataset",
+            "dataset_version": "1.0.0",
+            "strategy_ids": ["builtin.single_agent", "builtin.per_file"],
         },
         "target_kloc": 2.0,
     }
     data = client.post("/experiments/estimate", json=payload).json()
-    # 2 models * 2 strategies = 4 runs (1 tool * 1 profile * 1 verif)
-    assert data["total_runs"] == 4
+    # 2 strategies = 2 runs
+    assert data["total_runs"] == 2
 
 
 # ---------------------------------------------------------------------------
@@ -378,20 +380,19 @@ def test_get_results_markdown_404_when_not_finalized(coordinator_client):
 
 @pytest.mark.asyncio
 async def test_submit_experiment_creates_db_record(tmp_path: Path):
+    from sec_review_framework.coordinator import _seed_builtin_strategies
+
     db = Database(tmp_path / "test.db")
     await db.init()
+    # Seed builtins so expand() can resolve "builtin.single_agent".
+    await _seed_builtin_strategies(db)
     c = _make_coordinator(tmp_path, db)
 
     matrix = ExperimentMatrix(
         experiment_id="submit-test",
         dataset_name="ds",
         dataset_version="1.0",
-        model_ids=["gpt-4o"],
-        strategies=[StrategyName.SINGLE_AGENT],
-        tool_variants=[ToolVariant.WITH_TOOLS],
-        review_profiles=[ReviewProfileName.DEFAULT],
-        verification_variants=[VerificationVariant.NONE],
-        parallel_modes=[False],
+        strategy_ids=["builtin.single_agent"],
     )
 
     experiment_id = await c.submit_experiment(matrix)

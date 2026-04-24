@@ -1941,20 +1941,57 @@ class ExperimentCoordinator:
 
         return problems
 
-    def enrich_model_configs(self, matrix: "ExperimentMatrix") -> None:
-        """Inject api_base/api_key into matrix.model_configs for probe-discovered models.
+    async def model_ids_from_matrix(self, matrix: "ExperimentMatrix") -> set[str]:
+        """Derive the set of model IDs referenced by a matrix's strategy_ids.
 
-        Called after availability validation so synthesized local-LLM models
-        carry the endpoint url and key into the worker run config.
+        For each strategy in ``matrix.strategy_ids``, loads the strategy from
+        the DB and collects ``default.model_id`` plus any override ``model_id``
+        values.  Falls back to ``load_default_registry()`` for builtin strategies
+        that may not yet be in the DB.
+
+        Returns a set of model ID strings.
+        """
+        from sec_review_framework.strategies.strategy_registry import load_default_registry
+
+        model_ids: set[str] = set()
+        registry = load_default_registry()
+
+        for strategy_id in matrix.strategy_ids:
+            strategy = await self.db.get_user_strategy(strategy_id)
+            if strategy is None:
+                # Fall back to the in-memory builtin registry.
+                try:
+                    strategy = registry.get(strategy_id)
+                except KeyError:
+                    continue
+            model_ids.add(strategy.default.model_id)
+            for rule in strategy.overrides:
+                if rule.override.model_id is not None:
+                    model_ids.add(rule.override.model_id)
+
+        if matrix.verifier_model_id is not None:
+            model_ids.add(matrix.verifier_model_id)
+
+        return model_ids
+
+    async def enrich_model_configs(self, matrix: "ExperimentMatrix") -> dict[str, dict]:
+        """Return api_base/api_key enrichment for probe-discovered models in *matrix*.
+
+        Derives the set of model IDs from the matrix's strategy_ids (loading
+        each strategy from the DB or the builtin registry), then returns a
+        ``{model_id: {"api_base": ..., "api_key": ...}}`` dict for any model
+        that has a configured ``api_base`` in the effective registry.
+
+        The returned dict can be used to enrich worker run configs.  The matrix
+        itself is not mutated because ``ExperimentMatrix`` no longer carries a
+        ``model_configs`` field.
         """
         import os as _os
 
         effective = self.effective_registry()
+        ids_to_enrich = await self.model_ids_from_matrix(matrix)
 
-        ids_to_enrich: set[str] = set(matrix.model_ids)
-        if matrix.verifier_model_id is not None:
-            ids_to_enrich.add(matrix.verifier_model_id)
-
+        enriched: dict[str, dict] = {}
         for cfg in effective:
             if cfg.id not in ids_to_enrich:
                 continue
@@ -1962,9 +1999,9 @@ class ExperimentCoordinator:
             if api_base is None:
                 continue
             api_key = _os.environ.get(cfg.api_key_env, "") if cfg.api_key_env else ""
-            matrix.model_configs.setdefault(cfg.id, {}).update(
-                {"api_base": api_base, "api_key": api_key}
-            )
+            enriched[cfg.id] = {"api_base": api_base, "api_key": api_key}
+
+        return enriched
 
     def list_strategies(self) -> list[dict]:
         return [
@@ -2463,25 +2500,25 @@ async def run_smoke_test() -> dict:
                 detail=f"A smoke test is already running: {b['experiment_id']}",
             )
 
+    # Resolve the builtin single_agent strategy from the DB (seeded at startup).
+    smoke_strategy_id = "builtin.single_agent"
+
     matrix = ExperimentMatrix(
         experiment_id=experiment_id,
         dataset_name=dataset_name,
         dataset_version="latest",
-        model_ids=[model_id],
-        strategies=[StrategyName.SINGLE_AGENT],
-        tool_variants=[ToolVariant.WITH_TOOLS],
-        review_profiles=[ReviewProfileName.DEFAULT],
-        verification_variants=[VerificationVariant.NONE],
+        strategy_ids=[smoke_strategy_id],
         num_repetitions=1,
         max_experiment_cost_usd=5.0,
-        strategy_configs={"single_agent": {"max_turns": 10}},
     )
 
     await coordinator.submit_experiment(matrix)
+    # total_runs = one run per strategy × num_repetitions (no cross-product axes).
+    total_runs = len(matrix.strategy_ids) * matrix.num_repetitions
     return {
         "experiment_id": experiment_id,
         "message": "Smoke test experiment submitted. Monitor progress on the experiment detail page.",
-        "total_runs": len(matrix.expand()),
+        "total_runs": total_runs,
     }
 
 
@@ -2495,8 +2532,10 @@ async def submit_experiment(matrix: ExperimentMatrix) -> dict:
     unless the request body contains ``allow_unavailable_models: true``.
     """
     if not matrix.allow_unavailable_models:
+        # Derive the set of model IDs from the strategies so we can validate them.
+        model_ids = sorted(await coordinator.model_ids_from_matrix(matrix))
         problems = coordinator.validate_model_availability(
-            matrix.model_ids,
+            model_ids,
             verifier_model_id=matrix.verifier_model_id,
         )
         if problems:
@@ -2507,9 +2546,11 @@ async def submit_experiment(matrix: ExperimentMatrix) -> dict:
                     "models": problems,
                 },
             )
-    coordinator.enrich_model_configs(matrix)
+    await coordinator.enrich_model_configs(matrix)
     experiment_id = await coordinator.submit_experiment(matrix)
-    return {"experiment_id": experiment_id, "total_runs": len(matrix.expand())}
+    # total_runs = one run per strategy × num_repetitions (no cross-product axes).
+    total_runs = len(matrix.strategy_ids) * matrix.num_repetitions
+    return {"experiment_id": experiment_id, "total_runs": total_runs}
 
 
 @app.get("/experiments")
