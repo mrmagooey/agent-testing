@@ -2295,18 +2295,33 @@ class ExperimentCoordinator:
         tmp_dir = self.storage_root / "tmp"
         tmp_dir.mkdir(parents=True, exist_ok=True)
 
+        from sec_review_framework.bundle import _BUNDLE_UPLOAD_MAX_BYTES
+
         # Stream upload to a temp file on storage_root so large bundles
         # don't live in memory.
         with _tempfile.NamedTemporaryFile(
             dir=tmp_dir, suffix=".secrev.zip.tmp", delete=False
         ) as tmp_f:
             tmp_path = Path(tmp_f.name)
+            total_bytes = 0
             try:
                 while True:
                     chunk = await upload.read(64 * 1024)
                     if not chunk:
                         break
+                    total_bytes += len(chunk)
+                    if total_bytes > _BUNDLE_UPLOAD_MAX_BYTES:
+                        tmp_path.unlink(missing_ok=True)
+                        raise HTTPException(
+                            status_code=413,
+                            detail=(
+                                f"Bundle upload exceeds size limit "
+                                f"({_BUNDLE_UPLOAD_MAX_BYTES // (1024 * 1024)} MiB)."
+                            ),
+                        )
                     tmp_f.write(chunk)
+            except HTTPException:
+                raise
             except Exception:
                 tmp_path.unlink(missing_ok=True)
                 raise
@@ -2664,7 +2679,7 @@ async def retention_cleanup_loop(
             # Skip experiment directories that contain a .secrev.zip bundle —
             # the bundle is a deliberate export artifact and must survive retention.
             bundle_present = any(
-                f.suffix == ".secrev.zip"
+                f.name.endswith(".secrev.zip")
                 for f in experiment_dir.iterdir()
                 if f.is_file()
             )

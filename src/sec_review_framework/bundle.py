@@ -37,6 +37,18 @@ _BUFSIZE = 64 * 1024
 # Threshold above which .jsonl files are stored without compression (bytes)
 _JSONL_STORE_THRESHOLD = 1024 * 1024  # 1 MiB
 
+# Maximum aggregate uncompressed bytes allowed during bundle extraction.
+# Configurable via BUNDLE_EXTRACT_MAX_BYTES env var; default 2 GiB.
+_BUNDLE_EXTRACT_MAX_BYTES: int = int(
+    os.environ.get("BUNDLE_EXTRACT_MAX_BYTES", str(2 * 1024 * 1024 * 1024))
+)
+
+# Maximum allowed upload size for imported bundles.
+# Configurable via BUNDLE_UPLOAD_MAX_BYTES env var; default 2 GiB.
+_BUNDLE_UPLOAD_MAX_BYTES: int = int(
+    os.environ.get("BUNDLE_UPLOAD_MAX_BYTES", str(2 * 1024 * 1024 * 1024))
+)
+
 SCHEMA_VERSION = 1
 BUNDLE_KIND = "experiment"
 
@@ -142,7 +154,7 @@ def _write_bundle_from_rows(
             run_dir = outputs_dir / run_id
             if run_dir.exists():
                 for fpath in sorted(run_dir.rglob("*")):
-                    if not fpath.is_file() or fpath.suffix == ".secrev.zip":
+                    if not fpath.is_file() or fpath.name.endswith(".secrev.zip"):
                         continue
                     rel = fpath.relative_to(outputs_dir)
                     arcname = f"outputs/runs/{rel.as_posix()}"
@@ -151,15 +163,21 @@ def _write_bundle_from_rows(
                     run_artifact_count += 1
         artifact_counts["run_artifacts"] = run_artifact_count
 
-        # Per-run config files
+        # Per-run config files — upload_token stripped before bundling (N4)
         config_count = 0
         for run_id in run_ids:
             cfg = config_runs_dir / f"{run_id}.json"
             if cfg.exists():
-                _stream_file_into_zip(
-                    zf, f"config/runs/{run_id}.json", cfg, zipfile.ZIP_DEFLATED
-                )
-                uncompressed_bytes += cfg.stat().st_size
+                try:
+                    cfg_data = json.loads(cfg.read_bytes())
+                    cfg_data.pop("upload_token", None)
+                    cfg_bytes = json.dumps(cfg_data, indent=2).encode()
+                except Exception:
+                    cfg_bytes = cfg.read_bytes()
+                info = zipfile.ZipInfo(f"config/runs/{run_id}.json")
+                info.compress_type = zipfile.ZIP_DEFLATED
+                zf.writestr(info, cfg_bytes)
+                uncompressed_bytes += len(cfg_bytes)
                 config_count += 1
         artifact_counts["run_configs"] = config_count
 
@@ -221,14 +239,34 @@ def _extract_bundle_files(
     zip_path: Path,
     storage_root: Path,
     target_experiment_id: str,
+    *,
+    rename_experiment_id: str | None = None,
 ) -> list[str]:
-    """Extract bundle files into storage_root.  Returns list of dataset names found."""
+    """Extract bundle files into storage_root.  Returns list of dataset names found.
+
+    Parameters
+    ----------
+    rename_experiment_id:
+        When set (rename policy), rewrite any embedded experiment_id in each
+        extracted ``run_result.json`` from the original to this new id.
+    """
     outputs_dir = storage_root / "outputs" / target_experiment_id
     config_runs_dir = storage_root / "config" / "runs"
     datasets_dir = storage_root / "datasets"
     manifest_dataset_names: list[str] = []
 
     with zipfile.ZipFile(zip_path, "r") as zf:
+        # --- Decompression bomb guard: check aggregate uncompressed size ---
+        total_uncompressed = sum(
+            info.file_size for info in zf.infolist()
+        )
+        if total_uncompressed > _BUNDLE_EXTRACT_MAX_BYTES:
+            raise ValueError(
+                f"Bundle uncompressed size ({total_uncompressed:,} bytes) exceeds "
+                f"the {_BUNDLE_EXTRACT_MAX_BYTES // (1024 * 1024 * 1024)} GiB limit. "
+                "Refusing to extract."
+            )
+
         # Collect manifest dataset names
         try:
             with zf.open("manifest.json") as f:
@@ -255,14 +293,37 @@ def _extract_bundle_files(
                 else:
                     dest_path = outputs_dir / Path("/".join(rel_parts))
                 dest_path.parent.mkdir(parents=True, exist_ok=True)
-                with zf.open(member) as src, open(dest_path, "wb") as dst:
-                    shutil.copyfileobj(src, dst, _BUFSIZE)
+                # N1: rewrite embedded experiment_id in run_result.json when
+                # rename policy is active.
+                if rename_experiment_id is not None and dest_path.name == "run_result.json":
+                    raw = zf.read(member)
+                    try:
+                        result_data = json.loads(raw)
+                        _rewrite_experiment_id_in_result(
+                            result_data, rename_experiment_id
+                        )
+                        dest_path.write_bytes(
+                            json.dumps(result_data, indent=2).encode()
+                        )
+                    except Exception:
+                        # Fall back to verbatim copy on any parse error
+                        dest_path.write_bytes(raw)
+                else:
+                    with zf.open(member) as src, open(dest_path, "wb") as dst:
+                        shutil.copyfileobj(src, dst, _BUFSIZE)
 
             elif parts[0] == "config" and len(parts) >= 3 and parts[1] == "runs":
                 dest_path = config_runs_dir / parts[2]
                 dest_path.parent.mkdir(parents=True, exist_ok=True)
-                with zf.open(member) as src, open(dest_path, "wb") as dst:
-                    shutil.copyfileobj(src, dst, _BUFSIZE)
+                # N4: strip upload_token from config files before writing
+                raw = zf.read(member)
+                try:
+                    cfg_data = json.loads(raw)
+                    cfg_data.pop("upload_token", None)
+                    dest_path.write_bytes(json.dumps(cfg_data, indent=2).encode())
+                except Exception:
+                    # Fall back to verbatim copy on any parse error
+                    dest_path.write_bytes(raw)
 
             elif parts[0] == "datasets" and len(parts) >= 3:
                 ds_name = parts[1]
@@ -272,6 +333,32 @@ def _extract_bundle_files(
                     shutil.copyfileobj(src, dst, _BUFSIZE)
 
     return manifest_dataset_names
+
+
+def _rewrite_experiment_id_in_result(result_data: dict, new_experiment_id: str) -> None:
+    """In-place rewrite of experiment_id fields inside a run_result.json dict.
+
+    Rewrites:
+      - result_data["experiment"]["experiment_id"]
+      - every finding's ["experiment_id"] in result_data["findings"]
+      - every finding's ["experiment_id"] in result_data["strategy_output"]["findings"]
+    """
+    exp = result_data.get("experiment")
+    if isinstance(exp, dict):
+        exp["experiment_id"] = new_experiment_id
+
+    for key in ("findings", "findings_pre_verification"):
+        findings = result_data.get(key)
+        if isinstance(findings, list):
+            for f in findings:
+                if isinstance(f, dict):
+                    f["experiment_id"] = new_experiment_id
+
+    strategy_output = result_data.get("strategy_output")
+    if isinstance(strategy_output, dict):
+        for f in strategy_output.get("findings", []):
+            if isinstance(f, dict):
+                f["experiment_id"] = new_experiment_id
 
 
 # ---------------------------------------------------------------------------
@@ -408,8 +495,21 @@ async def async_apply_bundle(
                 f"{sorted(collisions)}"
             )
 
-    # Extract files (sync, but no DB calls)
-    bundle_dataset_names = _extract_bundle_files(zip_path, storage_root, target_experiment_id)
+    # Extract files (sync, but no DB calls).
+    # N1: when rename policy produced a new id, pass it so run_result.json is patched.
+    rename_id_for_files = target_experiment_id if renamed_from is not None else None
+    experiment_outputs_dir = storage_root / "outputs" / target_experiment_id
+    try:
+        bundle_dataset_names = _extract_bundle_files(
+            zip_path,
+            storage_root,
+            target_experiment_id,
+            rename_experiment_id=rename_id_for_files,
+        )
+    except Exception:
+        # N3: clean up partially-written experiment output dir on extraction failure
+        shutil.rmtree(experiment_outputs_dir, ignore_errors=True)
+        raise
 
     # Check for missing datasets
     datasets_dir = storage_root / "datasets"
@@ -422,11 +522,22 @@ async def async_apply_bundle(
                 "(not embedded in bundle or embedding failed)."
             )
 
-    # DB insert (async)
-    if conflict_policy == "merge":
-        await db.import_experiment_rows(None, run_rows)
-    else:
-        await db.import_experiment_rows(exp_row, run_rows)
+    # DB insert (async).
+    # N3: clean up on DB failure to avoid orphaned artifact files.
+    import sqlite3 as _sqlite3
+    try:
+        if conflict_policy == "merge":
+            await db.import_experiment_rows(None, run_rows)
+        else:
+            await db.import_experiment_rows(exp_row, run_rows)
+    except _sqlite3.IntegrityError as exc:
+        shutil.rmtree(experiment_outputs_dir, ignore_errors=True)
+        raise BundleConflictError(
+            f"Import failed due to a database conflict: {exc}"
+        ) from exc
+    except Exception:
+        shutil.rmtree(experiment_outputs_dir, ignore_errors=True)
+        raise
 
     return {
         "experiment_id": target_experiment_id,

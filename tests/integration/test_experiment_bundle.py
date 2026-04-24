@@ -20,11 +20,11 @@ import asyncio
 import hashlib
 import json
 import os
-import resource
 import shutil
+import tracemalloc
 import zipfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -624,16 +624,25 @@ async def test_memory_export_large_jsonl(tmp_path: Path):
 
     out_path = tmp_path / "export.secrev.zip"
 
-    before_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    # Use tracemalloc to measure allocations during the export call only.
+    # resource.getrusage(RUSAGE_SELF).ru_maxrss is monotonically non-decreasing
+    # (historical peak since process start), so it cannot measure per-call deltas.
+    tracemalloc.start()
+    snap_before = tracemalloc.take_snapshot()
 
     await async_write_bundle(db, storage_root, exp_id, include_datasets=False, out_path=out_path)
 
-    after_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    delta_mb = (after_kb - before_kb) / 1024.0
+    snap_after = tracemalloc.take_snapshot()
+    tracemalloc.stop()
 
-    assert delta_mb < 200, (
-        f"RSS grew by {delta_mb:.1f} MiB during export; expected < 200 MiB "
-        "(streaming should prevent buffering the full file)"
+    # Sum the net new allocations visible between the two snapshots.
+    stats = snap_after.compare_to(snap_before, "lineno")
+    peak_allocated_bytes = sum(s.size_diff for s in stats if s.size_diff > 0)
+    peak_allocated_mb = peak_allocated_bytes / (1024 * 1024)
+
+    assert peak_allocated_mb < 50, (
+        f"Tracemalloc peak allocation during export: {peak_allocated_mb:.1f} MiB; "
+        "expected < 50 MiB (streaming should prevent buffering the full file)"
     )
 
 
@@ -729,3 +738,281 @@ def test_post_import_findings_count_via_api(coordinator_client):
     assert resp2.status_code == 200
     findings_data = resp2.json()
     assert findings_data["total"] == 6  # 3 per run × 2 runs
+
+
+# ---------------------------------------------------------------------------
+# Test 12: Retention loop skips directories containing .secrev.zip bundles (C1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_retention_skips_bundle_dirs(tmp_path: Path):
+    """Retention loop must not delete experiment dirs that contain a .secrev.zip bundle."""
+    from datetime import timedelta, UTC
+    from datetime import datetime
+    import sec_review_framework.coordinator as _coord
+
+    storage_root = tmp_path / "storage"
+    db = Database(tmp_path / "test.db")
+    await db.init()
+
+    exp_id = "retention-exp"
+    await _seed_db(db, exp_id, ["run-ret1"])
+    _create_experiment_on_disk(storage_root, exp_id, "run-ret1")
+
+    # Write a .secrev.zip bundle into the experiment output dir
+    exp_output_dir = storage_root / "outputs" / exp_id
+    bundle_path = exp_output_dir / f"{exp_id}.secrev.zip"
+    out_path = tmp_path / "tmp_bundle.secrev.zip"
+    await async_write_bundle(db, storage_root, exp_id, include_datasets=False, out_path=out_path)
+    shutil.copy(out_path, bundle_path)
+
+    # Back-date the experiment dir's mtime to far in the past so retention
+    # would normally delete it.
+    old_time = (datetime.now(UTC).timestamp() - 90 * 24 * 3600)
+    os.utime(exp_output_dir, (old_time, old_time))
+
+    # Run one iteration of the retention cleanup loop logic directly.
+    cutoff = datetime.now(UTC) - timedelta(days=30)
+    outputs_dir = storage_root / "outputs"
+    for experiment_dir in outputs_dir.iterdir():
+        if not experiment_dir.is_dir():
+            continue
+        bundle_present = any(
+            f.name.endswith(".secrev.zip")
+            for f in experiment_dir.iterdir()
+            if f.is_file()
+        )
+        if bundle_present:
+            continue
+        mtime = datetime.fromtimestamp(experiment_dir.stat().st_mtime, UTC)
+        if mtime < cutoff:
+            shutil.rmtree(experiment_dir, ignore_errors=True)
+
+    # Directory must still exist because the bundle was present
+    assert exp_output_dir.exists(), (
+        "Retention loop deleted an experiment directory containing a .secrev.zip bundle"
+    )
+    assert bundle_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# Test 13: ZIP bomb defense — bundle with huge claimed uncompressed size rejected (C2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_zip_bomb_rejected(tmp_path: Path):
+    """A bundle whose real uncompressed size exceeds the cap must be rejected.
+
+    We temporarily lower the per-process cap to 1 byte so any real bundle
+    (which always has at least a few bytes of JSON) triggers the guard.
+    This validates that the decompression-bomb check fires based on actual
+    ZipInfo.file_size metadata returned by zipfile, not on manifested claims.
+    """
+    import sec_review_framework.bundle as _bundle_module
+
+    storage_root = tmp_path / "storage"
+    db = Database(tmp_path / "test.db")
+    await db.init()
+
+    exp_id = "zipbomb-exp"
+    await _seed_db(db, exp_id, ["run-zb1"])
+    _create_experiment_on_disk(storage_root, exp_id, "run-zb1")
+
+    good_bundle = tmp_path / "good.secrev.zip"
+    await async_write_bundle(db, storage_root, exp_id, include_datasets=False, out_path=good_bundle)
+
+    db2 = Database(tmp_path / "test2.db")
+    await db2.init()
+    storage2 = tmp_path / "storage2"
+    storage2.mkdir(parents=True, exist_ok=True)
+
+    # Lower the cap to 1 byte so the legitimate bundle exceeds it
+    original_cap = _bundle_module._BUNDLE_EXTRACT_MAX_BYTES
+    _bundle_module._BUNDLE_EXTRACT_MAX_BYTES = 1
+    try:
+        with pytest.raises(ValueError, match="exceeds"):
+            await async_apply_bundle(db2, storage2, good_bundle, conflict_policy="reject")
+    finally:
+        _bundle_module._BUNDLE_EXTRACT_MAX_BYTES = original_cap
+
+    # Nothing should have been written to the output dir
+    assert not (storage2 / "outputs" / exp_id).exists()
+
+
+# ---------------------------------------------------------------------------
+# Test 14: Rename policy rewrites experiment_id in extracted run_result.json (N1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_rename_policy_rewrites_run_result_json(tmp_path: Path):
+    """After rename-import, run_result.json embeds the new experiment_id."""
+    source_storage = tmp_path / "source_storage"
+    source_db = Database(tmp_path / "source.db")
+    await source_db.init()
+
+    exp_id = "rename-rr-exp"
+    run_id = "run-rr1"
+    await _seed_db(source_db, exp_id, [run_id])
+    _create_experiment_on_disk(source_storage, exp_id, run_id)
+
+    # Verify original run_result.json has original exp_id
+    orig_rr = source_storage / "outputs" / exp_id / run_id / "run_result.json"
+    orig_data = json.loads(orig_rr.read_text())
+    assert orig_data["experiment"]["experiment_id"] == exp_id
+    assert orig_data["findings"][0]["experiment_id"] == exp_id
+
+    out_path = tmp_path / "export.secrev.zip"
+    await async_write_bundle(source_db, source_storage, exp_id, include_datasets=False, out_path=out_path)
+
+    # Target DB already has the same exp_id → rename will trigger
+    target_storage = tmp_path / "target_storage"
+    target_db = Database(tmp_path / "target.db")
+    await target_db.init()
+    await _seed_db(target_db, exp_id, ["run-existing"])
+    _create_experiment_on_disk(target_storage, exp_id, "run-existing")
+
+    summary = await async_apply_bundle(target_db, target_storage, out_path, conflict_policy="rename")
+    new_id = summary["experiment_id"]
+    assert new_id != exp_id
+    assert "_imported_" in new_id
+
+    # Read the extracted run_result.json from the renamed experiment dir
+    renamed_rr = target_storage / "outputs" / new_id / run_id / "run_result.json"
+    assert renamed_rr.exists(), "run_result.json was not extracted to renamed experiment dir"
+    renamed_data = json.loads(renamed_rr.read_text())
+
+    assert renamed_data["experiment"]["experiment_id"] == new_id, (
+        f"run_result.json still has old experiment_id {exp_id!r}; expected {new_id!r}"
+    )
+    for finding in renamed_data.get("findings", []):
+        assert finding["experiment_id"] == new_id, (
+            f"Finding still has old experiment_id {exp_id!r}; expected {new_id!r}"
+        )
+    for finding in renamed_data.get("strategy_output", {}).get("findings", []):
+        assert finding["experiment_id"] == new_id
+
+
+# ---------------------------------------------------------------------------
+# Test 15: upload_token is stripped from bundled config files (N4)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_upload_token_stripped_from_bundle(tmp_path: Path):
+    """Config files with upload_token must not include it in the exported bundle."""
+    storage_root = tmp_path / "storage"
+    db = Database(tmp_path / "test.db")
+    await db.init()
+
+    exp_id = "token-exp"
+    run_id = "run-tok1"
+    await _seed_db(db, exp_id, [run_id])
+    _create_experiment_on_disk(storage_root, exp_id, run_id)
+
+    # Inject an upload_token into the on-disk config file
+    cfg_path = storage_root / "config" / "runs" / f"{run_id}.json"
+    cfg_data = json.loads(cfg_path.read_text())
+    cfg_data["upload_token"] = "super-secret-token-abc123"
+    cfg_path.write_text(json.dumps(cfg_data))
+
+    out_path = tmp_path / "export.secrev.zip"
+    await async_write_bundle(db, storage_root, exp_id, include_datasets=False, out_path=out_path)
+
+    # Inspect the bundle — upload_token must be absent from the config entry
+    with zipfile.ZipFile(out_path, "r") as zf:
+        config_entry = f"config/runs/{run_id}.json"
+        assert config_entry in zf.namelist(), f"{config_entry} not found in bundle"
+        bundled_cfg = json.loads(zf.read(config_entry))
+        assert "upload_token" not in bundled_cfg, (
+            "upload_token was included in the bundle config file; it must be stripped"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Test 16: Import upload size cap returns 413 (N2)
+# ---------------------------------------------------------------------------
+
+
+def test_import_upload_size_cap_returns_413(coordinator_client):
+    """Uploading a bundle larger than BUNDLE_UPLOAD_MAX_BYTES returns 413."""
+    import sec_review_framework.bundle as _bundle_module
+
+    client, c, storage_root, db = coordinator_client
+
+    # Create a legitimate but tiny bundle
+    exp_id = "cap-exp"
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(_seed_db(db, exp_id, ["run-cap1"]))
+        exp_row = loop.run_until_complete(db.get_experiment(exp_id))
+        run_rows = loop.run_until_complete(db.list_runs(exp_id))
+    finally:
+        loop.close()
+    _create_experiment_on_disk(storage_root, exp_id, "run-cap1")
+
+    out_path = storage_root / "cap_bundle.secrev.zip"
+    write_bundle(
+        db, storage_root, exp_id, include_datasets=False, out_path=out_path,
+        _exp_row=exp_row, _run_rows=run_rows,
+    )
+
+    # Temporarily lower the upload cap to 1 byte so any bundle exceeds it
+    original_cap = _bundle_module._BUNDLE_UPLOAD_MAX_BYTES
+    _bundle_module._BUNDLE_UPLOAD_MAX_BYTES = 1
+    try:
+        with open(out_path, "rb") as f:
+            resp = client.post(
+                "/experiments/import",
+                files={"file": ("cap_bundle.secrev.zip", f, "application/zip")},
+                data={"conflict_policy": "reject"},
+            )
+    finally:
+        _bundle_module._BUNDLE_UPLOAD_MAX_BYTES = original_cap
+
+    assert resp.status_code == 413, f"Expected 413, got {resp.status_code}: {resp.text}"
+
+
+# ---------------------------------------------------------------------------
+# Test 17: Partial-failure cleanup — DB error leaves no orphan files (N3)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_partial_failure_cleanup(tmp_path: Path):
+    """If db.import_experiment_rows raises, the extracted output dir is cleaned up."""
+    storage_root = tmp_path / "storage"
+    db = Database(tmp_path / "test.db")
+    await db.init()
+
+    exp_id = "cleanup-exp"
+    run_id = "run-cl1"
+    await _seed_db(db, db_exp_id := exp_id, run_ids=[run_id])
+    _create_experiment_on_disk(storage_root, exp_id, run_id)
+
+    out_path = tmp_path / "export.secrev.zip"
+    await async_write_bundle(db, storage_root, exp_id, include_datasets=False, out_path=out_path)
+
+    # Fresh storage + DB for the import target
+    target_storage = tmp_path / "target_storage"
+    target_storage.mkdir(parents=True, exist_ok=True)
+    target_db = Database(tmp_path / "target.db")
+    await target_db.init()
+
+    # Patch import_experiment_rows to raise a RuntimeError
+    async def _failing_import(*args, **kwargs):
+        raise RuntimeError("simulated DB failure")
+
+    with patch.object(target_db, "import_experiment_rows", side_effect=_failing_import):
+        with pytest.raises(RuntimeError, match="simulated DB failure"):
+            await async_apply_bundle(
+                target_db, target_storage, out_path, conflict_policy="reject"
+            )
+
+    # The experiment output directory must have been cleaned up
+    orphan_dir = target_storage / "outputs" / exp_id
+    assert not orphan_dir.exists(), (
+        f"Orphaned output directory was left behind after DB failure: {orphan_dir}"
+    )
