@@ -89,11 +89,11 @@ describe('Dashboard — initial render and loading', () => {
 })
 
 describe('Dashboard — empty state', () => {
-  it('shows no-active-experiments empty state when list is empty', async () => {
+  it('shows pipeline diagram empty state when there are no active experiments', async () => {
     mockListExperiments.mockResolvedValue([])
     renderDashboard()
     await waitFor(() => {
-      expect(screen.getByText('No active experiments.')).toBeInTheDocument()
+      expect(screen.getByText(/no experiments running/i)).toBeInTheDocument()
     })
   })
 

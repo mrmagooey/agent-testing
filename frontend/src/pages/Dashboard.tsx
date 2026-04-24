@@ -12,6 +12,7 @@ import {
 } from 'recharts'
 import EmptyState from '../components/EmptyState'
 import PageDescription from '../components/PageDescription'
+import PipelineDiagram from '../components/PipelineDiagram'
 import { PageLoadingSpinner } from '../components/Skeleton'
 import { Button } from '@/components/ui/button'
 import {
@@ -344,15 +345,7 @@ export default function Dashboard() {
             <PollingIndicator polling={polling} lastUpdated={lastUpdated} />
           </div>
           {active.length === 0 ? (
-            <EmptyState
-              icon={
-                <svg className="w-10 h-10" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-              }
-              title="No active experiments."
-              subtitle="Start a new experiment to see it here."
-            />
+            <PipelineDiagram />
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
