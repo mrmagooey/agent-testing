@@ -627,6 +627,82 @@ export function searchFindingsGlobal(params: GlobalFindingsParams): Promise<Glob
   return apiFetch<GlobalFindingsResponse>(`/findings${query ? `?${query}` : ''}`)
 }
 
+// ─── Experiment Import/Export ──────────────────────────────────────────────
+
+export interface ImportSummary {
+  experiment_id: string
+  renamed_from: string | null
+  runs_imported: number
+  runs_skipped: number
+  datasets_missing: string[]
+  warnings: string[]
+  findings_indexed: number
+}
+
+/** Returns the export bundle download URL (no fetch — open in browser directly) */
+export function exportBundleUrl(experimentId: string, includeDatasets: boolean): string {
+  return `${BASE_URL}/experiments/${experimentId}/export?include_datasets=${includeDatasets}`
+}
+
+/**
+ * Upload a bundle file to import an experiment.
+ * Uses XMLHttpRequest so upload progress can be reported via onProgress.
+ * Always sends rebuild_findings_index=true.
+ * Throws ApiError on non-2xx responses.
+ */
+export function importBundle(
+  file: File,
+  conflictPolicy: 'reject' | 'rename' | 'merge',
+  onProgress?: (pct: number) => void,
+): Promise<ImportSummary> {
+  return new Promise<ImportSummary>((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', `${BASE_URL}/experiments/import`)
+
+    if (onProgress) {
+      xhr.upload.addEventListener('progress', (event) => {
+        if (event.lengthComputable) {
+          onProgress(Math.round((event.loaded / event.total) * 100))
+        }
+      })
+    }
+
+    xhr.addEventListener('load', () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(JSON.parse(xhr.responseText) as ImportSummary)
+        } catch {
+          reject(new ApiError('Invalid JSON response', xhr.status, null))
+        }
+      } else {
+        let message = `API error ${xhr.status}`
+        let body: unknown = null
+        try {
+          body = JSON.parse(xhr.responseText)
+          const b = body as Record<string, unknown>
+          const detail = b.detail ?? b.message
+          if (typeof detail === 'string') {
+            message = detail
+          }
+        } catch {
+          // ignore parse failure
+        }
+        reject(new ApiError(message, xhr.status, body))
+      }
+    })
+
+    xhr.addEventListener('error', () => {
+      reject(new ApiError('Network error during upload', 0, null))
+    })
+
+    const formData = new FormData()
+    formData.append('file', file)
+    formData.append('conflict_policy', conflictPolicy)
+    formData.append('rebuild_findings_index', 'true')
+    xhr.send(formData)
+  })
+}
+
 // ─── Smoke Test ────────────────────────────────────────────────────────────
 
 export async function runSmokeTest(): Promise<{ experiment_id: string; message: string; total_runs: number }> {

@@ -10,11 +10,13 @@ import DatasetDetail from './pages/DatasetDetail'
 import DatasetSourceView from './pages/DatasetSourceView'
 import Feedback from './pages/Feedback'
 import Findings from './pages/Findings'
+import ExperimentImport from './pages/ExperimentImport'
 import ThemeToggle from './components/ThemeToggle'
 
 const NAV_LINKS = [
   { to: '/', label: 'Dashboard', end: true },
   { to: '/experiments/new', label: 'New Experiment', end: false },
+  { to: '/experiments/import', label: 'Import', end: true },
   { to: '/compare', label: 'Compare', end: false },
   { to: '/datasets', label: 'Datasets', end: true },
   { to: '/datasets/discover', label: 'CVE Discovery', end: false },
@@ -106,6 +108,7 @@ export default function App() {
             <Route path="/compare" element={<RunCompare />} />
             <Route path="/experiments/:id/compare" element={<RunCompare />} />
             <Route path="/experiments/:experimentId/runs/:runId" element={<RunDetail />} />
+            <Route path="/experiments/import" element={<ExperimentImport />} />
             <Route path="/experiments/:id" element={<ExperimentDetail />} />
             <Route path="/datasets/discover" element={<CVEDiscovery />} />
             <Route path="/datasets/:name/source" element={<DatasetSourceView />} />
