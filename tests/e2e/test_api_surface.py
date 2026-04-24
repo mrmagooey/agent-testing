@@ -72,7 +72,7 @@ class _CombinedReporter(ReportGenerator):
 
 DATASET_NAME = "surface-dataset"
 DATASET_VERSION = "1.0.0"
-MODEL_ID = "fake-model"
+MODEL_ID = "claude-opus-4-5"
 
 
 def _make_dataset(datasets_dir: Path, dataset_name: str = DATASET_NAME) -> None:
@@ -218,13 +218,9 @@ def _minimal_matrix(experiment_id: str, dataset_name: str = DATASET_NAME) -> Exp
         experiment_id=experiment_id,
         dataset_name=dataset_name,
         dataset_version=DATASET_VERSION,
-        model_ids=[MODEL_ID],
-        strategies=[StrategyName.SINGLE_AGENT],
-        tool_variants=[ToolVariant.WITH_TOOLS],
-        review_profiles=[ReviewProfileName.DEFAULT],
-        verification_variants=[VerificationVariant.NONE],
-        parallel_modes=[False],
+        strategy_ids=["builtin.single_agent"],
         num_repetitions=1,
+        allow_unavailable_models=True,
     )
 
 

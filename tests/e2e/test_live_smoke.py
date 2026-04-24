@@ -131,6 +131,7 @@ def live_run(live_dirs) -> ExperimentRun:
     return ExperimentRun(
         id="live-smoke_openrouter_single_agent_without_tools_default_none",
         experiment_id="live-smoke",
+        strategy_id="builtin.single_agent",
         model_id=MODEL_ID,
         strategy=StrategyName.SINGLE_AGENT,
         tool_variant=ToolVariant.WITHOUT_TOOLS,

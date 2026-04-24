@@ -45,6 +45,11 @@ from sec_review_framework.data.experiment import (
     VerificationVariant,
 )
 from sec_review_framework.data.findings import Severity, StrategyOutput, VulnClass
+from sec_review_framework.data.strategy_bundle import (
+    OrchestrationShape,
+    StrategyBundleDefault,
+    UserStrategy,
+)
 from sec_review_framework.db import Database
 from sec_review_framework.reporting.generator import ReportGenerator
 
@@ -52,9 +57,33 @@ from sec_review_framework.reporting.generator import ReportGenerator
 # Helpers
 # ---------------------------------------------------------------------------
 
-MODEL_ID = "fake-model"
+MODEL_ID = "claude-opus-4-5"
 DATASET_NAME = "cap-test-dataset"
 DATASET_VERSION = "1.0.0"
+
+
+def _make_test_strategy(strategy_id: str, model_id: str) -> UserStrategy:
+    """Build a minimal UserStrategy suitable for insertion into the DB for tests
+    that need strategies with specific model_ids (e.g. per-model cap tests)."""
+    return UserStrategy(
+        id=strategy_id,
+        name=strategy_id,
+        parent_strategy_id=None,
+        orchestration_shape=OrchestrationShape.SINGLE_AGENT,
+        default=StrategyBundleDefault(
+            system_prompt="test",
+            user_prompt_template="test",
+            profile_modifier="",
+            model_id=model_id,
+            tools=frozenset(["read_file"]),
+            verification="none",
+            max_turns=5,
+            tool_extensions=frozenset(),
+        ),
+        overrides=[],
+        created_at=datetime(2026, 1, 1, tzinfo=UTC).replace(tzinfo=None),
+        is_builtin=False,
+    )
 
 
 class _NullReporter(ReportGenerator):
@@ -109,10 +138,11 @@ def _make_dataset(storage_root: Path) -> Path:
 
 
 def _make_prompt_snapshot() -> PromptSnapshot:
-    return PromptSnapshot.capture(
-        system_prompt="You are a security reviewer.",
-        user_message_template="Review this code.",
-        finding_output_format="JSON array",
+    return PromptSnapshot(
+        snapshot_id="test-snapshot",
+        strategy_id="builtin.single_agent",
+        captured_at=datetime(2026, 1, 1, tzinfo=UTC).replace(tzinfo=None),
+        bundle_json="{}",
     )
 
 
@@ -132,7 +162,7 @@ def _make_run_result(run: ExperimentRun, cost_usd: float) -> RunResult:
         status=RunStatus.COMPLETED,
         findings=[],
         strategy_output=_make_strategy_output(),
-        prompt_snapshot=_make_prompt_snapshot(),
+        bundle_snapshot=_make_prompt_snapshot(),
         tool_call_count=0,
         total_input_tokens=10,
         total_output_tokens=5,
@@ -198,18 +228,13 @@ def _make_coordinator(
 
 def _matrix(experiment_id: str, num_runs: int = 1, *, cost_cap: float | None = None) -> ExperimentMatrix:
     """Return a minimal matrix.  num_runs controls the number of runs via
-    num_repetitions (each repetition produces a distinct run for the same model).
+    num_repetitions (each repetition produces a distinct run for the same strategy).
     """
     return ExperimentMatrix(
         experiment_id=experiment_id,
         dataset_name=DATASET_NAME,
         dataset_version=DATASET_VERSION,
-        model_ids=[MODEL_ID],
-        strategies=[StrategyName.SINGLE_AGENT],
-        tool_variants=[ToolVariant.WITH_TOOLS],
-        review_profiles=[ReviewProfileName.DEFAULT],
-        verification_variants=[VerificationVariant.NONE],
-        parallel_modes=[False],
+        strategy_ids=["builtin.single_agent"],
         num_repetitions=num_runs,
         max_experiment_cost_usd=cost_cap,
         allow_unavailable_models=True,
@@ -221,7 +246,10 @@ def _prepare_runs_in_db(
     matrix: ExperimentMatrix,
 ) -> list[ExperimentRun]:
     """Create experiment and run rows in the DB (no scheduling)."""
-    runs = matrix.expand()
+    from sec_review_framework.strategies.strategy_registry import build_registry_from_db
+
+    registry = _run_async(build_registry_from_db(coord.db))
+    runs = matrix.expand(registry=registry)
     experiment_id = matrix.experiment_id
 
     _run_async(coord.db.create_experiment(
@@ -414,6 +442,17 @@ class TestConcurrencyCapQueuesExcessExperiments:
         model_a = "model-alpha"
         model_b = "model-beta"
 
+        # After the matrix collapse, model_id is baked into a strategy rather
+        # than being a matrix axis. Register two test strategies — one per
+        # model — in the DB so matrix.expand() resolves them to runs with the
+        # expected model_ids.
+        _run_async(db.insert_user_strategy(
+            _make_test_strategy("test.concurrency.model_a", model_a)
+        ))
+        _run_async(db.insert_user_strategy(
+            _make_test_strategy("test.concurrency.model_b", model_b)
+        ))
+
         coord = _make_coordinator(
             storage_root, db, cost_calculator,
             concurrency_caps={model_a: 1},  # cap=1 for model A, unlimited for B
@@ -426,13 +465,8 @@ class TestConcurrencyCapQueuesExcessExperiments:
             experiment_id=experiment_id,
             dataset_name=DATASET_NAME,
             dataset_version=DATASET_VERSION,
-            model_ids=[model_a, model_b],
-            strategies=[StrategyName.SINGLE_AGENT],
-            tool_variants=[ToolVariant.WITH_TOOLS],
-            review_profiles=[ReviewProfileName.DEFAULT],
-            verification_variants=[VerificationVariant.NONE],
-            parallel_modes=[False],
-            num_repetitions=2,  # 2 reps × 2 models = 4 runs total
+            strategy_ids=["test.concurrency.model_a", "test.concurrency.model_b"],
+            num_repetitions=2,  # 2 reps × 2 strategies = 4 runs total
             allow_unavailable_models=True,
         )
         runs = _prepare_runs_in_db(coord, matrix)

@@ -1,21 +1,23 @@
 """E2E tests for the tool-extensions feature.
 
-Invariants tested (from CLAUDE.md):
-  - Run IDs gain `_ext-<sorted>` suffix for non-empty extension sets.
-  - Legacy empty-extension runs stay byte-identical (no suffix).
-  - Suffix ordering is always alphabetical, not insertion order.
-  - The `tool_extensions` DB column round-trips through frozenset correctly.
+After the ExperimentMatrix collapse, ``tool_extensions`` is no longer a matrix
+axis — it is baked into each strategy's bundle and is immutable per strategy_id.
+The ``_ext-<sorted>`` run-id suffix was explicitly dropped (see
+``ExperimentMatrix.expand`` docstring). These tests now assert the post-collapse
+invariants:
+
+  - Run IDs are ``{experiment_id}_{strategy_id}[_rep{N}]`` with NO ``_ext-``
+    suffix, regardless of the strategy's tool_extensions.
+  - The ``tool_extensions`` DB column still round-trips through frozenset
+    correctly when the strategy's bundle declares extensions.
 
 All tests use TestClient + FakeModelProvider so no K8s or LLM API is needed.
 Peak memory is minimal — one small dataset file per test.
 
 Note on extension builders: the real extension builders (tree_sitter_ext,
 lsp_ext) launch MCP server subprocesses, which are unavailable in the test
-environment. Tests that need the *run_id suffix* and *DB column* invariants do
-not require the extension tools to function — they only need the run to be
-submitted, written to the DB, and for the worker to complete (with extensions
-stubbed out). We therefore patch ``_EXTENSION_BUILDERS`` to no-op stubs in
-those tests.
+environment. We therefore patch ``_EXTENSION_BUILDERS`` to no-op stubs so the
+worker completes without needing real MCP subprocesses.
 """
 
 from __future__ import annotations
@@ -60,9 +62,38 @@ from conftest import FakeModelProvider  # noqa: E402
 # Shared constants
 # ---------------------------------------------------------------------------
 
-MODEL_ID = "fake-model-ext"
+MODEL_ID = "claude-opus-4-5"
 DATASET_NAME = "ext-smoke-dataset"
 DATASET_VERSION = "1.0.0"
+
+
+def _make_ext_strategy(strategy_id: str, extensions: frozenset[ToolExtension]) -> "UserStrategy":
+    """Build a UserStrategy whose default bundle carries the requested tool_extensions."""
+    from sec_review_framework.data.strategy_bundle import (
+        OrchestrationShape,
+        StrategyBundleDefault,
+        UserStrategy,
+    )
+
+    return UserStrategy(
+        id=strategy_id,
+        name=strategy_id,
+        parent_strategy_id=None,
+        orchestration_shape=OrchestrationShape.SINGLE_AGENT,
+        default=StrategyBundleDefault(
+            system_prompt="test",
+            user_prompt_template="test",
+            profile_modifier="",
+            model_id=MODEL_ID,
+            tools=frozenset(["read_file"]),
+            verification="none",
+            max_turns=5,
+            tool_extensions=frozenset(e.value for e in extensions),
+        ),
+        overrides=[],
+        created_at=datetime(2026, 1, 1, tzinfo=UTC).replace(tzinfo=None),
+        is_builtin=False,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -210,22 +241,27 @@ def _build_coordinator(tmp_path: Path, storage_root: Path) -> ExperimentCoordina
     )
 
 
-def _build_matrix(
+def _register_ext_strategy_and_build_matrix(
+    coordinator_inst: ExperimentCoordinator,
     experiment_id: str,
-    extension_sets: list[frozenset[ToolExtension]],
+    extensions: frozenset[ToolExtension],
+    strategy_suffix: str = "default",
 ) -> ExperimentMatrix:
+    """Register a per-test user strategy whose bundle carries *extensions*,
+    then return a matrix that targets it.
+
+    tool_extensions is no longer a matrix axis (it's baked into the strategy).
+    """
+    strategy_id = f"test.ext.{strategy_suffix}"
+    strategy = _make_ext_strategy(strategy_id, extensions)
+    _run_async(coordinator_inst.db.insert_user_strategy(strategy))
     return ExperimentMatrix(
         experiment_id=experiment_id,
         dataset_name=DATASET_NAME,
         dataset_version=DATASET_VERSION,
-        model_ids=[MODEL_ID],
-        strategies=[StrategyName.SINGLE_AGENT],
-        tool_variants=[ToolVariant.WITH_TOOLS],
-        review_profiles=[ReviewProfileName.DEFAULT],
-        verification_variants=[VerificationVariant.NONE],
-        parallel_modes=[False],
+        strategy_ids=[strategy_id],
         num_repetitions=1,
-        tool_extension_sets=extension_sets,
+        allow_unavailable_models=True,
     )
 
 
@@ -290,12 +326,15 @@ def test_client(coordinator_instance: ExperimentCoordinator, datasets_dir: Path)
 
 
 # ---------------------------------------------------------------------------
-# Test 1: single extension → _ext-<name> suffix
+# Test 1: single extension → run ID has no _ext- suffix
 # ---------------------------------------------------------------------------
 
 class TestSingleExtensionSuffix:
-    """Run IDs must end with _ext-tree_sitter when only TREE_SITTER is selected."""
+    """Run IDs must be {experiment_id}_{strategy_id} with no _ext- suffix,
+    even when the strategy bundle declares tool_extensions."""
 
+    # Feature change: the _ext-<sorted> suffix was dropped when tool_extensions
+    # was baked into the strategy bundle (no longer a matrix axis).
     def test_single_extension_appends_sorted_suffix(
         self,
         test_client: TestClient,
@@ -303,9 +342,11 @@ class TestSingleExtensionSuffix:
         datasets_dir: Path,
     ):
         experiment_id = "ext-test-single-001"
-        matrix = _build_matrix(
+        matrix = _register_ext_strategy_and_build_matrix(
+            coordinator_instance,
             experiment_id=experiment_id,
-            extension_sets=[frozenset({ToolExtension.TREE_SITTER})],
+            extensions=frozenset({ToolExtension.TREE_SITTER}),
+            strategy_suffix="single",
         )
 
         with _stub_extension_builders(ToolExtension.TREE_SITTER):
@@ -318,18 +359,18 @@ class TestSingleExtensionSuffix:
 
         for run in runs:
             run_id = run["id"]
-            assert run_id.endswith("_ext-tree_sitter"), (
-                f"Run ID '{run_id}' does not end with '_ext-tree_sitter'. "
-                "This is the CLAUDE.md backwards-compatibility invariant."
+            assert "_ext-" not in run_id, (
+                f"Run ID '{run_id}' must not contain '_ext-'; tool_extensions "
+                f"are now strategy-scoped, not a run-id axis."
             )
 
 
 # ---------------------------------------------------------------------------
-# Test 2: empty extensions → no _ext- suffix (legacy byte-identical path)
+# Test 2: empty extensions → no _ext- suffix
 # ---------------------------------------------------------------------------
 
 class TestEmptyExtensionsNoSuffix:
-    """Legacy path: empty extension set must produce no _ext- suffix at all."""
+    """Empty extension set must produce no _ext- suffix."""
 
     def test_empty_extensions_has_no_suffix(
         self,
@@ -338,9 +379,11 @@ class TestEmptyExtensionsNoSuffix:
         datasets_dir: Path,
     ):
         experiment_id = "ext-test-empty-001"
-        matrix = _build_matrix(
+        matrix = _register_ext_strategy_and_build_matrix(
+            coordinator_instance,
             experiment_id=experiment_id,
-            extension_sets=[frozenset()],  # empty set — legacy path
+            extensions=frozenset(),
+            strategy_suffix="empty",
         )
 
         # No extension stubs needed — empty frozenset never invokes builders
@@ -354,18 +397,20 @@ class TestEmptyExtensionsNoSuffix:
         for run in runs:
             run_id = run["id"]
             assert "_ext-" not in run_id, (
-                f"Run ID '{run_id}' contains '_ext-' but no extensions were selected. "
-                "CLAUDE.md invariant: legacy empty-extension runs stay byte-identical."
+                f"Run ID '{run_id}' contains '_ext-' but no extensions were selected."
             )
 
 
 # ---------------------------------------------------------------------------
-# Test 3: multiple extensions sorted alphabetically in suffix
+# Test 3: multiple extensions → still no _ext- suffix
 # ---------------------------------------------------------------------------
 
 class TestMultipleExtensionsSortAlphabetically:
-    """_ext-lsp+tree_sitter, not _ext-tree_sitter+lsp (alphabetical, not insertion)."""
+    """Multiple extensions on a strategy still produce a run ID with no suffix."""
 
+    # Feature change: previously asserted _ext-lsp+tree_sitter ordering in the
+    # run-id suffix; the suffix was dropped entirely, so the closest current
+    # equivalent is to assert its absence regardless of extension count.
     def test_multiple_extensions_sort_alphabetically(
         self,
         test_client: TestClient,
@@ -373,10 +418,11 @@ class TestMultipleExtensionsSortAlphabetically:
         datasets_dir: Path,
     ):
         experiment_id = "ext-test-multi-001"
-        # Note: frozenset insertion order is irrelevant — sorting is enforced in expand()
-        matrix = _build_matrix(
+        matrix = _register_ext_strategy_and_build_matrix(
+            coordinator_instance,
             experiment_id=experiment_id,
-            extension_sets=[frozenset({ToolExtension.TREE_SITTER, ToolExtension.LSP})],
+            extensions=frozenset({ToolExtension.TREE_SITTER, ToolExtension.LSP}),
+            strategy_suffix="multi",
         )
 
         with _stub_extension_builders(ToolExtension.TREE_SITTER, ToolExtension.LSP):
@@ -389,10 +435,9 @@ class TestMultipleExtensionsSortAlphabetically:
 
         for run in runs:
             run_id = run["id"]
-            # Must end with alphabetically sorted suffix: lsp comes before tree_sitter
-            assert run_id.endswith("_ext-lsp+tree_sitter"), (
-                f"Run ID '{run_id}' does not end with '_ext-lsp+tree_sitter'. "
-                "Extensions must be sorted alphabetically in the suffix, not by insertion order."
+            assert "_ext-" not in run_id, (
+                f"Run ID '{run_id}' must not contain '_ext-'; tool_extensions "
+                f"are now strategy-scoped, not a run-id axis."
             )
 
 
@@ -410,9 +455,11 @@ class TestDbColumnRoundtrips:
         datasets_dir: Path,
     ):
         experiment_id = "ext-test-db-001"
-        matrix = _build_matrix(
+        matrix = _register_ext_strategy_and_build_matrix(
+            coordinator_instance,
             experiment_id=experiment_id,
-            extension_sets=[frozenset({ToolExtension.TREE_SITTER, ToolExtension.LSP})],
+            extensions=frozenset({ToolExtension.TREE_SITTER, ToolExtension.LSP}),
+            strategy_suffix="db",
         )
 
         with _stub_extension_builders(ToolExtension.TREE_SITTER, ToolExtension.LSP):

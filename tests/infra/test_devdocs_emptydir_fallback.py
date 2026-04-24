@@ -89,6 +89,7 @@ def _make_run(tool_extensions: frozenset[ToolExtension] = frozenset()) -> Experi
     return ExperimentRun(
         id=f"{EXPERIMENT_ID}_{MODEL_ID}_single_agent_with_tools_default_none{ext_suffix}",
         experiment_id=EXPERIMENT_ID,
+        strategy_id="builtin.single_agent",
         model_id=MODEL_ID,
         strategy=StrategyName.SINGLE_AGENT,
         tool_variant=ToolVariant.WITH_TOOLS,

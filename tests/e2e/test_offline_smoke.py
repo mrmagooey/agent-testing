@@ -174,6 +174,7 @@ def smoke_run(smoke_dirs) -> ExperimentRun:
     return ExperimentRun(
         id="smoke-experiment_fake-model_single_agent_with_tools_default_none",
         experiment_id="smoke-experiment",
+        strategy_id="builtin.single_agent",
         model_id="fake-model",
         strategy=StrategyName.SINGLE_AGENT,
         tool_variant=ToolVariant.WITH_TOOLS,

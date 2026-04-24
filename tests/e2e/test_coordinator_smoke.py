@@ -161,22 +161,18 @@ def _make_fake_provider() -> FakeModelProvider:
 EXPERIMENT_ID = "smoke-experiment-001"
 DATASET_NAME = "smoke-dataset"
 DATASET_VERSION = "1.0.0"
-MODEL_ID = "fake-model"
+MODEL_ID = "claude-opus-4-5"
 
 
 def _minimal_matrix() -> ExperimentMatrix:
-    """1 model × 1 strategy × with_tools only × no verification = 1 run."""
+    """1 strategy × 1 rep = 1 run (builtin.single_agent bakes in MODEL_ID)."""
     return ExperimentMatrix(
         experiment_id=EXPERIMENT_ID,
         dataset_name=DATASET_NAME,
         dataset_version=DATASET_VERSION,
-        model_ids=[MODEL_ID],
-        strategies=[StrategyName.SINGLE_AGENT],
-        tool_variants=[ToolVariant.WITH_TOOLS],
-        review_profiles=[ReviewProfileName.DEFAULT],
-        verification_variants=[VerificationVariant.NONE],
-        parallel_modes=[False],
+        strategy_ids=["builtin.single_agent"],
         num_repetitions=1,
+        allow_unavailable_models=True,
     )
 
 
