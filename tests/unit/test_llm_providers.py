@@ -286,3 +286,28 @@ async def test_db_app_settings_patch(db_with_key):
     # Verify persistence
     fetched = await db.get_app_settings()
     assert fetched["allow_unavailable_models"] is True
+
+
+# ---------------------------------------------------------------------------
+# Coordinator startup — fernet must be loaded eagerly (finding #2)
+# ---------------------------------------------------------------------------
+
+def test_fernet_imported_eagerly_in_lifespan():
+    """Importing the fernet module with a missing env var must raise RuntimeError.
+
+    The coordinator's lifespan handler imports fernet unconditionally so that
+    a missing LLM_PROVIDER_ENCRYPTION_KEY causes a startup failure rather than
+    a runtime crash on the first DB write.
+    """
+    backup = os.environ.pop("LLM_PROVIDER_ENCRYPTION_KEY", None)
+    mod_name = "sec_review_framework.secrets.fernet"
+    if mod_name in sys.modules:
+        del sys.modules[mod_name]
+    try:
+        with pytest.raises(RuntimeError, match="LLM_PROVIDER_ENCRYPTION_KEY"):
+            importlib.import_module(mod_name)
+    finally:
+        if backup is not None:
+            os.environ["LLM_PROVIDER_ENCRYPTION_KEY"] = backup
+        if mod_name in sys.modules:
+            del sys.modules[mod_name]

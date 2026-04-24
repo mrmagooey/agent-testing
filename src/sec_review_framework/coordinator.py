@@ -2186,6 +2186,11 @@ async def lifespan(app: FastAPI):
     if coordinator is None:
         coordinator = build_coordinator_from_env()
         await coordinator.db.init()
+
+    # Eagerly import fernet so a missing/malformed LLM_PROVIDER_ENCRYPTION_KEY
+    # surfaces as a startup error rather than a runtime crash on first DB write.
+    import sec_review_framework.secrets.fernet  # noqa: F401 — side-effect: fails fast
+
     await coordinator.reconcile()
 
     # --- ProviderCatalog ---
