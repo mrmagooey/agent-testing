@@ -687,3 +687,97 @@ export function getTrends(dataset: string, opts: TrendOptions = {}): Promise<Tre
   if (opts.until) params.set('until', opts.until)
   return apiFetch<TrendResponse>(`/trends?${params.toString()}`)
 }
+
+// ─── LLM Providers ────────────────────────────────────────────────────────
+
+export type ProviderAdapter = 'openai_compat' | 'anthropic_compat' | 'bedrock' | 'litellm'
+export type ProviderAuthType = 'api_key' | 'aws' | 'none'
+export type ProviderProbeStatusFull = 'fresh' | 'stale' | 'failed' | 'disabled' | null
+export type ProviderSource = 'builtin' | 'custom'
+
+export interface ProviderDTO {
+  id: string
+  name: string
+  display_name: string
+  adapter: ProviderAdapter
+  model_id: string
+  api_base: string | null
+  auth_type: ProviderAuthType
+  region: string | null
+  enabled: boolean
+  api_key_masked: string | null
+  last_probe_at: string | null
+  last_probe_status: ProviderProbeStatusFull
+  last_probe_error: string | null
+  source: ProviderSource
+}
+
+export interface ProviderListResponse {
+  builtin: ProviderDTO[]
+  custom: ProviderDTO[]
+}
+
+export interface ProviderCreateRequest {
+  name: string
+  display_name: string
+  adapter: ProviderAdapter
+  model_id: string
+  api_base?: string
+  api_key?: string
+  auth_type: ProviderAuthType
+  region?: string
+}
+
+export interface ProviderPatchRequest {
+  name?: string
+  display_name?: string
+  adapter?: ProviderAdapter
+  model_id?: string
+  api_base?: string | null
+  api_key?: string
+  auth_type?: ProviderAuthType
+  region?: string | null
+}
+
+export interface AppSettingsDefaults {
+  allow_unavailable_models: boolean
+  evidence_assessor: 'heuristic' | 'llm_judge'
+  evidence_judge_model: string | null
+}
+
+export function listLlmProviders(): Promise<ProviderListResponse> {
+  return apiFetch<ProviderListResponse>('/llm-providers')
+}
+
+export function createLlmProvider(data: ProviderCreateRequest): Promise<ProviderDTO> {
+  return apiFetch<ProviderDTO>('/llm-providers', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+export function patchLlmProvider(id: string, data: ProviderPatchRequest): Promise<ProviderDTO> {
+  return apiFetch<ProviderDTO>(`/llm-providers/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  })
+}
+
+export function deleteLlmProvider(id: string): Promise<void> {
+  return apiFetch<void>(`/llm-providers/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+export function probeLlmProvider(id: string): Promise<ProviderDTO> {
+  return apiFetch<ProviderDTO>(`/llm-providers/${encodeURIComponent(id)}/probe`, { method: 'POST' })
+}
+
+export function getSettingsDefaults(): Promise<AppSettingsDefaults> {
+  return apiFetch<AppSettingsDefaults>('/settings/defaults')
+}
+
+export function patchSettingsDefaults(data: Partial<AppSettingsDefaults>): Promise<AppSettingsDefaults> {
+  return apiFetch<AppSettingsDefaults>('/settings/defaults', {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  })
+}
