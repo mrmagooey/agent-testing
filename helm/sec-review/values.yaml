@@ -132,12 +132,17 @@ secrets:
     sessionToken: ""
     region: "us-east-1"
   # Encryption key for custom LLM provider API keys stored in the database.
-  # When secrets.create=true this defaults to a randomly generated 32-char key
-  # encoded as base64.  When secrets.create=false you MUST supply this value
-  # via your external secret manager — the coordinator will refuse to start
-  # without it.  To rotate: add old key as a second comma-separated entry;
+  # Required when secrets.create=true — the chart refuses to render without it.
+  # When secrets.create=false you MUST supply this value via your external
+  # secret manager — the coordinator will refuse to start without it.
+  #
+  # Generate once with:
+  #   python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
+  # Commit the result to your values file (or store in Vault/SOPS).
+  # Do NOT regenerate on upgrade — it breaks decryption of existing ciphertexts.
+  #
+  # To rotate: add old key as a second comma-separated entry;
   # ciphertexts encrypted with any listed key are accepted for decryption.
-  # Generate a new key: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
   encryptionKey: ""
 
 # -----------------------------------------------------------------------------
