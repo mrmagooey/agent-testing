@@ -2,6 +2,19 @@
 
 from __future__ import annotations
 
+import os
+
+# Set a deterministic Fernet key before any `sec_review_framework` module is
+# imported. The coordinator eagerly imports `secrets.fernet` at module load to
+# fail fast when the key is missing in production; in tests we satisfy that
+# invariant once at collection time so every test file that touches the
+# coordinator can import cleanly. Per-test overrides still work via
+# monkeypatch.setenv inside individual tests.
+os.environ.setdefault(
+    "LLM_PROVIDER_ENCRYPTION_KEY",
+    "zmWTFcL2d0Zr3rsaYJBiMr_MXQA_0GdM2p5DVuZJLKM=",
+)
+
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path

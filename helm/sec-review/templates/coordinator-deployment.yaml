@@ -93,6 +93,11 @@ spec:
               value: {{ .Values.workerResultTransport | default "pvc" | quote }}
             - name: COORDINATOR_INTERNAL_URL
               value: "http://{{ include "sec-review.fullname" . }}-coordinator:{{ .Values.coordinator.service.port }}"
+            - name: LLM_PROVIDER_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.name }}
+                  key: LLM_PROVIDER_ENCRYPTION_KEY
             {{- with .Values.coordinator.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

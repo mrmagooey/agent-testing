@@ -91,6 +91,7 @@ from sec_review_framework.data.strategy_bundle import (
     UserStrategy,
     canonical_json,
 )
+from sec_review_framework.llm_providers import router as llm_providers_router
 
 logger = logging.getLogger(__name__)
 
@@ -2851,6 +2852,11 @@ async def lifespan(app: FastAPI):
     if coordinator is None:
         coordinator = build_coordinator_from_env()
         await coordinator.db.init()
+
+    # Eagerly import fernet so a missing/malformed LLM_PROVIDER_ENCRYPTION_KEY
+    # surfaces as a startup error rather than a runtime crash on first DB write.
+    import sec_review_framework.secrets.fernet  # noqa: F401 — side-effect: fails fast
+
     await coordinator.reconcile()
 
     # Seed builtin strategies into the DB if they aren't already present.
@@ -2871,6 +2877,18 @@ async def lifespan(app: FastAPI):
     await catalog.start()
     coordinator.catalog = catalog
     coordinator.cost_calculator._pricing_view = CatalogPricingView(catalog)
+
+    # Load enabled custom providers into the catalog alongside built-ins.
+    try:
+        from sec_review_framework.llm_providers import _inject_custom_into_catalog
+        custom_rows = await coordinator.db.list_llm_providers()
+        for _row in custom_rows:
+            if _row.get("enabled", 1):
+                _inject_custom_into_catalog(_row, catalog)
+        if custom_rows:
+            logger.info("Loaded %d custom provider(s) into catalog", len(custom_rows))
+    except Exception as _exc:
+        logger.warning("Failed to load custom providers into catalog: %s", _exc)
 
     _background_tasks.add(asyncio.create_task(
         retention_cleanup_loop(coordinator.storage_root, retention_days=30)
@@ -2920,6 +2938,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Security Review Framework", version="1.0.0", lifespan=lifespan)
+app.include_router(llm_providers_router)
 
 
 @app.middleware("http")
