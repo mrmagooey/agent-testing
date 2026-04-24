@@ -371,13 +371,12 @@ async def list_llm_providers() -> dict:
 @router.post("/llm-providers", status_code=201)
 async def create_llm_provider(body: ProviderCreateRequest) -> dict:
     """Create a new custom LLM provider."""
+    import sqlite3
+
+    import aiosqlite
+
     db = _get_db()
     coord = _get_coordinator()
-
-    # Unique-name check
-    existing = await db.get_llm_provider_by_name(body.name)
-    if existing:
-        raise HTTPException(status_code=409, detail=f"Provider name '{body.name}' already exists")
 
     now_iso = datetime.now(UTC).isoformat()
     provider_id = str(uuid.uuid4())
@@ -405,7 +404,13 @@ async def create_llm_provider(body: ProviderCreateRequest) -> dict:
         "updated_at": now_iso,
     }
 
-    await db.create_llm_provider(row)
+    try:
+        await db.create_llm_provider(row)
+    except (aiosqlite.IntegrityError, sqlite3.IntegrityError):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Provider name '{body.name}' already exists",
+        )
 
     # Run probe asynchronously and update row
     probe_result = await _probe_custom_provider(row)

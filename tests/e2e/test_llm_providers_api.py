@@ -301,6 +301,30 @@ def test_app_settings_patch_roundtrip(client: TestClient):
     assert resp.json()["evidence_assessor"] == "llm_judge"
 
 
+def test_create_duplicate_name_integrity_error_returns_409(
+    client: TestClient, coordinator_with_db: ExperimentCoordinator
+):
+    """Concurrent duplicate-name POST must return 409, not 500.
+
+    The pre-check was removed; the DB unique constraint (IntegrityError) is
+    the authoritative guard. This test exercises the IntegrityError→409
+    conversion by calling POST twice sequentially with the same name.
+    """
+    _create_provider(client, name="race-condition-test")
+
+    # Second POST with same name: the DB UNIQUE index raises IntegrityError
+    # which the endpoint converts to 409.
+    resp = client.post("/api/llm-providers", json={
+        "name": "race-condition-test",
+        "display_name": "Duplicate",
+        "adapter": "litellm",
+        "model_id": "m",
+        "auth_type": "none",
+    })
+    assert resp.status_code == 409, f"Expected 409, got {resp.status_code}: {resp.text}"
+    assert "race-condition-test" in resp.json()["detail"]
+
+
 def test_create_provider_invalid_slug_rejected(client: TestClient):
     resp = client.post("/api/llm-providers", json={
         "name": "Bad Name",
