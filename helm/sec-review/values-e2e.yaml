@@ -86,3 +86,6 @@ workerTools:
     enabled: false
   devdocs:
     enabled: false
+
+# Use HTTP transport in e2e: workers upload via POST rather than writing to PVC.
+workerResultTransport: "http"

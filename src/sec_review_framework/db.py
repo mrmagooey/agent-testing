@@ -1,11 +1,18 @@
 """SQLite-based persistence for the coordinator service. Uses aiosqlite for async access."""
 
 import aiosqlite
+import hashlib
+import hmac
 import json
 import re
+import secrets
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from sec_review_framework.data.strategy_bundle import UserStrategy
 
 
 # ---------------------------------------------------------------------------
@@ -81,6 +88,21 @@ class Database:
                 await db.commit()
             except Exception:
                 pass  # Column already exists — safe to ignore
+
+            # ---------------------------------------------------------------------------
+            # User strategies table
+            # ---------------------------------------------------------------------------
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS user_strategies (
+                    id TEXT PRIMARY KEY,
+                    parent_strategy_id TEXT,
+                    is_builtin INTEGER NOT NULL DEFAULT 0,
+                    orchestration_shape TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    bundle_json TEXT NOT NULL,
+                    created_at TIMESTAMP NOT NULL
+                )
+            """)
 
             # ---------------------------------------------------------------------------
             # Findings index table
@@ -163,6 +185,18 @@ class Database:
                     INSERT INTO findings_fts(rowid, title, description, vuln_class, cwe_ids)
                     VALUES (new.rowid, new.title, new.description, new.vuln_class, new.cwe_ids);
                 END
+            """)
+
+            # ---------------------------------------------------------------------------
+            # Upload tokens table (HTTP result transport)
+            # ---------------------------------------------------------------------------
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS run_upload_tokens (
+                    run_id TEXT PRIMARY KEY REFERENCES runs(id),
+                    token_hash TEXT NOT NULL,
+                    issued_at TEXT NOT NULL,
+                    consumed_at TEXT
+                )
             """)
 
             await db.commit()
@@ -568,6 +602,193 @@ class Database:
                 result[facet_col] = {row[0]: row[1] for row in rows if row[0]}
 
         return result
+
+
+    # ---------------------------------------------------------------------------
+    # User strategies
+    # ---------------------------------------------------------------------------
+
+    async def insert_user_strategy(self, strategy: "UserStrategy") -> None:
+        """Persist a UserStrategy to the database.
+
+        Serialises the full UserStrategy via canonical_json so round-trips
+        via get_user_strategy reconstruct the complete object.
+        """
+        from sec_review_framework.data.strategy_bundle import canonical_json
+
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                INSERT INTO user_strategies
+                    (id, parent_strategy_id, is_builtin, orchestration_shape,
+                     name, bundle_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    strategy.id,
+                    strategy.parent_strategy_id,
+                    1 if strategy.is_builtin else 0,
+                    strategy.orchestration_shape.value,
+                    strategy.name,
+                    canonical_json(strategy),
+                    strategy.created_at.isoformat(),
+                ),
+            )
+            await db.commit()
+
+    async def get_user_strategy(self, strategy_id: str) -> "UserStrategy | None":
+        """Return the UserStrategy with *strategy_id*, or None if not found."""
+        from sec_review_framework.data.strategy_bundle import UserStrategy
+
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT bundle_json FROM user_strategies WHERE id = ?",
+                (strategy_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+                if row is None:
+                    return None
+                return UserStrategy.model_validate_json(row["bundle_json"])
+
+    async def list_user_strategies(self) -> "list[UserStrategy]":
+        """Return all UserStrategy objects, ordered by created_at then id."""
+        from sec_review_framework.data.strategy_bundle import UserStrategy
+
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT bundle_json FROM user_strategies ORDER BY created_at, id"
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [UserStrategy.model_validate_json(row["bundle_json"]) for row in rows]
+
+    async def delete_user_strategy(self, strategy_id: str) -> bool:
+        """Hard-delete the strategy with *strategy_id*.
+
+        Returns True if a row was deleted, False if no such strategy existed.
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                "DELETE FROM user_strategies WHERE id = ?",
+                (strategy_id,),
+            ) as cursor:
+                deleted = cursor.rowcount > 0
+            await db.commit()
+            return deleted
+
+    async def strategy_is_referenced_by_runs(self, strategy_id: str) -> bool:
+        """Return True if any run references *strategy_id*.
+
+        TODO: The runs table does not yet have a strategy_id column — this will
+        be added by a follow-up agent that wires UserStrategy into run creation.
+        Until then this always returns False so DELETE works on all user strategies.
+        """
+        return False
+
+    # ---------------------------------------------------------------------------
+    # Upload tokens (HTTP result transport)
+    # ---------------------------------------------------------------------------
+
+    async def issue_upload_token(self, run_id: str) -> str:
+        """Generate a fresh bearer token for *run_id*, store its SHA-256 hash.
+
+        Returns the plaintext token (32 URL-safe bytes).  The token is stored
+        hashed; the plaintext is never persisted.
+        """
+        token = secrets.token_urlsafe(32)
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        issued_at = datetime.now(UTC).isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                INSERT INTO run_upload_tokens (run_id, token_hash, issued_at, consumed_at)
+                VALUES (?, ?, ?, NULL)
+                ON CONFLICT(run_id) DO NOTHING
+                """,
+                (run_id, token_hash, issued_at),
+            )
+            await db.commit()
+        return token
+
+    async def consume_upload_token(self, run_id: str, token: str) -> bool:
+        """Atomically mark the token as consumed if it matches and was not yet used.
+
+        Returns True if the token was valid and is now consumed; False otherwise.
+        Uses timing-safe comparison via ``hmac.compare_digest``.
+        """
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        async with aiosqlite.connect(self.db_path) as db:
+            # Fetch the stored hash without side-effects first so we can do a
+            # timing-safe comparison in Python (SQLite's = is not timing-safe).
+            async with db.execute(
+                "SELECT token_hash FROM run_upload_tokens WHERE run_id = ? AND consumed_at IS NULL",
+                (run_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+
+            if row is None:
+                return False
+
+            stored_hash: str = row[0]
+            if not hmac.compare_digest(stored_hash, token_hash):
+                return False
+
+            # Atomically mark as consumed; the WHERE guards against races.
+            consumed_at = datetime.now(UTC).isoformat()
+            async with db.execute(
+                """
+                UPDATE run_upload_tokens
+                SET consumed_at = ?
+                WHERE run_id = ? AND consumed_at IS NULL AND token_hash = ?
+                """,
+                (consumed_at, run_id, token_hash),
+            ) as cursor:
+                updated = cursor.rowcount
+
+            await db.commit()
+            return updated > 0
+
+    async def get_upload_token_issued(self, run_id: str) -> bool:
+        """Return True if a token has been issued for *run_id* (consumed or not)."""
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                "SELECT 1 FROM run_upload_tokens WHERE run_id = ?",
+                (run_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+                return row is not None
+
+    async def is_upload_token_consumed(self, run_id: str) -> bool:
+        """Return True if the token for *run_id* has already been consumed."""
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                "SELECT consumed_at FROM run_upload_tokens WHERE run_id = ?",
+                (run_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+                if row is None:
+                    return False
+                return row[0] is not None
+
+    async def revoke_upload_tokens_for_experiment(self, experiment_id: str) -> int:
+        """Delete all upload tokens for runs belonging to *experiment_id*.
+
+        Returns the number of tokens deleted.
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                """
+                DELETE FROM run_upload_tokens
+                WHERE run_id IN (
+                    SELECT id FROM runs WHERE experiment_id = ?
+                )
+                """,
+                (experiment_id,),
+            ) as cursor:
+                deleted = cursor.rowcount
+            await db.commit()
+            return deleted
 
 
 def _infer_match_status(finding: dict) -> str | None:

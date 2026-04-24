@@ -59,6 +59,9 @@ workerTools:
   devdocs:
     enabled: false
 
+# Use PVC transport for local dev: simpler setup, no network hop needed.
+workerResultTransport: "pvc"
+
 # Example: point the local_llm probe at a LAN inference endpoint.
 # providerEndpoints:
 #   localLlm:

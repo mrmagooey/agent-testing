@@ -35,4 +35,40 @@ spec:
       ports:
         - protocol: TCP
           port: {{ .Values.networkPolicy.nfsPort }}
+    {{- if eq (.Values.workerResultTransport | default "pvc") "http" }}
+    # HTTP transport: allow workers to upload results to the coordinator.
+    # Restricted to pods carrying the coordinator selector label — not open cluster-wide.
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "sec-review.coordinator.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.coordinator.service.port }}
+    {{- end }}
+---
+{{- if eq (.Values.workerResultTransport | default "pvc") "http" }}
+# Allow the coordinator to receive upload connections from worker pods.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "sec-review.fullname" . }}-coordinator-upload-ingress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sec-review.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "sec-review.coordinator.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: sec-review-worker
+      ports:
+        - protocol: TCP
+          port: {{ .Values.coordinator.service.port }}
+{{- end }}
 {{- end }}

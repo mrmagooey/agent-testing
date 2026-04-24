@@ -79,6 +79,13 @@ from sec_review_framework.ground_truth.cve_importer import (
     CVESelectionCriteria,
 )
 from sec_review_framework.ground_truth.vuln_injector import VulnInjector
+from sec_review_framework.data.strategy_bundle import (
+    OrchestrationShape,
+    OverrideRule,
+    StrategyBundleDefault,
+    UserStrategy,
+    canonical_json,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +96,28 @@ _TOOL_EXTENSION_LABELS: dict[ToolExtension, str] = {
     ToolExtension.LSP: "LSP",
     ToolExtension.DEVDOCS: "DevDocs",
 }
+
+# ---------------------------------------------------------------------------
+# Prometheus metrics (optional — prometheus-client is a coordinator dep)
+# ---------------------------------------------------------------------------
+try:
+    from prometheus_client import Counter as _Counter, make_asgi_app as _make_asgi_app
+    _upload_counter = _Counter(
+        "upload_total",
+        "Worker result upload attempts by outcome",
+        ["outcome"],
+    )
+    _PROMETHEUS_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    _PROMETHEUS_AVAILABLE = False
+    # Stub counter so the handler code is unconditionally importable in tests.
+    class _StubCounter:
+        def labels(self, **_kw: object) -> "_StubCounter":
+            return self
+        def inc(self, _amount: float = 1) -> None:
+            pass
+    _upload_counter = _StubCounter()  # type: ignore[assignment]
+    _make_asgi_app = None  # type: ignore[assignment]
 
 # Kubernetes is optional — not available in dev environments
 try:
@@ -158,6 +187,8 @@ class ExperimentCoordinator:
         llm_secret_name: str = "llm-api-keys",
         config_map_name: str = "experiment-config",
         worker_image_pull_policy: str = "IfNotPresent",
+        result_transport: str = "pvc",
+        coordinator_internal_url: str = "",
     ):
         self.k8s_client = k8s_client
         self.storage_root = storage_root
@@ -174,6 +205,8 @@ class ExperimentCoordinator:
         self.llm_secret_name = llm_secret_name
         self.config_map_name = config_map_name
         self.worker_image_pull_policy = worker_image_pull_policy
+        self.result_transport = result_transport
+        self.coordinator_internal_url = coordinator_internal_url
         self._cost_trackers: dict[str, ExperimentCostTracker] = {}
         self._feedback_tracker = FeedbackTracker()
         # Per-instance TTL cache for get_trends (class-level dict would be shared across instances).
@@ -186,7 +219,10 @@ class ExperimentCoordinator:
     # ------------------------------------------------------------------
 
     async def submit_experiment(self, matrix: ExperimentMatrix) -> str:
-        runs = matrix.expand()
+        from sec_review_framework.strategies.strategy_registry import build_registry_from_db
+
+        registry = await build_registry_from_db(self.db)
+        runs = matrix.expand(registry=registry)
         experiment_id = matrix.experiment_id
 
         await self.db.create_experiment(
@@ -208,11 +244,35 @@ class ExperimentCoordinator:
                 tool_extensions=run.tool_extensions,
             )
 
-        # Persist run configs to shared storage for worker pods to read
+        # Persist run configs to shared storage for worker pods to read.
+        # When result_transport == "http", embed the upload URL and token so the
+        # worker knows how to deliver its artifacts.  The token is excluded from
+        # the DB config_json (model_dump excludes upload_token via Field(exclude=True))
+        # but IS written to the on-disk per-run JSON that the worker reads.
         config_dir = self.storage_root / "config" / "runs"
         config_dir.mkdir(parents=True, exist_ok=True)
         for run in runs:
-            (config_dir / f"{run.id}.json").write_text(run.model_dump_json(indent=2))
+            if self.result_transport == "http":
+                token = await self.db.issue_upload_token(run.id)
+                upload_url = (
+                    f"{self.coordinator_internal_url}"
+                    f"/api/internal/runs/{run.id}/result"
+                )
+                run = run.model_copy(update={
+                    "result_transport": "http",
+                    "upload_url": upload_url,
+                    "upload_token": token,
+                })
+            # Write the full run config (including upload_token) to disk for the worker.
+            # upload_token is excluded from DB persistence via Field(exclude=True),
+            # but we need it on disk, so we dump via model_dump and include it explicitly.
+            run_dict = run.model_dump(mode="json")
+            if run.upload_token is not None:
+                run_dict["upload_token"] = run.upload_token
+            import json as _json
+            (config_dir / f"{run.id}.json").write_text(
+                _json.dumps(run_dict, indent=2, default=str)
+            )
 
         self._cost_trackers[experiment_id] = ExperimentCostTracker(
             experiment_id, matrix.max_experiment_cost_usd
@@ -308,11 +368,16 @@ class ExperimentCoordinator:
         if run_hash not in job_name:
             job_name = f"{job_name[: 63 - len(run_hash) - 1]}-{run_hash}"
 
+        # Under http transport the PVC is read-only for workers (they only read
+        # datasets/devdocs/run-config).  A dedicated emptyDir is used for tmp output.
+        use_http_transport = self.result_transport == "http"
+
         # Build volume/mount lists, then extend them if extensions need it.
         volume_mounts = [
             kubernetes.client.V1VolumeMount(
                 name="shared-data",
                 mount_path="/data",
+                read_only=use_http_transport,
             ),
             kubernetes.client.V1VolumeMount(
                 name="config",
@@ -333,6 +398,20 @@ class ExperimentCoordinator:
                 ),
             ),
         ]
+
+        if use_http_transport:
+            volume_mounts.append(
+                kubernetes.client.V1VolumeMount(
+                    name="worker-tmp",
+                    mount_path="/tmp/worker",
+                )
+            )
+            volumes.append(
+                kubernetes.client.V1Volume(
+                    name="worker-tmp",
+                    empty_dir=kubernetes.client.V1EmptyDirVolumeSource(),
+                )
+            )
 
         # DevDocs emptyDir fallback ------------------------------------------------
         # In environments where the devdocs-sync Job has not run (e.g. kind/e2e
@@ -401,7 +480,11 @@ class ExperimentCoordinator:
                                 command=[
                                     "python", "-m", "sec_review_framework.worker",
                                     "--run-config", f"/data/config/runs/{run.id}.json",
-                                    "--output-dir", f"/data/outputs/{experiment_id}/{run.id}",
+                                    "--output-dir", (
+                                        "/tmp/worker/out"
+                                        if use_http_transport
+                                        else f"/data/outputs/{experiment_id}/{run.id}"
+                                    ),
                                     "--datasets-dir", "/data/datasets",
                                 ],
                                 env=[
@@ -411,6 +494,16 @@ class ExperimentCoordinator:
                                     kubernetes.client.V1EnvVar(
                                         name="TOOL_EXTENSIONS",
                                         value=",".join(sorted(e.value for e in run.tool_extensions)),
+                                    ),
+                                    *(
+                                        [
+                                            kubernetes.client.V1EnvVar(
+                                                name="COORDINATOR_INTERNAL_URL",
+                                                value=self.coordinator_internal_url,
+                                            )
+                                        ]
+                                        if use_http_transport
+                                        else []
                                     ),
                                 ],
                                 env_from=[
@@ -503,6 +596,255 @@ class ExperimentCoordinator:
             "cells": cell_list,
         }
 
+    async def handle_run_result_upload(self, run_id: str, request: "Request") -> dict:
+        """Handle a streamed multipart artifact upload from a worker pod.
+
+        Flow:
+          1. Extract bearer token from Authorization header.
+          2. Consume (atomic single-use) the upload token — returns 403 on failure.
+          3. Derive experiment_id from DB.
+          4. Create a staging dir under /data/outputs/{exp}/.staging-{run_id}-{uuid}/
+          5. Stream multipart parts to disk (never buffer in memory).
+          6. Validate filenames against allowlist; enforce per-artifact size cap.
+          7. Verify run_result.json is present.
+          8. os.rename(staging → final); on FileExistsError → 409.
+        """
+        import time as _time
+        import uuid as _uuid
+        from multipart.multipart import MultipartParser as _MultipartParser
+
+        t_start = _time.monotonic()
+
+        # --- Auth ---
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            _upload_counter.labels(outcome="auth_missing").inc()
+            raise HTTPException(status_code=403, detail="Missing bearer token")
+        token = auth_header[len("Bearer "):]
+
+        if not await self.db.consume_upload_token(run_id, token):
+            _upload_counter.labels(outcome="auth_failed").inc()
+            raise HTTPException(status_code=403, detail="Invalid or already-used upload token")
+
+        # --- Resolve experiment ---
+        run_row = await self.db.get_run(run_id)
+        if run_row is None:
+            _upload_counter.labels(outcome="not_found").inc()
+            raise HTTPException(status_code=404, detail=f"Run {run_id!r} not found")
+        experiment_id: str = run_row["experiment_id"]
+
+        # --- Staging dir ---
+        outputs_dir = self.storage_root / "outputs" / experiment_id
+        staging_dir = outputs_dir / f".staging-{run_id}-{_uuid.uuid4().hex}"
+        final_dir = outputs_dir / run_id
+
+        staging_dir.mkdir(parents=True, exist_ok=True)
+
+        # Allowed filenames and per-file size caps (bytes).
+        _DEFAULT_MAX = int(os.environ.get("MAX_ARTIFACT_BYTES", str(16 * 1024 * 1024)))
+        _LARGE_MAX = int(os.environ.get("MAX_ARTIFACT_BYTES_LARGE", str(256 * 1024 * 1024)))
+        _ALLOWED = {
+            "run_result.json",
+            "findings.jsonl",
+            "tool_calls.jsonl",
+            "conversation.jsonl",
+            "findings_pre_verification.jsonl",
+            "report.md",
+        }
+        _SIZE_CAPS: dict[str, int] = {
+            "conversation.jsonl": _LARGE_MAX,
+        }
+
+        # --- Stream multipart parts to disk ---
+        content_type = request.headers.get("content-type", "")
+        boundary: bytes | None = None
+        for part in content_type.split(";"):
+            part = part.strip()
+            if part.startswith("boundary="):
+                boundary = part[len("boundary="):].strip('"').encode("latin-1")
+                break
+
+        if boundary is None:
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            _upload_counter.labels(outcome="bad_request").inc()
+            raise HTTPException(status_code=400, detail="Missing multipart boundary")
+
+        received_files: set[str] = set()
+        total_bytes_received = 0
+        errors: list[str] = []
+
+        # State for the streaming parser callbacks
+        current_filename: list[str | None] = [None]
+        current_fh: list[object] = [None]
+        current_size: list[int] = [0]
+        current_cap: list[int] = [_DEFAULT_MAX]
+        size_exceeded: list[bool] = [False]
+
+        def _on_part_begin() -> None:
+            current_filename[0] = None
+            current_fh[0] = None
+            current_size[0] = 0
+            current_cap[0] = _DEFAULT_MAX
+            size_exceeded[0] = False
+
+        def _on_header_field(data: bytes, start: int, end: int) -> None:
+            pass  # We'll parse header value for Content-Disposition
+
+        _hdr_name: list[bytes] = [b""]
+        _hdr_val: list[bytes] = [b""]
+
+        def _on_header_field_cb(data: bytes, start: int, end: int) -> None:
+            _hdr_name[0] = _hdr_name[0] + data[start:end]
+
+        def _on_header_value_cb(data: bytes, start: int, end: int) -> None:
+            _hdr_val[0] = _hdr_val[0] + data[start:end]
+
+        def _on_header_end() -> None:
+            name = _hdr_name[0].decode("latin-1", errors="replace").lower().strip()
+            val = _hdr_val[0].decode("latin-1", errors="replace").strip()
+            if name == "content-disposition":
+                # Extract filename from: form-data; name="file"; filename="foo.json"
+                fname: str | None = None
+                for seg in val.split(";"):
+                    seg = seg.strip()
+                    if seg.lower().startswith("filename="):
+                        fname = seg[len("filename="):].strip('"').strip("'")
+                if fname is not None:
+                    # Path-traversal protection: reject any non-plain filename
+                    import posixpath as _pp
+                    safe = _pp.basename(fname.replace("\\", "/"))
+                    if safe in _ALLOWED:
+                        current_filename[0] = safe
+                        current_cap[0] = _SIZE_CAPS.get(safe, _DEFAULT_MAX)
+            _hdr_name[0] = b""
+            _hdr_val[0] = b""
+
+        def _on_headers_finished() -> None:
+            fname = current_filename[0]
+            if fname and fname not in received_files:
+                current_fh[0] = open(staging_dir / fname, "wb")
+            else:
+                current_fh[0] = None
+
+        def _on_part_data(data: bytes, start: int, end: int) -> None:
+            nonlocal total_bytes_received
+            chunk = data[start:end]
+            current_size[0] += len(chunk)
+            total_bytes_received += len(chunk)
+            if current_size[0] > current_cap[0]:
+                size_exceeded[0] = True
+                return
+            fh = current_fh[0]
+            if fh is not None:
+                fh.write(chunk)  # type: ignore[union-attr]
+
+        def _on_part_end() -> None:
+            fh = current_fh[0]
+            fname = current_filename[0]
+            if fh is not None:
+                fh.close()  # type: ignore[union-attr]
+                current_fh[0] = None
+            if size_exceeded[0]:
+                # Remove oversized file
+                if fname:
+                    oversized = staging_dir / fname
+                    if oversized.exists():
+                        oversized.unlink()
+                errors.append(
+                    f"{fname}: exceeds max size "
+                    f"({current_cap[0] // (1024*1024)} MiB)"
+                )
+            elif fname is not None:
+                received_files.add(fname)
+
+        callbacks = {
+            "on_part_begin": _on_part_begin,
+            "on_header_field": _on_header_field_cb,
+            "on_header_value": _on_header_value_cb,
+            "on_header_end": _on_header_end,
+            "on_headers_finished": _on_headers_finished,
+            "on_part_data": _on_part_data,
+            "on_part_end": _on_part_end,
+        }
+
+        parser = _MultipartParser(boundary, callbacks)
+        try:
+            async for chunk in request.stream():
+                parser.write(chunk)
+        except Exception as exc:
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            _upload_counter.labels(outcome="stream_error").inc()
+            logger.error("Upload stream error for run %s: %s", run_id, exc)
+            raise HTTPException(status_code=400, detail=f"Stream error: {exc}") from exc
+        finally:
+            # Ensure any open file handle is closed even on error
+            if current_fh[0] is not None:
+                try:
+                    current_fh[0].close()  # type: ignore[union-attr]
+                except Exception:
+                    pass
+
+        if errors:
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            _upload_counter.labels(outcome="size_exceeded").inc()
+            raise HTTPException(status_code=413, detail={"errors": errors})
+
+        if "run_result.json" not in received_files:
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            _upload_counter.labels(outcome="missing_result").inc()
+            raise HTTPException(
+                status_code=422, detail="run_result.json is required but was not uploaded"
+            )
+
+        # --- Atomic rename staging → final ---
+        try:
+            os.rename(staging_dir, final_dir)
+        except FileExistsError:
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            _upload_counter.labels(outcome="conflict").inc()
+            raise HTTPException(
+                status_code=409,
+                detail=f"Result for run {run_id!r} already exists",
+            )
+        except OSError as exc:
+            # Cross-device move fallback (shouldn't happen on single PVC but be safe)
+            try:
+                import shutil as _shutil
+                _shutil.copytree(str(staging_dir), str(final_dir))
+                shutil.rmtree(staging_dir, ignore_errors=True)
+            except FileExistsError:
+                shutil.rmtree(staging_dir, ignore_errors=True)
+                _upload_counter.labels(outcome="conflict").inc()
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Result for run {run_id!r} already exists",
+                ) from exc
+            except Exception as inner_exc:
+                shutil.rmtree(staging_dir, ignore_errors=True)
+                _upload_counter.labels(outcome="rename_error").inc()
+                raise HTTPException(
+                    status_code=500, detail=f"Failed to commit result: {inner_exc}"
+                ) from inner_exc
+
+        duration_ms = int((_time.monotonic() - t_start) * 1000)
+        logger.info(
+            "Upload complete",
+            extra={
+                "run_id": run_id,
+                "experiment_id": experiment_id,
+                "bytes_received": total_bytes_received,
+                "duration_ms": duration_ms,
+                "outcome": "ok",
+            },
+        )
+        _upload_counter.labels(outcome="ok").inc()
+        return {
+            "run_id": run_id,
+            "experiment_id": experiment_id,
+            "files": sorted(received_files),
+            "bytes_received": total_bytes_received,
+        }
+
     async def finalize_experiment(self, experiment_id: str) -> None:
         results = self.collect_results(experiment_id)
         output_dir = self.storage_root / "outputs" / experiment_id
@@ -542,6 +884,8 @@ class ExperimentCoordinator:
 
     async def delete_experiment(self, experiment_id: str) -> None:
         await self.cancel_experiment(experiment_id)
+        # Revoke any pending upload tokens before removing files.
+        await self.db.revoke_upload_tokens_for_experiment(experiment_id)
         experiment_dir = self.storage_root / "outputs" / experiment_id
         if experiment_dir.exists():
             shutil.rmtree(experiment_dir, ignore_errors=True)
@@ -609,6 +953,38 @@ class ExperimentCoordinator:
                         continue
                     from sec_review_framework.data.experiment import ExperimentRun
                     run = ExperimentRun.model_validate_json(run_config_path.read_text())
+                    # For HTTP transport: skip re-dispatch if the token has already been
+                    # consumed (meaning the run completed successfully via upload).
+                    if run.result_transport == "http":
+                        if await self.db.is_upload_token_consumed(run.id):
+                            logger.info(
+                                "Run %s upload token already consumed — skipping re-dispatch",
+                                run.id,
+                            )
+                            continue
+                        # Token not yet issued — this shouldn't happen normally since
+                        # submit_experiment issues tokens, but handle gracefully.
+                        if not await self.db.get_upload_token_issued(run.id):
+                            logger.warning(
+                                "Run %s has no upload token; issuing one for re-dispatch",
+                                run.id,
+                            )
+                            token = await self.db.issue_upload_token(run.id)
+                            upload_url = (
+                                f"{self.coordinator_internal_url}"
+                                f"/api/internal/runs/{run.id}/result"
+                            )
+                            run = run.model_copy(update={
+                                "result_transport": "http",
+                                "upload_url": upload_url,
+                                "upload_token": token,
+                            })
+                            import json as _json
+                            run_dict = run.model_dump(mode="json")
+                            run_dict["upload_token"] = run.upload_token
+                            run_config_path.write_text(
+                                _json.dumps(run_dict, indent=2, default=str)
+                            )
                     try:
                         self._create_k8s_job(experiment_id, run)
                     except Exception as e:
@@ -1934,20 +2310,57 @@ class ExperimentCoordinator:
 
         return problems
 
-    def enrich_model_configs(self, matrix: "ExperimentMatrix") -> None:
-        """Inject api_base/api_key into matrix.model_configs for probe-discovered models.
+    async def model_ids_from_matrix(self, matrix: "ExperimentMatrix") -> set[str]:
+        """Derive the set of model IDs referenced by a matrix's strategy_ids.
 
-        Called after availability validation so synthesized local-LLM models
-        carry the endpoint url and key into the worker run config.
+        For each strategy in ``matrix.strategy_ids``, loads the strategy from
+        the DB and collects ``default.model_id`` plus any override ``model_id``
+        values.  Falls back to ``load_default_registry()`` for builtin strategies
+        that may not yet be in the DB.
+
+        Returns a set of model ID strings.
+        """
+        from sec_review_framework.strategies.strategy_registry import load_default_registry
+
+        model_ids: set[str] = set()
+        registry = load_default_registry()
+
+        for strategy_id in matrix.strategy_ids:
+            strategy = await self.db.get_user_strategy(strategy_id)
+            if strategy is None:
+                # Fall back to the in-memory builtin registry.
+                try:
+                    strategy = registry.get(strategy_id)
+                except KeyError:
+                    continue
+            model_ids.add(strategy.default.model_id)
+            for rule in strategy.overrides:
+                if rule.override.model_id is not None:
+                    model_ids.add(rule.override.model_id)
+
+        if matrix.verifier_model_id is not None:
+            model_ids.add(matrix.verifier_model_id)
+
+        return model_ids
+
+    async def enrich_model_configs(self, matrix: "ExperimentMatrix") -> dict[str, dict]:
+        """Return api_base/api_key enrichment for probe-discovered models in *matrix*.
+
+        Derives the set of model IDs from the matrix's strategy_ids (loading
+        each strategy from the DB or the builtin registry), then returns a
+        ``{model_id: {"api_base": ..., "api_key": ...}}`` dict for any model
+        that has a configured ``api_base`` in the effective registry.
+
+        The returned dict can be used to enrich worker run configs.  The matrix
+        itself is not mutated because ``ExperimentMatrix`` no longer carries a
+        ``model_configs`` field.
         """
         import os as _os
 
         effective = self.effective_registry()
+        ids_to_enrich = await self.model_ids_from_matrix(matrix)
 
-        ids_to_enrich: set[str] = set(matrix.model_ids)
-        if matrix.verifier_model_id is not None:
-            ids_to_enrich.add(matrix.verifier_model_id)
-
+        enriched: dict[str, dict] = {}
         for cfg in effective:
             if cfg.id not in ids_to_enrich:
                 continue
@@ -1955,9 +2368,9 @@ class ExperimentCoordinator:
             if api_base is None:
                 continue
             api_key = _os.environ.get(cfg.api_key_env, "") if cfg.api_key_env else ""
-            matrix.model_configs.setdefault(cfg.id, {}).update(
-                {"api_base": api_base, "api_key": api_key}
-            )
+            enriched[cfg.id] = {"api_base": api_base, "api_key": api_key}
+
+        return enriched
 
     def list_strategies(self) -> list[dict]:
         return [
@@ -2076,16 +2489,34 @@ def _compute_trend_summary(points: list[dict]) -> dict:
 async def retention_cleanup_loop(
     storage_root: Path, retention_days: int, interval_s: int = 3600
 ) -> None:
-    """Background task: deletes experiment directories older than retention_days."""
+    """Background task: deletes experiment directories older than retention_days.
+
+    Also scrubs stale .staging-* directories older than 1 hour to recover
+    disk space from aborted HTTP uploads.
+    """
     while True:
         await asyncio.sleep(interval_s)
         cutoff = datetime.now(UTC) - timedelta(days=retention_days)
+        staging_cutoff = datetime.now(UTC) - timedelta(hours=1)
         outputs_dir = storage_root / "outputs"
         if not outputs_dir.exists():
             continue
         for experiment_dir in outputs_dir.iterdir():
             if not experiment_dir.is_dir():
                 continue
+            # Scrub stale staging dirs (HTTP upload aborts)
+            for child in experiment_dir.iterdir():
+                if child.is_dir() and child.name.startswith(".staging-"):
+                    try:
+                        mtime = datetime.fromtimestamp(child.stat().st_mtime, UTC)
+                        if mtime < staging_cutoff:
+                            shutil.rmtree(child, ignore_errors=True)
+                            logger.info(
+                                "Retention cleanup: removed stale staging dir %s", child.name
+                            )
+                    except Exception:
+                        pass
+            # Remove old experiment output directories
             mtime = datetime.fromtimestamp(experiment_dir.stat().st_mtime, UTC)
             if mtime < cutoff:
                 shutil.rmtree(experiment_dir, ignore_errors=True)
@@ -2167,6 +2598,60 @@ AVG_TOKENS_PER_KLOC = 1400  # prompt + completion, calibrated empirically
 
 
 # ---------------------------------------------------------------------------
+# Strategy API response models
+# ---------------------------------------------------------------------------
+
+
+class StrategySummary(BaseModel):
+    """Lightweight summary returned by GET /strategies (list view)."""
+
+    id: str
+    name: str
+    orchestration_shape: str
+    is_builtin: bool
+    parent_strategy_id: str | None
+
+
+class StrategyCreateRequest(BaseModel):
+    """Body for POST /strategies."""
+
+    parent_strategy_id: str | None = None
+    name: str
+    default: StrategyBundleDefault
+    overrides: list[OverrideRule] = []
+    orchestration_shape: OrchestrationShape
+
+
+class StrategyValidateRequest(BaseModel):
+    """Body for POST /strategies/{id}/validate.
+
+    Mirrors StrategyCreateRequest but all fields optional so partial objects
+    can be validated.
+    """
+
+    name: str | None = None
+    default: StrategyBundleDefault | None = None
+    overrides: list[OverrideRule] | None = None
+    orchestration_shape: OrchestrationShape | None = None
+
+
+# ---------------------------------------------------------------------------
+# Builtin seeding helper
+# ---------------------------------------------------------------------------
+
+
+async def _seed_builtin_strategies(db: "Database") -> None:
+    """Insert any builtin strategies that are not yet in the database."""
+    from sec_review_framework.strategies.strategy_registry import load_default_registry
+
+    registry = load_default_registry()
+    for strategy in registry.list_all():
+        existing = await db.get_user_strategy(strategy.id)
+        if existing is None:
+            await db.insert_user_strategy(strategy)
+
+
+# ---------------------------------------------------------------------------
 # FastAPI application
 # ---------------------------------------------------------------------------
 
@@ -2186,6 +2671,9 @@ async def lifespan(app: FastAPI):
         coordinator = build_coordinator_from_env()
         await coordinator.db.init()
     await coordinator.reconcile()
+
+    # Seed builtin strategies into the DB if they aren't already present.
+    await _seed_builtin_strategies(coordinator.db)
 
     # --- ProviderCatalog ---
     _probe_enabled_env = os.environ.get("PROVIDER_PROBE_ENABLED", "true").strip().lower()
@@ -2344,6 +2832,8 @@ def build_coordinator_from_env() -> ExperimentCoordinator:
         worker_image_pull_policy=os.environ.get(
             "WORKER_IMAGE_PULL_POLICY", "IfNotPresent"
         ),
+        result_transport=os.environ.get("WORKER_RESULT_TRANSPORT", "pvc"),
+        coordinator_internal_url=os.environ.get("COORDINATOR_INTERNAL_URL", ""),
     )
 
 
@@ -2399,25 +2889,25 @@ async def run_smoke_test() -> dict:
                 detail=f"A smoke test is already running: {b['experiment_id']}",
             )
 
+    # Resolve the builtin single_agent strategy from the DB (seeded at startup).
+    smoke_strategy_id = "builtin.single_agent"
+
     matrix = ExperimentMatrix(
         experiment_id=experiment_id,
         dataset_name=dataset_name,
         dataset_version="latest",
-        model_ids=[model_id],
-        strategies=[StrategyName.SINGLE_AGENT],
-        tool_variants=[ToolVariant.WITH_TOOLS],
-        review_profiles=[ReviewProfileName.DEFAULT],
-        verification_variants=[VerificationVariant.NONE],
+        strategy_ids=[smoke_strategy_id],
         num_repetitions=1,
         max_experiment_cost_usd=5.0,
-        strategy_configs={"single_agent": {"max_turns": 10}},
     )
 
     await coordinator.submit_experiment(matrix)
+    # total_runs = one run per strategy × num_repetitions (no cross-product axes).
+    total_runs = len(matrix.strategy_ids) * matrix.num_repetitions
     return {
         "experiment_id": experiment_id,
         "message": "Smoke test experiment submitted. Monitor progress on the experiment detail page.",
-        "total_runs": len(matrix.expand()),
+        "total_runs": total_runs,
     }
 
 
@@ -2431,8 +2921,10 @@ async def submit_experiment(matrix: ExperimentMatrix) -> dict:
     unless the request body contains ``allow_unavailable_models: true``.
     """
     if not matrix.allow_unavailable_models:
+        # Derive the set of model IDs from the strategies so we can validate them.
+        model_ids = sorted(await coordinator.model_ids_from_matrix(matrix))
         problems = coordinator.validate_model_availability(
-            matrix.model_ids,
+            model_ids,
             verifier_model_id=matrix.verifier_model_id,
         )
         if problems:
@@ -2443,9 +2935,11 @@ async def submit_experiment(matrix: ExperimentMatrix) -> dict:
                     "models": problems,
                 },
             )
-    coordinator.enrich_model_configs(matrix)
+    await coordinator.enrich_model_configs(matrix)
     experiment_id = await coordinator.submit_experiment(matrix)
-    return {"experiment_id": experiment_id, "total_runs": len(matrix.expand())}
+    # total_runs = one run per strategy × num_repetitions (no cross-product axes).
+    total_runs = len(matrix.strategy_ids) * matrix.num_repetitions
+    return {"experiment_id": experiment_id, "total_runs": total_runs}
 
 
 @app.get("/experiments")
@@ -2457,7 +2951,10 @@ async def list_experiments() -> list[dict]:
 @app.post("/experiments/estimate")
 async def estimate_experiment(req: EstimateRequest) -> dict:
     """Pre-flight cost estimate. Call before submit to avoid expensive mistakes."""
-    runs = req.matrix.expand()
+    from sec_review_framework.strategies.strategy_registry import build_registry_from_db
+
+    registry = await build_registry_from_db(coordinator.db)
+    runs = req.matrix.expand(registry=registry)
     estimates_by_model: dict[str, float] = {}
     for run in runs:
         tokens = int(req.target_kloc * AVG_TOKENS_PER_KLOC)
@@ -2780,10 +3277,179 @@ def list_models(
     return coordinator.list_models(flat=use_flat)
 
 
-@app.get("/strategies")
-def list_strategies() -> list[dict]:
-    """List available scan strategies."""
-    return coordinator.list_strategies()
+@app.get("/strategies", response_model=list[StrategySummary])
+async def list_strategies() -> list[StrategySummary]:
+    """List all builtin and user strategies (summary view)."""
+    strategies = await coordinator.db.list_user_strategies()
+    return [
+        StrategySummary(
+            id=s.id,
+            name=s.name,
+            orchestration_shape=s.orchestration_shape.value,
+            is_builtin=s.is_builtin,
+            parent_strategy_id=s.parent_strategy_id,
+        )
+        for s in strategies
+    ]
+
+
+@app.get("/strategies/{strategy_id}", response_model=UserStrategy)
+async def get_strategy(strategy_id: str) -> UserStrategy:
+    """Return the full UserStrategy including overrides. 404 if not found."""
+    strategy = await coordinator.db.get_user_strategy(strategy_id)
+    if strategy is None:
+        raise HTTPException(status_code=404, detail=f"Strategy {strategy_id!r} not found.")
+    return strategy
+
+
+@app.post("/strategies", response_model=UserStrategy, status_code=201)
+async def create_strategy(body: StrategyCreateRequest) -> UserStrategy:
+    """Create a new user strategy.
+
+    The server mints an id of the form ``user.<slug>.<6-char-hash>``.
+    The hash is derived from the content (name, shape, default, overrides,
+    parent_strategy_id) — NOT from created_at — so identical submissions
+    produce the same id and 409 on the second attempt.
+    Returns 409 if a strategy with the same computed id already exists.
+    """
+    import hashlib
+    import json as _json
+    import re as _re
+
+    from fastapi.exceptions import RequestValidationError
+    from pydantic import ValidationError as _ValidationError
+    from sec_review_framework.data.strategy_bundle import _make_json_serializable
+
+    # Compute stable id: user.<slug>.<6-char-hex-of-hash>
+    slug = _re.sub(r"[^a-z0-9]+", "-", body.name.lower()).strip("-") or "strategy"
+
+    # Hash content-only fields (exclude created_at and id which vary per call).
+    content_dict = {
+        "name": body.name,
+        "parent_strategy_id": body.parent_strategy_id,
+        "orchestration_shape": body.orchestration_shape.value,
+        "default": body.default.model_dump(),
+        "overrides": [r.model_dump() for r in body.overrides],
+    }
+    content_json = _json.dumps(
+        _make_json_serializable(content_dict), sort_keys=True, separators=(",", ":")
+    )
+    content_hash = hashlib.sha256(content_json.encode()).hexdigest()[:6]
+    strategy_id = f"user.{slug}.{content_hash}"
+
+    # Validate the full UserStrategy via pydantic (runs shape-specific validators).
+    try:
+        strategy = UserStrategy(
+            id=strategy_id,
+            name=body.name,
+            parent_strategy_id=body.parent_strategy_id,
+            orchestration_shape=body.orchestration_shape,
+            default=body.default,
+            overrides=body.overrides,
+            created_at=datetime.now(UTC),
+            is_builtin=False,
+        )
+    except _ValidationError as exc:
+        raise RequestValidationError(errors=exc.errors())
+
+    existing = await coordinator.db.get_user_strategy(strategy_id)
+    if existing is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"A strategy with id {strategy_id!r} already exists.",
+        )
+
+    await coordinator.db.insert_user_strategy(strategy)
+    return strategy
+
+
+@app.post("/strategies/{strategy_id}/validate")
+async def validate_strategy(strategy_id: str, body: StrategyValidateRequest) -> dict:
+    """Dry-run validation of a strategy-like object without persisting.
+
+    Returns ``{valid: true}`` or ``{valid: false, errors: [...]}``.
+
+    Checks performed:
+    - Template placeholders in user_prompt_template resolve without KeyError.
+    - Glob patterns in overrides compile via fnmatch.translate without error.
+    - Override keys are valid for the given orchestration_shape.
+    """
+    import fnmatch as _fnmatch
+
+    errors: list[str] = []
+
+    # Determine shape from body or from the existing strategy
+    shape = body.orchestration_shape
+    if shape is None:
+        existing = await coordinator.db.get_user_strategy(strategy_id)
+        if existing is not None:
+            shape = existing.orchestration_shape
+
+    # Validate user_prompt_template placeholders
+    if body.default is not None:
+        template = body.default.user_prompt_template
+        try:
+            template.format(repo_summary="__test__", finding_output_format="__fmt__")
+        except KeyError as exc:
+            errors.append(f"user_prompt_template missing placeholder: {exc}")
+        except Exception as exc:
+            errors.append(f"user_prompt_template invalid: {exc}")
+
+    # Validate override keys if overrides and shape are provided
+    if body.overrides is not None and shape is not None:
+        if shape in (OrchestrationShape.SINGLE_AGENT, OrchestrationShape.DIFF_REVIEW):
+            if body.overrides:
+                errors.append(
+                    f"orchestration_shape={shape.value!r} must have no overrides, "
+                    f"but {len(body.overrides)} override(s) were provided."
+                )
+        elif shape == OrchestrationShape.PER_VULN_CLASS:
+            from sec_review_framework.data.strategy_bundle import _VALID_VULN_CLASS_VALUES
+            for rule in body.overrides:
+                if rule.key not in _VALID_VULN_CLASS_VALUES:
+                    errors.append(
+                        f"Override key {rule.key!r} is not a valid VulnClass name."
+                    )
+        elif shape in (OrchestrationShape.PER_FILE, OrchestrationShape.SAST_FIRST):
+            for rule in body.overrides:
+                try:
+                    _fnmatch.translate(rule.key)
+                except Exception as exc:
+                    errors.append(
+                        f"Override key {rule.key!r} is not a valid glob pattern: {exc}"
+                    )
+
+    if errors:
+        return {"valid": False, "errors": errors}
+    return {"valid": True}
+
+
+@app.delete("/strategies/{strategy_id}", status_code=204)
+async def delete_strategy(strategy_id: str) -> None:
+    """Delete a user strategy.
+
+    Returns 403 if the strategy is a builtin.
+    Returns 409 if any run references the strategy.
+    Returns 404 if not found.
+    Returns 204 on success.
+    """
+    strategy = await coordinator.db.get_user_strategy(strategy_id)
+    if strategy is None:
+        raise HTTPException(status_code=404, detail=f"Strategy {strategy_id!r} not found.")
+    if strategy.is_builtin:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Strategy {strategy_id!r} is a builtin and cannot be deleted.",
+        )
+    if await coordinator.db.strategy_is_referenced_by_runs(strategy_id):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Strategy {strategy_id!r} is referenced by one or more runs "
+                "and cannot be deleted."
+            ),
+        )
+    await coordinator.db.delete_user_strategy(strategy_id)
 
 
 @app.get("/profiles")
@@ -2802,6 +3468,31 @@ def list_templates() -> list[dict]:
 def list_tool_extensions() -> list[dict]:
     """List available MCP tool extensions with availability status."""
     return coordinator.list_tool_extensions()
+
+
+# ---------------------------------------------------------------------------
+# Internal upload endpoint (Step 4)
+# ---------------------------------------------------------------------------
+
+@app.post("/internal/runs/{run_id}/result", status_code=200)
+async def upload_run_result(run_id: str, request: Request) -> dict:
+    """Receive streamed multipart artifact bundle from a worker pod.
+
+    Served at both /internal/... and /api/internal/... via the /api prefix
+    middleware already present in the app.  Workers authenticate with a
+    per-run bearer token issued at dispatch time.
+    """
+    return await coordinator.handle_run_result_upload(run_id, request)
+
+
+# ---------------------------------------------------------------------------
+# Prometheus metrics endpoint (Step 10)
+# ---------------------------------------------------------------------------
+
+if _PROMETHEUS_AVAILABLE and _make_asgi_app is not None:
+    from starlette.routing import Mount
+    _metrics_app = _make_asgi_app()
+    app.mount("/metrics", _metrics_app)
 
 
 # Static files — mount last so all API routes take priority

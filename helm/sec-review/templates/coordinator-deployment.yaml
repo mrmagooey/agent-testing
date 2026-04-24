@@ -88,6 +88,11 @@ spec:
               value: {{ .Values.workerTools.devdocs.docsetsPath | quote }}
             - name: DEVDOCS_ALLOW_DOCSETS
               value: {{ .Values.workerTools.devdocs.docsets | join "," | quote }}
+            # Result transport configuration
+            - name: WORKER_RESULT_TRANSPORT
+              value: {{ .Values.workerResultTransport | default "pvc" | quote }}
+            - name: COORDINATOR_INTERNAL_URL
+              value: "http://{{ include "sec-review.fullname" . }}-coordinator:{{ .Values.coordinator.service.port }}"
             {{- with .Values.coordinator.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

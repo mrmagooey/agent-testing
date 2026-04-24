@@ -299,3 +299,171 @@ async def test_create_run_tool_extensions_single(db: Database):
     row = await db.get_run("run-ext-devdocs")
     assert row is not None
     assert row["tool_extensions"] == "devdocs"
+
+
+# ---------------------------------------------------------------------------
+# Upload token CRUD (HTTP result transport)
+# ---------------------------------------------------------------------------
+
+
+async def _setup_run(db: Database, run_id: str = "run-1", experiment_id: str = "experiment-1") -> None:
+    """Helper: ensure experiment + run exist for token tests."""
+    await db.create_experiment(
+        experiment_id=experiment_id,
+        config_json="{}",
+        total_runs=1,
+        max_cost_usd=None,
+    )
+    await db.create_run(
+        run_id=run_id,
+        experiment_id=experiment_id,
+        config_json="{}",
+        model_id="gpt-4o",
+        strategy="single_agent",
+        tool_variant="with_tools",
+        review_profile="default",
+        verification_variant="none",
+    )
+
+
+@pytest.mark.asyncio
+async def test_issue_upload_token_returns_plaintext(db: Database) -> None:
+    """issue_upload_token returns a non-empty string (the plaintext token)."""
+    await _setup_run(db, "run-tok-1", "exp-tok-1")
+    token = await db.issue_upload_token("run-tok-1")
+    assert isinstance(token, str)
+    assert len(token) > 10  # 32 URL-safe bytes base64 = ~43 chars
+
+
+@pytest.mark.asyncio
+async def test_issue_upload_token_not_stored_as_plaintext(db: Database) -> None:
+    """The token stored in the DB is the SHA-256 hash, not the plaintext."""
+    import aiosqlite
+    import hashlib
+
+    await _setup_run(db, "run-tok-2", "exp-tok-2")
+    token = await db.issue_upload_token("run-tok-2")
+
+    async with aiosqlite.connect(db.db_path) as conn:
+        async with conn.execute(
+            "SELECT token_hash FROM run_upload_tokens WHERE run_id = ?",
+            ("run-tok-2",),
+        ) as cursor:
+            row = await cursor.fetchone()
+
+    assert row is not None
+    stored_hash = row[0]
+    # Must NOT be the plaintext token
+    assert stored_hash != token
+    # Must be the SHA-256 hex digest
+    expected = hashlib.sha256(token.encode()).hexdigest()
+    assert stored_hash == expected
+
+
+@pytest.mark.asyncio
+async def test_consume_upload_token_valid(db: Database) -> None:
+    """consume_upload_token returns True for a valid, unconsumed token."""
+    await _setup_run(db, "run-tok-3", "exp-tok-3")
+    token = await db.issue_upload_token("run-tok-3")
+    result = await db.consume_upload_token("run-tok-3", token)
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_consume_upload_token_is_single_use(db: Database) -> None:
+    """A token can only be consumed once — second call returns False."""
+    await _setup_run(db, "run-tok-4", "exp-tok-4")
+    token = await db.issue_upload_token("run-tok-4")
+    assert await db.consume_upload_token("run-tok-4", token) is True
+    assert await db.consume_upload_token("run-tok-4", token) is False
+
+
+@pytest.mark.asyncio
+async def test_consume_upload_token_wrong_token(db: Database) -> None:
+    """consume_upload_token returns False when the token doesn't match."""
+    await _setup_run(db, "run-tok-5", "exp-tok-5")
+    await db.issue_upload_token("run-tok-5")
+    result = await db.consume_upload_token("run-tok-5", "wrong-token-value")
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_consume_upload_token_no_token_issued(db: Database) -> None:
+    """consume_upload_token returns False when no token was issued."""
+    await _setup_run(db, "run-tok-6", "exp-tok-6")
+    result = await db.consume_upload_token("run-tok-6", "any-token")
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_get_upload_token_issued_before_issue(db: Database) -> None:
+    """get_upload_token_issued returns False before a token is issued."""
+    await _setup_run(db, "run-tok-7", "exp-tok-7")
+    assert await db.get_upload_token_issued("run-tok-7") is False
+
+
+@pytest.mark.asyncio
+async def test_get_upload_token_issued_after_issue(db: Database) -> None:
+    """get_upload_token_issued returns True after a token is issued."""
+    await _setup_run(db, "run-tok-8", "exp-tok-8")
+    await db.issue_upload_token("run-tok-8")
+    assert await db.get_upload_token_issued("run-tok-8") is True
+
+
+@pytest.mark.asyncio
+async def test_is_upload_token_consumed_before_consume(db: Database) -> None:
+    """is_upload_token_consumed returns False before consumption."""
+    await _setup_run(db, "run-tok-9", "exp-tok-9")
+    await db.issue_upload_token("run-tok-9")
+    assert await db.is_upload_token_consumed("run-tok-9") is False
+
+
+@pytest.mark.asyncio
+async def test_is_upload_token_consumed_after_consume(db: Database) -> None:
+    """is_upload_token_consumed returns True after successful consumption."""
+    await _setup_run(db, "run-tok-10", "exp-tok-10")
+    token = await db.issue_upload_token("run-tok-10")
+    await db.consume_upload_token("run-tok-10", token)
+    assert await db.is_upload_token_consumed("run-tok-10") is True
+
+
+@pytest.mark.asyncio
+async def test_revoke_upload_tokens_for_experiment(db: Database) -> None:
+    """revoke_upload_tokens_for_experiment deletes tokens for all runs in experiment."""
+    exp_id = "exp-tok-revoke"
+    await db.create_experiment(
+        experiment_id=exp_id,
+        config_json="{}",
+        total_runs=2,
+        max_cost_usd=None,
+    )
+    for run_id in ("run-rv-1", "run-rv-2"):
+        await db.create_run(
+            run_id=run_id,
+            experiment_id=exp_id,
+            config_json="{}",
+            model_id="gpt-4o",
+            strategy="single_agent",
+            tool_variant="with_tools",
+            review_profile="default",
+            verification_variant="none",
+        )
+        await db.issue_upload_token(run_id)
+
+    deleted = await db.revoke_upload_tokens_for_experiment(exp_id)
+    assert deleted == 2
+
+    # Tokens are gone — consume_upload_token should fail for both
+    for run_id in ("run-rv-1", "run-rv-2"):
+        assert await db.get_upload_token_issued(run_id) is False
+
+
+@pytest.mark.asyncio
+async def test_issue_upload_token_idempotent(db: Database) -> None:
+    """Calling issue_upload_token twice on the same run does not raise."""
+    await _setup_run(db, "run-tok-idem", "exp-tok-idem")
+    token1 = await db.issue_upload_token("run-tok-idem")
+    # Second call — uses ON CONFLICT DO NOTHING so the original hash is preserved
+    token2 = await db.issue_upload_token("run-tok-idem")
+    # Original token still works
+    assert await db.consume_upload_token("run-tok-idem", token1) is True

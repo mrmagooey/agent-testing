@@ -46,6 +46,8 @@ def _make_coordinator(tmp_path: Path, db: Database) -> ExperimentCoordinator:
         pricing={
             "gpt-4o": ModelPricing(input_per_million=5.0, output_per_million=15.0),
             "claude-opus-4": ModelPricing(input_per_million=15.0, output_per_million=75.0),
+            # Builtin strategies use this model by default
+            "claude-opus-4-5": ModelPricing(input_per_million=15.0, output_per_million=75.0),
         }
     )
     config_dir = tmp_path / "config"
@@ -65,17 +67,16 @@ def _make_coordinator(tmp_path: Path, db: Database) -> ExperimentCoordinator:
 
 
 def _minimal_matrix() -> dict:
-    """Minimal ExperimentMatrix payload for API calls."""
+    """Minimal ExperimentMatrix payload for API calls.
+
+    Uses the builtin.single_agent strategy which is seeded in the coordinator_client
+    fixture via _seed_builtin_strategies().
+    """
     return {
         "experiment_id": "test-experiment",
         "dataset_name": "test-dataset",
         "dataset_version": "1.0.0",
-        "model_ids": ["gpt-4o"],
-        "strategies": ["single_agent"],
-        "tool_variants": ["with_tools"],
-        "review_profiles": ["default"],
-        "verification_variants": ["none"],
-        "parallel_modes": [False],
+        "strategy_ids": ["builtin.single_agent"],
     }
 
 
@@ -86,8 +87,12 @@ def _minimal_matrix() -> dict:
 @pytest.fixture
 async def coordinator_client(tmp_path: Path):
     """TestClient with the global coordinator patched to a temp instance."""
+    from sec_review_framework.coordinator import _seed_builtin_strategies
+
     db = Database(tmp_path / "test.db")
     await db.init()
+    # Seed builtin strategies so /strategies endpoint returns populated data.
+    await _seed_builtin_strategies(db)
 
     c = _make_coordinator(tmp_path, db)
 
@@ -131,18 +136,28 @@ def test_list_strategies(coordinator_client):
     assert resp.status_code == 200
     data = resp.json()
     assert isinstance(data, list)
-    names = {s["name"] for s in data}
-    # All StrategyName enum values should be present
-    for strategy in StrategyName:
-        assert strategy.value in names, f"{strategy.value} missing from /strategies"
+    # Builtins are seeded — the list should contain at least one entry.
+    assert len(data) > 0
+    # Each summary must have the required fields.
+    for item in data:
+        assert "id" in item
+        assert "name" in item
+        assert "orchestration_shape" in item
+        assert "is_builtin" in item
 
 
-def test_list_strategies_has_description(coordinator_client):
+def test_list_strategies_builtins_present(coordinator_client):
     client, *_ = coordinator_client
     data = client.get("/strategies").json()
-    for item in data:
-        assert "name" in item
-        assert "description" in item
+    ids = {s["id"] for s in data}
+    for builtin_id in (
+        "builtin.single_agent",
+        "builtin.per_file",
+        "builtin.per_vuln_class",
+        "builtin.sast_first",
+        "builtin.diff_review",
+    ):
+        assert builtin_id in ids, f"{builtin_id} missing from /strategies"
 
 
 # ---------------------------------------------------------------------------
@@ -201,7 +216,7 @@ def test_estimate_experiment_returns_cost(coordinator_client):
     assert "estimated_cost_usd" in data
     assert "by_model" in data
     assert "warning" in data
-    assert data["total_runs"] == 1  # 1 model * 1 strategy * 1 tool * 1 profile * 1 verif
+    assert data["total_runs"] == 1  # 1 strategy → 1 run
 
 
 def test_estimate_experiment_cost_is_positive_for_known_model(coordinator_client):
@@ -212,23 +227,24 @@ def test_estimate_experiment_cost_is_positive_for_known_model(coordinator_client
     }
     data = client.post("/experiments/estimate", json=payload).json()
     assert data["estimated_cost_usd"] >= 0.0
-    assert "gpt-4o" in data["by_model"]
+    # Builtin strategies use claude-opus-4-5 as default model
+    assert "claude-opus-4-5" in data["by_model"]
 
 
 def test_estimate_experiment_larger_matrix(coordinator_client):
     client, *_ = coordinator_client
     payload = {
         "matrix": {
-            **_minimal_matrix(),
             "experiment_id": "big-experiment",
-            "model_ids": ["gpt-4o", "claude-opus-4"],
-            "strategies": ["single_agent", "per_file"],
+            "dataset_name": "test-dataset",
+            "dataset_version": "1.0.0",
+            "strategy_ids": ["builtin.single_agent", "builtin.per_file"],
         },
         "target_kloc": 2.0,
     }
     data = client.post("/experiments/estimate", json=payload).json()
-    # 2 models * 2 strategies = 4 runs (1 tool * 1 profile * 1 verif)
-    assert data["total_runs"] == 4
+    # 2 strategies = 2 runs
+    assert data["total_runs"] == 2
 
 
 # ---------------------------------------------------------------------------
@@ -364,20 +380,19 @@ def test_get_results_markdown_404_when_not_finalized(coordinator_client):
 
 @pytest.mark.asyncio
 async def test_submit_experiment_creates_db_record(tmp_path: Path):
+    from sec_review_framework.coordinator import _seed_builtin_strategies
+
     db = Database(tmp_path / "test.db")
     await db.init()
+    # Seed builtins so expand() can resolve "builtin.single_agent".
+    await _seed_builtin_strategies(db)
     c = _make_coordinator(tmp_path, db)
 
     matrix = ExperimentMatrix(
         experiment_id="submit-test",
         dataset_name="ds",
         dataset_version="1.0",
-        model_ids=["gpt-4o"],
-        strategies=[StrategyName.SINGLE_AGENT],
-        tool_variants=[ToolVariant.WITH_TOOLS],
-        review_profiles=[ReviewProfileName.DEFAULT],
-        verification_variants=[VerificationVariant.NONE],
-        parallel_modes=[False],
+        strategy_ids=["builtin.single_agent"],
     )
 
     experiment_id = await c.submit_experiment(matrix)
@@ -666,3 +681,285 @@ async def test_shutdown_cancels_background_tasks_when_gated_on(tmp_path, monkeyp
                 assert client.get("/health").status_code == 200
     # TestClient.__exit__ triggers the shutdown handler, which cancels + awaits.
     assert coord_module._background_tasks == set()
+
+
+# ---------------------------------------------------------------------------
+# Upload handler — POST /internal/runs/{run_id}/result  (Step 4)
+# ---------------------------------------------------------------------------
+
+def _build_multipart(files: dict[str, bytes]) -> tuple[bytes, str]:
+    """Build a raw multipart/form-data body for testing.
+
+    Returns (body_bytes, content_type_header).
+    """
+    boundary = b"testboundary1234567890"
+    parts = []
+    for name, data in files.items():
+        parts.append(
+            b"--" + boundary + b"\r\n"
+            b'Content-Disposition: form-data; name="file"; filename="' + name.encode() + b'"\r\n'
+            b"Content-Type: application/octet-stream\r\n"
+            b"\r\n" + data + b"\r\n"
+        )
+    body = b"".join(parts) + b"--" + boundary + b"--\r\n"
+    content_type = f"multipart/form-data; boundary={boundary.decode()}"
+    return body, content_type
+
+
+async def _setup_upload_run(db: Database, tmp_path: Path, run_id: str = "upload-run-1") -> tuple[str, str]:
+    """Create an experiment + run in the DB and issue a token. Returns (experiment_id, token)."""
+    exp_id = f"exp-for-{run_id}"
+    await db.create_experiment(
+        experiment_id=exp_id,
+        config_json="{}",
+        total_runs=1,
+        max_cost_usd=None,
+    )
+    await db.create_run(
+        run_id=run_id,
+        experiment_id=exp_id,
+        config_json="{}",
+        model_id="gpt-4o",
+        strategy="single_agent",
+        tool_variant="with_tools",
+        review_profile="default",
+        verification_variant="none",
+    )
+    token = await db.issue_upload_token(run_id)
+    return exp_id, token
+
+
+@pytest.mark.asyncio
+async def test_upload_handler_success(tmp_path: Path) -> None:
+    """A valid multipart upload with run_result.json returns 200 and commits files."""
+    from sec_review_framework.coordinator import _seed_builtin_strategies
+
+    db = Database(tmp_path / "test.db")
+    await db.init()
+    await _seed_builtin_strategies(db)
+    c = _make_coordinator(tmp_path, db)
+    c.result_transport = "http"
+
+    run_id = "upload-run-ok"
+    exp_id, token = await _setup_upload_run(db, tmp_path, run_id)
+
+    body, ct = _build_multipart({
+        "run_result.json": b'{"status": "completed"}',
+        "findings.jsonl": b'{"id": "f1"}\n',
+    })
+
+    with patch.object(coord_module, "coordinator", c):
+        with patch.object(c, "reconcile", return_value=None):
+            with TestClient(app) as client:
+                resp = client.post(
+                    f"/api/internal/runs/{run_id}/result",
+                    content=body,
+                    headers={
+                        "Content-Type": ct,
+                        "Authorization": f"Bearer {token}",
+                    },
+                )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["run_id"] == run_id
+    assert "run_result.json" in data["files"]
+
+    # File should be committed to the final dir
+    final_dir = tmp_path / "storage" / "outputs" / exp_id / run_id
+    assert (final_dir / "run_result.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_upload_handler_missing_bearer_returns_403(tmp_path: Path) -> None:
+    """Omitting the Authorization header returns 403."""
+    from sec_review_framework.coordinator import _seed_builtin_strategies
+
+    db = Database(tmp_path / "test.db")
+    await db.init()
+    await _seed_builtin_strategies(db)
+    c = _make_coordinator(tmp_path, db)
+
+    run_id = "upload-run-no-auth"
+    exp_id, _ = await _setup_upload_run(db, tmp_path, run_id)
+    body, ct = _build_multipart({"run_result.json": b"{}"})
+
+    with patch.object(coord_module, "coordinator", c):
+        with patch.object(c, "reconcile", return_value=None):
+            with TestClient(app) as client:
+                resp = client.post(
+                    f"/api/internal/runs/{run_id}/result",
+                    content=body,
+                    headers={"Content-Type": ct},
+                )
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_upload_handler_wrong_token_returns_403(tmp_path: Path) -> None:
+    """An incorrect bearer token returns 403."""
+    from sec_review_framework.coordinator import _seed_builtin_strategies
+
+    db = Database(tmp_path / "test.db")
+    await db.init()
+    await _seed_builtin_strategies(db)
+    c = _make_coordinator(tmp_path, db)
+
+    run_id = "upload-run-bad-tok"
+    exp_id, _real_token = await _setup_upload_run(db, tmp_path, run_id)
+    body, ct = _build_multipart({"run_result.json": b"{}"})
+
+    with patch.object(coord_module, "coordinator", c):
+        with patch.object(c, "reconcile", return_value=None):
+            with TestClient(app) as client:
+                resp = client.post(
+                    f"/api/internal/runs/{run_id}/result",
+                    content=body,
+                    headers={
+                        "Content-Type": ct,
+                        "Authorization": "Bearer wrong-token-value",
+                    },
+                )
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_upload_handler_duplicate_returns_409(tmp_path: Path) -> None:
+    """A second upload for the same run returns 409 (result dir already exists)."""
+    from sec_review_framework.coordinator import _seed_builtin_strategies
+
+    db = Database(tmp_path / "test.db")
+    await db.init()
+    await _seed_builtin_strategies(db)
+    c = _make_coordinator(tmp_path, db)
+    c.result_transport = "http"
+
+    run_id = "upload-run-dup"
+    exp_id, token = await _setup_upload_run(db, tmp_path, run_id)
+
+    body, ct = _build_multipart({"run_result.json": b'{"status": "completed"}'})
+
+    # Pre-create the final dir so rename fails with FileExistsError
+    final_dir = tmp_path / "storage" / "outputs" / exp_id / run_id
+    final_dir.mkdir(parents=True, exist_ok=True)
+
+    with patch.object(coord_module, "coordinator", c):
+        with patch.object(c, "reconcile", return_value=None):
+            with TestClient(app) as client:
+                resp = client.post(
+                    f"/api/internal/runs/{run_id}/result",
+                    content=body,
+                    headers={
+                        "Content-Type": ct,
+                        "Authorization": f"Bearer {token}",
+                    },
+                )
+    assert resp.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_upload_handler_missing_run_result_json_returns_422(tmp_path: Path) -> None:
+    """Uploading without run_result.json returns 422 Unprocessable Entity."""
+    from sec_review_framework.coordinator import _seed_builtin_strategies
+
+    db = Database(tmp_path / "test.db")
+    await db.init()
+    await _seed_builtin_strategies(db)
+    c = _make_coordinator(tmp_path, db)
+    c.result_transport = "http"
+
+    run_id = "upload-run-no-result"
+    exp_id, token = await _setup_upload_run(db, tmp_path, run_id)
+
+    # Upload only a non-essential file
+    body, ct = _build_multipart({"findings.jsonl": b'{"id": "f1"}\n'})
+
+    with patch.object(coord_module, "coordinator", c):
+        with patch.object(c, "reconcile", return_value=None):
+            with TestClient(app) as client:
+                resp = client.post(
+                    f"/api/internal/runs/{run_id}/result",
+                    content=body,
+                    headers={
+                        "Content-Type": ct,
+                        "Authorization": f"Bearer {token}",
+                    },
+                )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_upload_handler_path_traversal_rejected(tmp_path: Path) -> None:
+    """Files with path-traversal filenames (../../etc/passwd) are silently ignored.
+
+    The handler should not crash and run_result.json must still be required,
+    so the upload returns 422 (missing run_result.json) rather than 200.
+    """
+    from sec_review_framework.coordinator import _seed_builtin_strategies
+
+    db = Database(tmp_path / "test.db")
+    await db.init()
+    await _seed_builtin_strategies(db)
+    c = _make_coordinator(tmp_path, db)
+    c.result_transport = "http"
+
+    run_id = "upload-run-traversal"
+    exp_id, token = await _setup_upload_run(db, tmp_path, run_id)
+
+    # Build body with a traversal filename
+    boundary = b"testboundary9876"
+    body = (
+        b"--" + boundary + b"\r\n"
+        b'Content-Disposition: form-data; name="file"; filename="../../etc/passwd"\r\n'
+        b"Content-Type: application/octet-stream\r\n"
+        b"\r\nEVIL\r\n"
+        b"--" + boundary + b"--\r\n"
+    )
+    ct = f"multipart/form-data; boundary={boundary.decode()}"
+
+    with patch.object(coord_module, "coordinator", c):
+        with patch.object(c, "reconcile", return_value=None):
+            with TestClient(app) as client:
+                resp = client.post(
+                    f"/api/internal/runs/{run_id}/result",
+                    content=body,
+                    headers={
+                        "Content-Type": ct,
+                        "Authorization": f"Bearer {token}",
+                    },
+                )
+    # Path-traversal file was ignored; run_result.json missing → 422
+    assert resp.status_code == 422
+
+    # No files should have been written outside the staging area
+    # (staging area is cleaned up on error, so the output dir shouldn't exist)
+    outputs_dir = tmp_path / "storage" / "outputs" / exp_id
+    for child in (outputs_dir.iterdir() if outputs_dir.exists() else []):
+        assert not child.name.startswith(".."), "path traversal file written!"
+
+
+@pytest.mark.asyncio
+async def test_upload_token_is_single_use_via_http(tmp_path: Path) -> None:
+    """After a successful upload, the same token is rejected with 403."""
+    from sec_review_framework.coordinator import _seed_builtin_strategies
+
+    db = Database(tmp_path / "test.db")
+    await db.init()
+    await _seed_builtin_strategies(db)
+    c = _make_coordinator(tmp_path, db)
+    c.result_transport = "http"
+
+    run_id = "upload-run-single-use"
+    exp_id, token = await _setup_upload_run(db, tmp_path, run_id)
+    body, ct = _build_multipart({"run_result.json": b'{"status": "completed"}'})
+    headers = {"Content-Type": ct, "Authorization": f"Bearer {token}"}
+
+    with patch.object(coord_module, "coordinator", c):
+        with patch.object(c, "reconcile", return_value=None):
+            with TestClient(app) as client:
+                # First upload succeeds
+                r1 = client.post(f"/api/internal/runs/{run_id}/result", content=body, headers=headers)
+                assert r1.status_code == 200
+                # Second attempt with same token → 403
+                r2 = client.post(f"/api/internal/runs/{run_id}/result", content=body, headers=headers)
+                assert r2.status_code == 403

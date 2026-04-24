@@ -3,7 +3,8 @@
 import hashlib
 from datetime import UTC, datetime
 from enum import Enum
-from pydantic import BaseModel, Field, field_serializer, field_validator
+from typing import Literal
+from pydantic import BaseModel, Field, field_serializer
 
 from sec_review_framework.data.evaluation import EvaluationResult, VerificationResult
 from sec_review_framework.data.findings import Finding, StrategyOutput
@@ -41,25 +42,44 @@ class ReviewProfileName(str, Enum):
     QUICK_SCAN = "quick_scan"
 
 
-class PromptSnapshot(BaseModel):
-    """Immutable record of every prompt surface used in a single experiment run."""
+class BundleSnapshot(BaseModel):
+    """Immutable content-addressed snapshot of a UserStrategy bundle.
+
+    Hashes the canonical JSON of the entire UserStrategy (default bundle +
+    overrides + orchestration_shape), so any prompt or config change is
+    reflected in the snapshot_id.
+    """
 
     snapshot_id: str
+    strategy_id: str
     captured_at: datetime
-    system_prompt: str
-    user_message_template: str
-    review_profile_modifier: str | None = None
-    finding_output_format: str
-    verification_prompt: str | None = None
-    clean_prompt: str | None = None
-    injected_prompt: str | None = None
-    injection_template_id: str | None = None
+    bundle_json: str  # canonical JSON of the full UserStrategy
 
     @classmethod
-    def capture(cls, **kwargs: str | None) -> "PromptSnapshot":
-        blob = "".join(str(v) for v in kwargs.values() if v)
-        snap_id = hashlib.sha256(blob.encode()).hexdigest()[:16]
-        return cls(snapshot_id=snap_id, captured_at=datetime.now(UTC).replace(tzinfo=None), **kwargs)
+    def capture(cls, strategy: "UserStrategy") -> "BundleSnapshot":  # type: ignore[name-defined]
+        """Build a BundleSnapshot from a UserStrategy.
+
+        Parameters
+        ----------
+        strategy:
+            The fully-resolved UserStrategy whose canonical JSON will be hashed.
+        """
+        from sec_review_framework.data.strategy_bundle import canonical_json
+
+        cjson = canonical_json(strategy)
+        snap_id = hashlib.sha256(cjson.encode()).hexdigest()[:16]
+        return cls(
+            snapshot_id=snap_id,
+            strategy_id=strategy.id,
+            captured_at=datetime.now(UTC).replace(tzinfo=None),
+            bundle_json=cjson,
+        )
+
+
+# Backwards-compatibility alias so existing code can still import PromptSnapshot.
+# New code should use BundleSnapshot directly.
+# TODO: Remove once all callers have been migrated.
+PromptSnapshot = BundleSnapshot
 
 
 class ExperimentRun(BaseModel):
@@ -67,20 +87,40 @@ class ExperimentRun(BaseModel):
 
     id: str
     experiment_id: str
-    model_id: str
-    strategy: StrategyName
-    tool_variant: ToolVariant
-    review_profile: ReviewProfileName
-    verification_variant: VerificationVariant
-    verifier_model_id: str | None = None
+    strategy_id: str
     dataset_name: str
     dataset_version: str
+    tool_extensions: frozenset[ToolExtension] = frozenset()
+
+    # Canonical JSON of the full UserStrategy, populated by
+    # ExperimentMatrix.expand().  Workers reconstruct the strategy from this
+    # field so user-created strategies (stored only in the coordinator's DB)
+    # are visible without a DB round-trip.  Empty string means "fall back to
+    # the builtin registry" — used by legacy tests and builtin-only flows.
+    bundle_json: str = ""
+
+    # Legacy / derived fields kept for worker compatibility while strategy
+    # files still read from ExperimentRun directly.  They are populated by
+    # ExperimentMatrix.expand() from the resolved strategy's default bundle.
+    model_id: str = ""
+    strategy: StrategyName = StrategyName.SINGLE_AGENT
+    tool_variant: ToolVariant = ToolVariant.WITH_TOOLS
+    review_profile: ReviewProfileName = ReviewProfileName.DEFAULT
+    verification_variant: VerificationVariant = VerificationVariant.NONE
+    verifier_model_id: str | None = None
     strategy_config: dict = {}
     provider_kwargs: dict = {}
     parallel: bool = False
     repetition_index: int = 0
     created_at: datetime | None = None
-    tool_extensions: frozenset[ToolExtension] = frozenset()
+
+    # HTTP result transport fields.  Populated at config-write time when
+    # result_transport == "http"; excluded from DB config_json persistence via
+    # model_dump(exclude={"upload_token"}).  upload_url and upload_token are
+    # None for "pvc" runs.
+    result_transport: Literal["pvc", "http"] = "pvc"
+    upload_url: str | None = None
+    upload_token: str | None = Field(default=None, exclude=True)
 
     @field_serializer("tool_extensions")
     def _serialize_tool_extensions(self, value: frozenset[ToolExtension]) -> list[str]:
@@ -108,7 +148,7 @@ class RunResult(BaseModel):
     verification_result: VerificationResult | None = None
     evaluation: EvaluationResult | None = None
     strategy_output: StrategyOutput
-    prompt_snapshot: PromptSnapshot
+    bundle_snapshot: BundleSnapshot
 
     tool_call_count: int
     total_input_tokens: int
@@ -122,116 +162,86 @@ class RunResult(BaseModel):
 
 
 class ExperimentMatrix(BaseModel):
-    """Defines the cartesian product of experiment dimensions."""
+    """Defines the set of strategies to run in an experiment.
+
+    The matrix collapses to a single ``strategy_ids`` axis: each strategy
+    encapsulates model, tools, profile, verification, and tool_extensions, so
+    those are no longer separate axes.
+    """
 
     experiment_id: str
     dataset_name: str
     dataset_version: str
 
-    model_ids: list[str]
-    strategies: list[StrategyName]
-    tool_variants: list[ToolVariant] = [ToolVariant.WITH_TOOLS, ToolVariant.WITHOUT_TOOLS]
-    review_profiles: list[ReviewProfileName] = [ReviewProfileName.DEFAULT]
-    verification_variants: list[VerificationVariant] = [
-        VerificationVariant.NONE,
-        VerificationVariant.WITH_VERIFICATION,
-    ]
-    parallel_modes: list[bool] = [False]
-    tool_extension_sets: list[frozenset[ToolExtension]] = Field(
-        default_factory=lambda: [frozenset()]
-    )
-
-    @field_validator("tool_extension_sets", mode="before")
-    @classmethod
-    def _coerce_extension_sets(cls, v: object) -> list[frozenset[ToolExtension]]:
-        # Accept list[list[str]] (e.g., from JSON round-trip) in addition to
-        # list[frozenset[ToolExtension]] (in-process usage).
-        if not isinstance(v, list):
-            raise ValueError("tool_extension_sets must be a list")
-        result: list[frozenset[ToolExtension]] = []
-        for item in v:
-            if isinstance(item, frozenset):
-                result.append(item)
-            else:
-                result.append(frozenset(ToolExtension(e) for e in item))
-        return result
-
-    @field_serializer("tool_extension_sets")
-    def _serialize_tool_extension_sets(
-        self, value: list[frozenset[ToolExtension]]
-    ) -> list[list[str]]:
-        return [sorted(e.value for e in ext_set) for ext_set in value]
-
-    strategy_configs: dict[str, dict] = {}
-    model_configs: dict[str, dict] = {}
+    strategy_ids: list[str]
 
     num_repetitions: int = 1
     max_experiment_cost_usd: float | None = None
     verifier_model_id: str | None = None
 
-    # Submit-time override: when True, skip availability validation for models
-    # that are key_missing, not_listed, or probe_failed.  Excluded from
-    # serialisation so it never reaches the DB or on-disk config JSON.
+    # Submit-time override: when True, skip availability validation.
+    # Excluded from serialisation so it never reaches the DB or on-disk config JSON.
     allow_unavailable_models: bool = Field(default=False, exclude=True)
 
-    @classmethod
-    def tool_extension_sets_powerset(
-        cls, enabled: set[ToolExtension]
-    ) -> list[frozenset[ToolExtension]]:
-        """Return all 2^N subsets of *enabled* as a list of frozensets."""
-        items = sorted(enabled, key=lambda e: e.value)
-        result: list[frozenset[ToolExtension]] = []
-        for mask in range(1 << len(items)):
-            subset = frozenset(items[i] for i in range(len(items)) if mask & (1 << i))
-            result.append(subset)
-        return result
+    def expand(
+        self,
+        registry: "StrategyRegistry | None" = None,  # type: ignore[name-defined]
+    ) -> list[ExperimentRun]:
+        """Expand the matrix into a flat list of ExperimentRun objects.
 
-    def expand(self) -> list[ExperimentRun]:
-        """Cartesian product of all active dimensions x num_repetitions."""
+        Run ID format: ``{experiment_id}_{strategy_id}`` with ``_rep{N}``
+        appended when ``num_repetitions > 1``.
+
+        The ``_ext-<sorted>`` suffix is intentionally dropped — tool_extensions
+        are now baked into each strategy and are immutable per strategy_id.
+
+        Parameters
+        ----------
+        registry:
+            Optional :class:`StrategyRegistry` to resolve strategies from.
+            When *None*, ``load_default_registry()`` is called.  Pass an
+            explicit registry in tests to avoid filesystem side-effects.
+        """
+        from sec_review_framework.strategies.strategy_registry import load_default_registry
+
+        if registry is None:
+            registry = load_default_registry()
+
+        from sec_review_framework.data.strategy_bundle import canonical_json
+
         runs: list[ExperimentRun] = []
-        for model_id in self.model_ids:
-            for strategy in self.strategies:
-                for tool_variant in self.tool_variants:
-                    for profile in self.review_profiles:
-                        for verif in self.verification_variants:
-                            for parallel in self.parallel_modes:
-                                for ext_set in self.tool_extension_sets:
-                                    for rep in range(self.num_repetitions):
-                                        rep_suffix = f"_rep{rep}" if self.num_repetitions > 1 else ""
-                                        if ext_set:
-                                            ext_suffix = "_ext-" + "+".join(
-                                                sorted(e.value for e in ext_set)
-                                            )
-                                        else:
-                                            ext_suffix = ""
-                                        # Sanitize model_id: LiteLLM IDs like
-                                        # "openrouter/meta-llama/llama-3.1-8b-instruct"
-                                        # contain "/" which leaks into filesystem paths.
-                                        safe_model_id = model_id.replace("/", "--")
-                                        run_id = (
-                                            f"{self.experiment_id}_{safe_model_id}_{strategy.value}"
-                                            f"_{tool_variant.value}_{profile.value}_{verif.value}"
-                                            f"{rep_suffix}{ext_suffix}"
-                                        )
-                                        runs.append(
-                                            ExperimentRun(
-                                                id=run_id,
-                                                experiment_id=self.experiment_id,
-                                                model_id=model_id,
-                                                strategy=strategy,
-                                                tool_variant=tool_variant,
-                                                review_profile=profile,
-                                                verification_variant=verif,
-                                                verifier_model_id=self.verifier_model_id,
-                                                parallel=parallel,
-                                                repetition_index=rep,
-                                                dataset_name=self.dataset_name,
-                                                dataset_version=self.dataset_version,
-                                                strategy_config=self.strategy_configs.get(strategy.value, {}),
-                                                provider_kwargs=self.model_configs.get(model_id, {}),
-                                                tool_extensions=ext_set,
-                                            )
-                                        )
+        for strategy_id in self.strategy_ids:
+            strategy = registry.get(strategy_id)
+            default_bundle = strategy.default
+            # Derive tool_extensions from the strategy default bundle plus the
+            # union of all override tool_extensions so the worker pod check can
+            # gate on the full requirement set.
+            ext_union: frozenset[str] = default_bundle.tool_extensions
+            for rule in strategy.overrides:
+                if rule.override.tool_extensions is not None:
+                    ext_union = ext_union | rule.override.tool_extensions
+            tool_extensions = frozenset(ToolExtension(e) for e in ext_union)
+            bundle_json = canonical_json(strategy)
+
+            for rep in range(self.num_repetitions):
+                rep_suffix = f"_rep{rep}" if self.num_repetitions > 1 else ""
+                run_id = f"{self.experiment_id}_{strategy_id}{rep_suffix}"
+                runs.append(
+                    ExperimentRun(
+                        id=run_id,
+                        experiment_id=self.experiment_id,
+                        strategy_id=strategy_id,
+                        dataset_name=self.dataset_name,
+                        dataset_version=self.dataset_version,
+                        tool_extensions=tool_extensions,
+                        bundle_json=bundle_json,
+                        # Populate legacy fields from the strategy default bundle
+                        model_id=default_bundle.model_id,
+                        verification_variant=VerificationVariant(default_bundle.verification),
+                        verifier_model_id=self.verifier_model_id,
+                        repetition_index=rep,
+                    )
+                )
         return runs
 
 

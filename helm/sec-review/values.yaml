@@ -298,3 +298,20 @@ serviceAccount:
 
 rbac:
   create: true
+
+# -----------------------------------------------------------------------------
+# Worker result transport
+#
+# Controls how worker pods deliver their output artifacts to the coordinator.
+#
+#   "http" (default for new installs):
+#     Workers write to a pod-local emptyDir then stream-upload to
+#     POST /api/internal/runs/{run_id}/result.  The PVC is mounted read-only
+#     for workers.  The coordinator becomes the single PVC writer.
+#
+#   "pvc":
+#     Workers write directly to the shared PVC (legacy behaviour).
+#     Use this during transition or on clusters where HTTP egress to the
+#     coordinator service is restricted.
+# -----------------------------------------------------------------------------
+workerResultTransport: "http"
