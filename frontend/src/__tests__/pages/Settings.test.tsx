@@ -638,3 +638,155 @@ describe('ProvidersPanel — slug validation', () => {
     expect(mockCreateLlmProvider).not.toHaveBeenCalled()
   })
 })
+
+// ─── Stale api_base / region cleanup ─────────────────────────────────────
+
+// Helper to open a Radix Select and pick an option by its visible text.
+// After a value is selected, the trigger also shows that text, so getAllByText
+// is used and the last occurrence (the dropdown item) is clicked.
+async function pickSelectOption(trigger: HTMLElement, optionText: string) {
+  fireEvent.click(trigger)
+  await waitFor(() => {
+    expect(screen.getAllByText(optionText).length).toBeGreaterThanOrEqual(1)
+  })
+  const options = screen.getAllByText(optionText)
+  fireEvent.click(options[options.length - 1])
+}
+
+describe('ProvidersPanel — stale field cleanup', () => {
+  it('does not send api_base in POST body when adapter is switched from openai_compat to bedrock', async () => {
+    const newProvider = makeCustomProvider({ id: 'new-uuid-2', name: 'bedrock-llm', display_name: 'Bedrock LLM', adapter: 'bedrock', auth_type: 'aws' })
+    mockCreateLlmProvider.mockResolvedValue(newProvider)
+    mockListLlmProviders
+      .mockResolvedValueOnce(DEFAULT_PROVIDER_LIST)
+      .mockResolvedValueOnce({
+        builtin: DEFAULT_PROVIDER_LIST.builtin,
+        custom: [...DEFAULT_PROVIDER_LIST.custom, newProvider],
+      })
+
+    renderSettings()
+    await waitFor(() => {
+      expect(screen.getByText('My LLM')).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /Add Custom Provider/i }))
+    await waitFor(() => {
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+    })
+
+    fireEvent.change(screen.getByPlaceholderText('my-provider'), {
+      target: { value: 'bedrock-llm' },
+    })
+    fireEvent.change(screen.getByPlaceholderText('My Provider'), {
+      target: { value: 'Bedrock LLM' },
+    })
+    fireEvent.change(screen.getByPlaceholderText('gpt-4o'), {
+      target: { value: 'claude-3-sonnet' },
+    })
+
+    // First pick openai_compat (reveals the api_base field)
+    await pickSelectOption(screen.getAllByRole('combobox')[0], 'openai_compat')
+
+    // Fill in an api_base value
+    await waitFor(() => screen.getByPlaceholderText('https://api.example.com/v1'))
+    fireEvent.change(screen.getByPlaceholderText('https://api.example.com/v1'), {
+      target: { value: 'https://my-openai.example.com/v1' },
+    })
+
+    // Switch adapter to bedrock — api_base field must disappear and state cleared
+    await pickSelectOption(screen.getAllByRole('combobox')[0], 'bedrock')
+    await waitFor(() => {
+      expect(screen.queryByPlaceholderText('https://api.example.com/v1')).not.toBeInTheDocument()
+    })
+
+    // Select auth_type aws
+    const combos = screen.getAllByRole('combobox')
+    await pickSelectOption(combos[combos.length - 1], 'aws')
+
+    fireEvent.click(screen.getByRole('button', { name: /Add Provider/i }))
+
+    await waitFor(() => {
+      expect(mockCreateLlmProvider).toHaveBeenCalled()
+    })
+
+    const createCall = mockCreateLlmProvider.mock.calls[0][0]
+    expect(createCall.adapter).toBe('bedrock')
+    expect('api_base' in createCall).toBe(false)
+  })
+
+  it('does not send region in POST body when auth_type is switched from aws to api_key', async () => {
+    const newProvider = makeCustomProvider({ id: 'new-uuid-3', name: 'openai-2', display_name: 'OpenAI 2', adapter: 'openai_compat', auth_type: 'api_key' })
+    mockCreateLlmProvider.mockResolvedValue(newProvider)
+    mockListLlmProviders
+      .mockResolvedValueOnce(DEFAULT_PROVIDER_LIST)
+      .mockResolvedValueOnce({
+        builtin: DEFAULT_PROVIDER_LIST.builtin,
+        custom: [...DEFAULT_PROVIDER_LIST.custom, newProvider],
+      })
+
+    renderSettings()
+    await waitFor(() => {
+      expect(screen.getByText('My LLM')).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /Add Custom Provider/i }))
+    await waitFor(() => {
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+    })
+
+    fireEvent.change(screen.getByPlaceholderText('my-provider'), {
+      target: { value: 'openai-2' },
+    })
+    fireEvent.change(screen.getByPlaceholderText('My Provider'), {
+      target: { value: 'OpenAI 2' },
+    })
+    fireEvent.change(screen.getByPlaceholderText('gpt-4o'), {
+      target: { value: 'gpt-4o' },
+    })
+
+    // Pick bedrock adapter (pairs naturally with aws auth_type)
+    await pickSelectOption(screen.getAllByRole('combobox')[0], 'bedrock')
+
+    // Pick auth_type aws (reveals region field)
+    let combos = screen.getAllByRole('combobox')
+    await pickSelectOption(combos[combos.length - 1], 'aws')
+
+    // Type a region value
+    await waitFor(() => screen.getByPlaceholderText('us-east-1'))
+    fireEvent.change(screen.getByPlaceholderText('us-east-1'), {
+      target: { value: 'eu-west-1' },
+    })
+
+    // Switch to openai_compat adapter
+    await pickSelectOption(screen.getAllByRole('combobox')[0], 'openai_compat')
+
+    // Switch auth_type to api_key — region field must disappear and state cleared
+    combos = screen.getAllByRole('combobox')
+    await pickSelectOption(combos[combos.length - 1], 'api_key')
+    await waitFor(() => {
+      expect(screen.queryByPlaceholderText('us-east-1')).not.toBeInTheDocument()
+    })
+
+    // Fill the api_base required for openai_compat
+    await waitFor(() => screen.getByPlaceholderText('https://api.example.com/v1'))
+    fireEvent.change(screen.getByPlaceholderText('https://api.example.com/v1'), {
+      target: { value: 'https://api.openai.com/v1' },
+    })
+
+    // Fill api_key
+    const passwordInputs = document.querySelectorAll('input[type="password"]')
+    if (passwordInputs.length > 0) {
+      fireEvent.change(passwordInputs[0], { target: { value: 'sk-test-key' } })
+    }
+
+    fireEvent.click(screen.getByRole('button', { name: /Add Provider/i }))
+
+    await waitFor(() => {
+      expect(mockCreateLlmProvider).toHaveBeenCalled()
+    })
+
+    const createCall = mockCreateLlmProvider.mock.calls[0][0]
+    expect(createCall.auth_type).toBe('api_key')
+    expect('region' in createCall).toBe(false)
+  })
+})

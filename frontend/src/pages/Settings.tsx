@@ -346,7 +346,18 @@ function ProviderModal({ open, editTarget, onClose, onSaved }: ProviderModalProp
   }, [open, editTarget])
 
   const handleChange = (field: keyof ProviderFormState, value: string) => {
-    setForm((prev) => ({ ...prev, [field]: value }))
+    setForm((prev) => {
+      const next = { ...prev, [field]: value }
+      if (field === 'adapter') {
+        const adapterAllowsBase = value === 'openai_compat' || value === 'litellm'
+        if (!adapterAllowsBase) next.api_base = ''
+      }
+      if (field === 'auth_type') {
+        if (value !== 'aws') next.region = ''
+        if (value !== 'api_key') next.api_key = ''
+      }
+      return next
+    })
     if (errors[field as keyof ProviderFormErrors]) {
       setErrors((prev) => ({ ...prev, [field]: undefined }))
     }
@@ -389,9 +400,10 @@ function ProviderModal({ open, editTarget, onClose, onSaved }: ProviderModalProp
           model_id: form.model_id,
           auth_type: form.auth_type as ProviderAuthType,
         }
-        if (form.api_base) create.api_base = form.api_base
-        if (form.api_key) create.api_key = form.api_key
-        if (form.region) create.region = form.region
+        const createAdapterAllowsBase = form.adapter === 'openai_compat' || form.adapter === 'litellm'
+        if (createAdapterAllowsBase && form.api_base) create.api_base = form.api_base
+        if (form.auth_type === 'api_key' && form.api_key) create.api_key = form.api_key
+        if (form.auth_type === 'aws' && form.region) create.region = form.region
         await createLlmProvider(create)
       }
       onSaved()
