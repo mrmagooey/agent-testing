@@ -578,6 +578,7 @@ function ProviderCard({ provider, onEdit, onDelete, onProbe, probing }: Provider
               )}
             </div>
 
+            {/* shows server-scrubbed error; see llm_providers._scrub_error */}
             {provider.last_probe_error && (
               <p className="mt-2 text-xs text-signal-danger font-mono truncate max-w-lg">
                 {provider.last_probe_error}
