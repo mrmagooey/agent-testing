@@ -13,12 +13,14 @@ import Findings from './pages/Findings'
 import StrategiesList from './pages/StrategiesList'
 import StrategyViewer from './pages/StrategyViewer'
 import StrategyEditor from './pages/StrategyEditor'
+import ExperimentImport from './pages/ExperimentImport'
 import ThemeToggle from './components/ThemeToggle'
 
 const NAV_LINKS = [
   { to: '/', label: 'Dashboard', end: true },
   { to: '/experiments/new', label: 'New Experiment', end: false },
   { to: '/strategies', label: 'Strategies', end: true },
+  { to: '/experiments/import', label: 'Import', end: true },
   { to: '/compare', label: 'Compare', end: false },
   { to: '/datasets', label: 'Datasets', end: true },
   { to: '/datasets/discover', label: 'CVE Discovery', end: false },
@@ -110,6 +112,7 @@ export default function App() {
             <Route path="/compare" element={<RunCompare />} />
             <Route path="/experiments/:id/compare" element={<RunCompare />} />
             <Route path="/experiments/:experimentId/runs/:runId" element={<RunDetail />} />
+            <Route path="/experiments/import" element={<ExperimentImport />} />
             <Route path="/experiments/:id" element={<ExperimentDetail />} />
             <Route path="/strategies/new" element={<StrategyEditor />} />
             <Route path="/strategies/:id/fork" element={<StrategyEditor />} />

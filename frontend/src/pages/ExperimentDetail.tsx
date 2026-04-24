@@ -14,6 +14,7 @@ import MatrixFilterBar from '../components/MatrixFilterBar'
 import FindingsExplorer from '../components/FindingsExplorer'
 import DimensionChart from '../components/DimensionChart'
 import DownloadButton from '../components/DownloadButton'
+import ExportMenu from '../components/ExportMenu'
 import PageDescription from '../components/PageDescription'
 import { parseMatrixFilter, serializeMatrixFilter, applyMatrixFilter, clearMatrixFilter } from '../lib/matrixFilter'
 
@@ -206,7 +207,7 @@ export default function ExperimentDetail() {
             >
               Compare with another
             </button>
-            {isTerminal && experimentId && <DownloadButton experimentId={experimentId} />}
+            {isTerminal && experimentId && <ExportMenu experimentId={experimentId} />}
           </div>
         </div>
 

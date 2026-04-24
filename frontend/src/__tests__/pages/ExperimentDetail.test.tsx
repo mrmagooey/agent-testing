@@ -23,6 +23,11 @@ vi.mock('../../components/FindingsExplorer', () => ({
 vi.mock('../../components/DownloadButton', () => ({
   default: ({ label }: { label?: string }) => <button>{label ?? 'Download'}</button>,
 }))
+vi.mock('../../components/ExportMenu', () => ({
+  default: ({ experimentId }: { experimentId: string }) => (
+    <button data-testid="export-menu">{`Export ${experimentId}`}</button>
+  ),
+}))
 
 import { getExperiment, getExperimentResults, cancelExperiment } from '../../api/client'
 const mockGetExperiment = vi.mocked(getExperiment)
