@@ -112,50 +112,20 @@ def _make_pvc_strategy() -> UserStrategy:
 
 
 # ---------------------------------------------------------------------------
-# run_subagents — legacy task dicts (backwards compat)
+# run_subagents — strategy is required
 # ---------------------------------------------------------------------------
 
 
-def test_run_subagents_legacy_sequential():
-    model = _fake_model(n=2, content="legacy result")
-    results = run_subagents(
-        tasks=[
-            {"system_prompt": "sys1", "user_message": "user1", "max_turns": 10},
-            {"system_prompt": "sys2", "user_message": "user2", "max_turns": 10},
-        ],
-        model=model,
-        tools=_empty_tools(),
-        parallel=False,
-    )
-    assert results == ["legacy result", "legacy result"]
-
-
-def test_run_subagents_legacy_parallel():
-    model = _fake_model(n=2, content="parallel result")
-    results = run_subagents(
-        tasks=[
-            {"system_prompt": "sys1", "user_message": "user1", "max_turns": 10},
-            {"system_prompt": "sys2", "user_message": "user2", "max_turns": 10},
-        ],
-        model=model,
-        tools=_empty_tools(),
-        parallel=True,
-        max_workers=2,
-    )
-    assert sorted(results) == ["parallel result", "parallel result"]
-
-
-def test_run_subagents_legacy_no_strategy_arg_needed():
-    """Legacy callers should not need to pass strategy."""
-    model = _fake_model(n=1, content="ok")
-    results = run_subagents(
-        tasks=[{"system_prompt": "sys", "user_message": "msg", "max_turns": 5}],
-        model=model,
-        tools=_empty_tools(),
-        parallel=False,
-        # no strategy kwarg
-    )
-    assert results == ["ok"]
+def test_run_subagents_requires_strategy():
+    """run_subagents must reject calls without a UserStrategy."""
+    model = _fake_model(n=1, content="ignored")
+    with pytest.raises(ValueError, match="UserStrategy"):
+        run_subagents(
+            tasks=[{"key": None, "user_message": "msg"}],
+            model=model,
+            tools=_empty_tools(),
+            parallel=False,
+        )
 
 
 # ---------------------------------------------------------------------------

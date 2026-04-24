@@ -199,14 +199,36 @@ def test_build_system_prompt_no_profile_key_returns_base_unchanged():
 
 
 def _make_tasks(n: int = 2) -> list[dict]:
-    return [
-        {
-            "system_prompt": f"sys-{i}",
-            "user_message": f"msg-{i}",
-            "max_turns": 5,
-        }
-        for i in range(n)
-    ]
+    return [{"key": None, "user_message": f"msg-{i}"} for i in range(n)]
+
+
+def _make_bundle_strategy(system_prompt: str = "sys", max_turns: int = 5):
+    from datetime import datetime
+
+    from sec_review_framework.data.strategy_bundle import (
+        OrchestrationShape,
+        StrategyBundleDefault,
+        UserStrategy,
+    )
+
+    return UserStrategy(
+        id="test.single",
+        name="Test",
+        parent_strategy_id=None,
+        orchestration_shape=OrchestrationShape.SINGLE_AGENT,
+        default=StrategyBundleDefault(
+            system_prompt=system_prompt,
+            user_prompt_template="{repo_summary}{finding_output_format}",
+            profile_modifier="",
+            model_id="fake",
+            tools=frozenset(),
+            verification="none",
+            max_turns=max_turns,
+            tool_extensions=frozenset(),
+        ),
+        overrides=[],
+        created_at=datetime(2026, 1, 1),
+    )
 
 
 def test_run_subagents_sequential_calls_in_order():
@@ -219,7 +241,8 @@ def test_run_subagents_sequential_calls_in_order():
     model = FakeModelProvider(responses)
     registry = _make_registry()
 
-    results = run_subagents(_make_tasks(3), model, registry, parallel=False)
+    strategy = _make_bundle_strategy()
+    results = run_subagents(_make_tasks(3), model, registry, parallel=False, strategy=strategy)
     assert results == ["output-0", "output-1", "output-2"]
 
 
@@ -235,8 +258,9 @@ def test_run_subagents_parallel_clones_tools_fresh_audit_log():
     echo = EchoTool(name="echo")
     registry = _make_registry(echo)
 
+    strategy = _make_bundle_strategy()
     # Run two parallel tasks; they should complete without sharing audit log state.
-    results = run_subagents(_make_tasks(2), model, registry, parallel=True, max_workers=2)
+    results = run_subagents(_make_tasks(2), model, registry, parallel=True, max_workers=2, strategy=strategy)
     assert len(results) == 2
     # Original registry audit log should be untouched (clones were used).
     assert len(registry.audit_log.entries) == 0
