@@ -21,6 +21,7 @@
 17. [Extension Points](#17-extension-points)
 18. [Tool Extensions (MCP-backed)](#18-tool-extensions-mcp-backed)
 19. [Future Work: Iterative Review](#19-future-work-iterative-review)
+20. [Result Upload Transport](#20-result-upload-transport)
 
 ---
 
@@ -1822,6 +1823,8 @@ The global `max_parallel_runs` in `experiments.yaml` sets an overall cap across 
     report.md                         — human-readable run report
     report.json                       — machine-readable run report
 ```
+
+Under the `http` result transport (see § 20), the coordinator writes artifacts into a staging directory `/data/outputs/{experiment_id}/.staging-{run_id}-{uuid}/` and atomically renames it into the canonical `{run_id}/` path once the full bundle is received. The on-disk layout after commit is identical; transient `.staging-*` directories are scrubbed by the retention loop after one hour.
 
 ---
 
@@ -4823,6 +4826,101 @@ When the team is ready to explore this, it can be added as a new experiment mode
 
 ---
 
+## 20. Result Upload Transport
+
+The result upload transport controls how worker-produced artifacts (`run_result.json`, `findings.jsonl`, `tool_calls.jsonl`, `conversation.jsonl`, `findings_pre_verification.jsonl`, `report.md`) reach the canonical output tree on the shared PVC. Two transports are supported: the legacy direct-write (`pvc`) and an HTTP upload (`http`) in which the coordinator is the sole writer.
+
+### Overview
+
+Under `http` transport, workers write artifacts to a pod-local `emptyDir` and then stream them to the coordinator as a single `multipart/form-data` body. The coordinator authenticates the request with a per-run bearer token, streams each part to a staging directory, and atomically renames the staging directory into place. The existing reconcile loop (§ 5.2) then detects `run_result.json` and proceeds with ingest unchanged.
+
+### Design Rationale
+
+**Single writer on the PVC**: Before this change, every worker had read-write access to `/data/outputs/`. A bug or mis-scheduling that produced two workers for the same `run_id` could silently race on the output directory — the per-file atomic rename in the worker's temp-file-plus-rename pattern does not protect across processes. Moving the write path behind a coordinator-controlled endpoint makes the coordinator the only process that touches `/data/outputs/`, and gates completion on a DB-level atomic token consume.
+
+**Bundled multipart, not per-artifact endpoints**: The completion signal is "all artifacts visible together" — `run_result.json` is written last precisely so the reconcile loop can treat its presence as "run done." Per-artifact endpoints would reintroduce partial-state races that the change is meant to eliminate. One `POST` per run, committed as a unit.
+
+**Streaming, not buffered**: `conversation.jsonl` can exceed 100 MiB for long agentic runs. The handler uses Starlette's `request.stream()` with a `python-multipart` `MultipartParser` and writes each chunk directly to disk — it does NOT use FastAPI's `UploadFile`, which spools the body to `SpooledTemporaryFile` and counts against process memory for bodies up to its `max_size`. Worker-side, `httpx` is handed open file handles so it streams file contents rather than materialising them.
+
+**Defense in depth against double-commit**:
+1. DB-level: `consume_upload_token` performs an atomic `UPDATE ... WHERE consumed_at IS NULL` and returns `rowcount > 0`. Two concurrent requests see one success and one failure at this step — this is the authoritative gate.
+2. Filesystem-level: if the DB guard somehow misses (kernel bugs, filesystem replay), an explicit `if final_dir.exists(): return 409` pre-check plus the `os.rename` failure path both prevent overwriting an existing canonical output.
+
+### Upload Flow
+
+1. **Dispatch (coordinator)**: When `result_transport == "http"`, the coordinator issues a fresh token via `db.issue_upload_token(run_id)` (returns 256-bit url-safe plaintext; stores `sha256(token)` in `run_upload_tokens`). The plaintext token and the coordinator's internal URL are embedded in the per-run config file at `/data/config/runs/{run_id}.json` — NOT in the `runs.config_json` column (the token field is `Field(exclude=True)` on `ExperimentRun` to prevent DB-side leakage).
+2. **Worker write-local**: Worker executes the strategy and writes all six artifacts to a pod-local temp dir (`tempfile.mkdtemp(prefix="run-")`, on the `emptyDir` volume).
+3. **Worker upload**: Worker opens file handles for all six artifacts and `POST`s them as `multipart/form-data` to `POST /api/internal/runs/{run_id}/result` with `Authorization: Bearer <token>`.
+4. **Coordinator receive**: Handler validates the bearer, consumes the token (atomic DB update), and creates `/data/outputs/{experiment_id}/.staging-{run_id}-{uuid}/`. It streams parts via the multipart parser; each `Content-Disposition` filename is normalised with `posixpath.basename` and checked against an allowlist. Per-artifact size caps (`MAX_ARTIFACT_BYTES`, default 16 MiB; 256 MiB for `conversation.jsonl`) and an aggregate cap (`MAX_TOTAL_BYTES`, default 512 MiB) are enforced during streaming — the parser aborts immediately on overrun and the staging directory is cleaned up.
+5. **Commit**: After confirming `run_result.json` is present, the handler `os.rename(staging, final)`s the directory into place. On any error — bad token, oversize, malformed multipart, missing required artifact, final-dir already exists — the staging directory is removed and a 4xx response is returned.
+6. **Ingest (unchanged)**: The existing reconcile loop finds `run_result.json` on its next tick and runs the standard findings ingest, matrix-report regeneration, and metrics update path.
+
+Worker retry policy: up to 5 attempts with exponential backoff (base 2s, max 60s, jitter) on connection errors, 5xx, and 429. On 403 (token consumed) or 409 (final dir exists) the worker exits 0 — another replica has already committed this run. On terminal failure after retries the worker exits non-zero; the K8s Job `backoffLimit=1` allows one retry, after which the reconcile loop's "terminal Job with no result" path marks the run failed.
+
+### Token Lifecycle
+
+| Transition | Trigger | Code |
+|---|---|---|
+| **Issue** | `submit_experiment` when `result_transport == "http"`; exactly once per run | `db.issue_upload_token(run_id)` |
+| **Consume** | Successful authenticated upload | `db.consume_upload_token(run_id, token)` — atomic `UPDATE ... WHERE consumed_at IS NULL` |
+| **Re-issue attempt** | Raises `UploadTokenAlreadyExists` | Prevents silently returning a plaintext token whose hash differs from the stored hash |
+| **Reconcile re-dispatch** | Existing token reused by reading the on-disk run config | Never re-issues; consumed tokens skip dispatch entirely |
+| **Revoke** | `delete_experiment` | `db.revoke_upload_tokens_for_experiment(experiment_id)` |
+
+Tokens are generated via `secrets.token_urlsafe(32)` (256 bits of entropy). Only `sha256(token)` is persisted. Validation uses `hmac.compare_digest` for timing-safe comparison.
+
+### Configuration & Availability
+
+```yaml
+# helm/sec-review/values.yaml
+workerResultTransport: "http"   # "http" | "pvc"
+```
+
+The coordinator reads the flag once at job-creation time and conditions both:
+- **Run config contents**: `upload_url`, `upload_token`, `result_transport` are set only when `http`; absent under `pvc`.
+- **K8s Job spec**: under `http`, the shared PVC is mounted **read-only** on the worker (workers still read `/data/datasets`, `/data/devdocs`, and `/data/config/runs/{run_id}.json`), and a separate `emptyDir` is mounted at `/tmp/worker` for the worker's writable scratch output. `--output-dir` points at `/tmp/worker/out` under `http` and at `/data/outputs/...` under `pvc`.
+
+Operator-visible envs on the coordinator:
+- `WORKER_RESULT_TRANSPORT` — passed through from the Helm value
+- `COORDINATOR_INTERNAL_URL` — cluster-internal coordinator URL used to build `upload_url`, e.g. `http://{release}-coordinator:{port}`
+- `MAX_ARTIFACT_BYTES` / `MAX_ARTIFACT_BYTES_LARGE` / `MAX_TOTAL_BYTES` — per-artifact and aggregate upload caps
+
+A NetworkPolicy (`helm/sec-review/templates/network-policy.yaml`) allows ingress to the coordinator's service port only from pods labelled `app: sec-review-worker`. Note: the label must be set on the `V1PodTemplateSpec` metadata, not just the `V1Job` metadata — Kubernetes does not propagate Job labels to pods.
+
+### Persistence
+
+A new DB table holds token state, decoupled from `runs` so deletion cascades cleanly and the hot `runs` row stays narrow:
+
+```sql
+CREATE TABLE IF NOT EXISTS run_upload_tokens (
+    run_id      TEXT PRIMARY KEY REFERENCES runs(id),
+    token_hash  TEXT NOT NULL,
+    issued_at   TEXT NOT NULL,
+    consumed_at TEXT
+);
+```
+
+The migration is idempotent and `CREATE TABLE IF NOT EXISTS`-based, consistent with the rest of `db.py`. Plaintext tokens are never stored — only the sha256 hex digest.
+
+### Security Invariants
+
+- Token entropy ≥ 256 bits.
+- Plaintext never persisted; only `sha256(token)` in the DB.
+- Constant-time hash comparison on every consume via `hmac.compare_digest`.
+- Token excluded from `ExperimentRun` serialisations that write to the DB (`Field(exclude=True)`); present only in the on-disk run config, which lives on the same PVC the worker already has read access to.
+- Filename is treated as attacker-controlled: `posixpath.basename` normalises, then exact allowlist match. Path traversal (`../../etc/passwd`) reduces to `passwd`, which fails the allowlist.
+- Per-artifact and aggregate size caps are enforced during streaming; overruns abort the parser immediately and clean up the staging directory.
+- Worker on `403`/`409` exits clean so K8s Job retry cannot cause a consumed-token replay loop.
+
+### Backwards Compatibility
+
+- Flag defaults to `"http"` in new deployments (`helm/sec-review/values.yaml`). `values-minikube.yaml` pins `"pvc"` during transition for local smoke; `values-e2e.yaml` pins `"http"` to exercise the new path in CI.
+- Under `pvc` the worker's direct-write path is preserved verbatim — the `ExperimentRun.result_transport` default is `"pvc"`, so existing JSON fixtures and tests remain valid without modification.
+- `ExperimentRun` gains three optional fields (`upload_url`, `upload_token`, `result_transport`) — unset defaults make the model backwards-compatible with pre-existing serialised runs.
+- Deployments upgrading from `pvc` to `http` do not need to migrate existing output directories — they are read-only to the coordinator regardless of transport.
+
+---
+
 ## Appendix: Key Dependency Flow
 
 ```
@@ -4852,8 +4950,10 @@ HTTP POST /experiments → ExperimentCoordinator
                 → EvaluationResult
             → CostCalculator.compute(model_id, tokens)
             → RunResult(experiment, findings, evaluation, cost, ...)
-            → Write RunResult + artifacts to shared storage
-            → ReportGenerator.render_run(result, output_dir)
+            → ReportGenerator.render_run(result, local_dir)
+            → [transport == "http"] POST multipart → coordinator upload endpoint
+                → coordinator stages + atomic-renames into /data/outputs/... (see § 20)
+            → [transport == "pvc"] Write RunResult + artifacts directly to shared storage
     → ExperimentCoordinator detects all jobs complete
         → collect_results() from shared storage
         → ReportGenerator.render_matrix(results, output_root)
