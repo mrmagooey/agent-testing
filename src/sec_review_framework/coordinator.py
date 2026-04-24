@@ -797,6 +797,16 @@ class ExperimentCoordinator:
             )
 
         # --- Atomic rename staging → final ---
+        # Pre-check: on Linux os.rename() raises OSError(ENOTEMPTY) not
+        # FileExistsError when the target directory already exists, so an
+        # explicit existence check gives us a reliable 409.
+        if final_dir.exists():
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            _upload_counter.labels(outcome="conflict").inc()
+            raise HTTPException(
+                status_code=409,
+                detail=f"Result for run {run_id!r} already exists",
+            )
         try:
             os.rename(staging_dir, final_dir)
         except FileExistsError:
