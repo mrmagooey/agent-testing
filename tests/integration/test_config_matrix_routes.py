@@ -78,17 +78,19 @@ def test_list_strategies_items_have_name_and_description(coordinator_client):
     client, *_ = coordinator_client
     data = client.get("/strategies").json()
     for item in data:
+        assert "id" in item
         assert "name" in item
-        assert "description" in item
+        assert "orchestration_shape" in item
+        assert "is_builtin" in item
+        assert isinstance(item["id"], str)
         assert isinstance(item["name"], str)
-        assert isinstance(item["description"], str)
 
 
 def test_list_strategies_contains_single_agent(coordinator_client):
     client, *_ = coordinator_client
     data = client.get("/strategies").json()
-    names = [s["name"] for s in data]
-    assert "single_agent" in names
+    ids = [s["id"] for s in data]
+    assert "builtin.single_agent" in ids
 
 
 # ---------------------------------------------------------------------------

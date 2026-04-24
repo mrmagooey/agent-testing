@@ -15,8 +15,8 @@ from sec_review_framework.coordinator import ExperimentCoordinator, app
 from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
 from sec_review_framework.data.evaluation import EvaluationResult
 from sec_review_framework.data.experiment import (
+    BundleSnapshot,
     ExperimentRun,
-    PromptSnapshot,
     ReviewProfileName,
     RunResult,
     RunStatus,
@@ -60,9 +60,12 @@ def _write_run_result(
     strategy: StrategyName,
     recall: float,
 ) -> None:
+    from tests.helpers import make_test_bundle_snapshot
+
     run = ExperimentRun(
         id=run_id,
         experiment_id=experiment_id,
+        strategy_id="builtin.single_agent",
         model_id=model_id,
         strategy=strategy,
         tool_variant=ToolVariant.WITH_TOOLS,
@@ -96,9 +99,7 @@ def _write_run_result(
         strategy_output=StrategyOutput(
             findings=[], pre_dedup_count=0, post_dedup_count=0, dedup_log=[]
         ),
-        prompt_snapshot=PromptSnapshot.capture(
-            system_prompt="sys", user_message_template="user", finding_output_format=""
-        ),
+        bundle_snapshot=make_test_bundle_snapshot(),
         tool_call_count=0,
         total_input_tokens=100,
         total_output_tokens=50,
@@ -209,9 +210,12 @@ def test_accuracy_matrix_skips_runs_without_evaluation(coordinator_client):
     _write_run_result(storage, "b1", "r1", "gpt-4o", StrategyName.SINGLE_AGENT, 0.8)
 
     # Write a run result with no evaluation (failed run)
+    from tests.helpers import make_test_bundle_snapshot
+
     run = ExperimentRun(
         id="r-failed",
         experiment_id="e1",
+        strategy_id="builtin.per_file",
         model_id="gpt-4o",
         strategy=StrategyName.PER_FILE,
         tool_variant=ToolVariant.WITH_TOOLS,
@@ -228,9 +232,7 @@ def test_accuracy_matrix_skips_runs_without_evaluation(coordinator_client):
         strategy_output=StrategyOutput(
             findings=[], pre_dedup_count=0, post_dedup_count=0, dedup_log=[]
         ),
-        prompt_snapshot=PromptSnapshot.capture(
-            system_prompt="", user_message_template="", finding_output_format=""
-        ),
+        bundle_snapshot=make_test_bundle_snapshot(),
         tool_call_count=0,
         total_input_tokens=0,
         total_output_tokens=0,

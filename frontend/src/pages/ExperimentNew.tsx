@@ -2,26 +2,19 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   listDatasets,
-  listModels,
-  listStrategies,
-  listProfiles,
-  submitExperiment,
-  listToolExtensions,
+  listStrategiesFull,
   parseUnavailableModelsError,
   type Dataset,
-  type ExperimentConfig,
-  type ToolExtension,
-  type ModelProviderGroup,
+  type StrategySummary,
+  type CostEstimate as CostEstimateType,
 } from '../api/client'
-import { useEstimate } from '../hooks/useEstimate'
 import CostEstimate from '../components/CostEstimate'
 import PageDescription from '../components/PageDescription'
-import ToggleChip from '../components/ToggleChip'
-import ModelSearchPicker from '../components/ModelSearchPicker'
 
 /**
  * Generate the power-set of a list of strings.
  * Example: ["a", "b"] => [[], ["a"], ["b"], ["a", "b"]]
+ * @deprecated Tool extension sets are now baked into strategies. Kept for tests.
  */
 export function generatePowerSet(items: string[]): string[][] {
   const result: string[][] = []
@@ -37,153 +30,133 @@ export function generatePowerSet(items: string[]): string[][] {
   return result
 }
 
-function ChipGroup({
-  label,
-  options,
-  selected,
-  onChange,
-  error,
-  disabledOptions,
-}: {
-  label?: string
-  options: (string | { value: string; label: string })[]
-  selected: string[]
-  onChange: (vals: string[]) => void
-  error?: string
-  disabledOptions?: string[]
+function StrategyCard({ strategy, selected, onToggle }: {
+  strategy: StrategySummary
+  selected: boolean
+  onToggle: () => void
 }) {
-  const toggle = (val: string) => {
-    onChange(
-      selected.includes(val) ? selected.filter((v) => v !== val) : [...selected, val]
-    )
-  }
   return (
-    <div>
-      <div className="flex items-center gap-2 mb-2">
-        {label && (
-          <p className="text-sm font-medium text-gray-700 dark:text-gray-300">{label}</p>
-        )}
-        {selected.length > 0 && (
-          <span className="px-1.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 dark:bg-amber-900 text-amber-700 dark:text-amber-300">
-            {selected.length} selected
-          </span>
-        )}
+    <button
+      type="button"
+      onClick={onToggle}
+      className={`w-full text-left p-3 rounded-lg border transition-colors ${
+        selected
+          ? 'border-amber-400 dark:border-amber-600 bg-amber-50 dark:bg-amber-950'
+          : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 hover:border-gray-300 dark:hover:border-gray-600'
+      }`}
+      data-testid="strategy-card"
+      data-selected={selected}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1.5 mb-0.5">
+            <span className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
+              {strategy.name}
+            </span>
+            {strategy.is_builtin ? (
+              <span className="flex-shrink-0 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300">
+                builtin
+              </span>
+            ) : (
+              <span className="flex-shrink-0 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300">
+                user
+              </span>
+            )}
+          </div>
+          <p className="text-xs font-mono text-gray-500 dark:text-gray-400 truncate">{strategy.id}</p>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+            Shape: <span className="font-mono">{strategy.orchestration_shape}</span>
+          </p>
+        </div>
+        <div className={`flex-shrink-0 w-4 h-4 rounded-full border-2 mt-0.5 ${
+          selected
+            ? 'border-amber-500 bg-amber-500'
+            : 'border-gray-300 dark:border-gray-600'
+        }`}>
+          {selected && (
+            <svg className="w-full h-full text-white" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z" />
+            </svg>
+          )}
+        </div>
       </div>
-      <div className="flex flex-wrap gap-2">
-        {options.map((opt) => {
-          const isObj = typeof opt === 'object'
-          const value = isObj ? opt.value : opt
-          const chipLabel = isObj ? opt.label : opt
-          const isDisabled = disabledOptions?.includes(value)
-          return (
-            <ToggleChip
-              key={value}
-              label={chipLabel}
-              value={value}
-              checked={selected.includes(value)}
-              onChange={() => toggle(value)}
-              disabled={isDisabled}
-            />
-          )
-        })}
-      </div>
-      {error && (
-        <p className="mt-1.5 text-xs text-red-600 dark:text-red-400">{error}</p>
-      )}
-    </div>
+    </button>
   )
 }
 
 export default function ExperimentNew() {
   const navigate = useNavigate()
   const [datasets, setDatasets] = useState<Dataset[]>([])
-  const [models, setModels] = useState<ModelProviderGroup[]>([])
-  const [strategies, setStrategies] = useState<string[]>([])
-  const [profiles, setProfiles] = useState<string[]>([])
-  const [toolExtensions, setToolExtensions] = useState<ToolExtension[]>([])
+  const [strategies, setStrategies] = useState<StrategySummary[]>([])
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [submitAttempted, setSubmitAttempted] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [unavailableError, setUnavailableError] = useState<Array<{ id: string; status: string; reason?: string }> | null>(null)
   const [allowUnavailable, setAllowUnavailable] = useState(false)
-  const [droppedModels, setDroppedModels] = useState<string[]>([])
+  const [estimate, setEstimate] = useState<CostEstimateType | null>(null)
+  const [estimateLoading, setEstimateLoading] = useState(false)
 
   const [selectedDataset, setSelectedDataset] = useState('')
-  const [selectedModels, setSelectedModels] = useState<string[]>([])
-  const [selectedStrategies, setSelectedStrategies] = useState<string[]>([])
-  const [selectedProfile, setSelectedProfile] = useState('')
-  const [toolVariants, setToolVariants] = useState<string[]>(['with_tools', 'without_tools'])
-  const [selectedToolExtensions, setSelectedToolExtensions] = useState<string[]>([])
-  const [toolExtensionsPowerSet, setToolExtensionsPowerSet] = useState(true)
-  const [verification, setVerification] = useState<string[]>(['none'])
+  const [datasetVersion, setDatasetVersion] = useState('latest')
+  const [selectedStrategyIds, setSelectedStrategyIds] = useState<string[]>([])
   const [repetitions, setRepetitions] = useState(1)
   const [spendCapInput, setSpendCapInput] = useState('')
 
-  // Build tool_extension_sets based on power-set toggle
-  const toolExtensionSets: string[][] | undefined =
-    selectedToolExtensions.length === 0
-      ? undefined
-      : toolExtensionsPowerSet
-        ? generatePowerSet(selectedToolExtensions)
-        : [selectedToolExtensions]
-
-  const config: Partial<ExperimentConfig> = {
-    dataset: selectedDataset || undefined,
-    models: selectedModels,
-    strategies: selectedStrategies,
-    profiles: selectedProfile ? [selectedProfile] : undefined,
-    tool_variants: toolVariants,
-    tool_extension_sets: toolExtensionSets,
-    verification,
-    repetitions,
-  }
-
-  const { estimate, loading: estimateLoading } = useEstimate(config)
+  // Debounced estimate
+  useEffect(() => {
+    if (selectedStrategyIds.length === 0 || !selectedDataset) {
+      setEstimate(null)
+      return
+    }
+    setEstimateLoading(true)
+    const timer = setTimeout(async () => {
+      try {
+        const experimentId = `estimate-${Date.now()}`
+        const body = {
+          matrix: {
+            experiment_id: experimentId,
+            dataset_name: selectedDataset,
+            dataset_version: datasetVersion,
+            strategy_ids: selectedStrategyIds,
+            num_repetitions: repetitions,
+          },
+          target_kloc: 10.0,
+        }
+        const result = await fetch('/api/experiments/estimate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        })
+        if (result.ok) {
+          setEstimate(await result.json() as CostEstimateType)
+        } else {
+          setEstimate(null)
+        }
+      } catch {
+        setEstimate(null)
+      } finally {
+        setEstimateLoading(false)
+      }
+    }, 400)
+    return () => clearTimeout(timer)
+  }, [selectedStrategyIds, selectedDataset, datasetVersion, repetitions])
 
   useEffect(() => {
-    Promise.all([listDatasets(), listModels(), listStrategies(), listProfiles(), listToolExtensions()])
-      .then(([ds, ms, ss, ps, te]) => {
+    Promise.all([listDatasets(), listStrategiesFull()])
+      .then(([ds, ss]) => {
         setDatasets(ds)
-        setModels(ms)
         setStrategies(ss)
-        setProfiles(ps)
-        setToolExtensions(te)
-        if (ps.length > 0) setSelectedProfile(ps[0])
-
-        // Check if any initially-selected models are now unavailable
-        // (This handles URL query params / saved drafts — currently no such path,
-        // but the handling is correct for any future caller.)
-        if (selectedModels.length > 0) {
-          const allModelIds = new Set(ms.flatMap((g) => g.models.map((m) => m.id)))
-          const availableIds = new Set(
-            ms.flatMap((g) => g.models.filter((m) => m.status === 'available').map((m) => m.id))
-          )
-          const dropped = selectedModels.filter((id) => allModelIds.has(id) && !availableIds.has(id))
-          if (dropped.length > 0) {
-            setDroppedModels(dropped)
-            setSelectedModels((prev) => prev.filter((id) => availableIds.has(id)))
-          }
-        }
       })
-      .catch((e) => setError(e.message))
+      .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false))
-    // intentionally run once on mount
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const datasetError = submitAttempted && !selectedDataset ? 'Please select a dataset' : undefined
-  const modelsError = submitAttempted && selectedModels.length === 0 ? 'Select at least one model' : undefined
-  const strategiesError = submitAttempted && selectedStrategies.length === 0 ? 'Select at least one strategy' : undefined
-  const toolVariantsError = submitAttempted && toolVariants.length === 0 ? 'Select at least one tool variant' : undefined
-  const verificationError = submitAttempted && verification.length === 0 ? 'Select at least one verification option' : undefined
+  const strategiesError = submitAttempted && selectedStrategyIds.length === 0 ? 'Select at least one strategy' : undefined
 
-  const isValid =
-    !!selectedDataset &&
-    selectedModels.length > 0 &&
-    selectedStrategies.length > 0 &&
-    toolVariants.length > 0 &&
-    verification.length > 0
+  const isValid = !!selectedDataset && selectedStrategyIds.length > 0
 
   const doSubmit = async (overrideAllowUnavailable?: boolean) => {
     setSubmitting(true)
@@ -191,20 +164,34 @@ export default function ExperimentNew() {
     setUnavailableError(null)
     const shouldAllow = overrideAllowUnavailable ?? allowUnavailable
     try {
-      const experimentConfig: ExperimentConfig = {
-        dataset: selectedDataset,
-        models: selectedModels,
-        strategies: selectedStrategies,
-        profiles: selectedProfile ? [selectedProfile] : [],
-        tool_variants: toolVariants,
-        tool_extension_sets: toolExtensionSets,
-        verification,
-        repetitions,
-        spend_cap_usd: spendCapInput ? parseFloat(spendCapInput) : undefined,
+      const experimentId = `exp-${Date.now()}`
+      const body: Record<string, unknown> = {
+        experiment_id: experimentId,
+        dataset_name: selectedDataset,
+        dataset_version: datasetVersion,
+        strategy_ids: selectedStrategyIds,
+        num_repetitions: repetitions,
+        ...(spendCapInput ? { max_experiment_cost_usd: parseFloat(spendCapInput) } : {}),
         ...(shouldAllow ? { allow_unavailable_models: true } : {}),
       }
-      const experiment = await submitExperiment(experimentConfig)
-      navigate(`/experiments/${experiment.experiment_id}`)
+      const res = await fetch('/api/experiments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      if (!res.ok) {
+        let resBody: Record<string, unknown> = {}
+        try { resBody = await res.json() as Record<string, unknown> } catch { /* ignore */ }
+        const detail = resBody.detail as Record<string, unknown> | undefined
+        if (detail && detail.error === 'unavailable_models') {
+          setUnavailableError(detail.models as Array<{ id: string; status: string; reason?: string }>)
+          return
+        }
+        setError(typeof detail === 'string' ? detail : `Submit failed (${res.status})`)
+        return
+      }
+      const data = await res.json() as { experiment_id: string }
+      navigate(`/experiments/${data.experiment_id}`)
     } catch (err) {
       const parsed = parseUnavailableModelsError(err)
       if (parsed) {
@@ -229,6 +216,12 @@ export default function ExperimentNew() {
     await doSubmit(true)
   }
 
+  const toggleStrategy = (id: string) => {
+    setSelectedStrategyIds((prev) =>
+      prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id]
+    )
+  }
+
   if (loading) {
     return <div className="flex items-center justify-center h-64 text-gray-400">Loading...</div>
   }
@@ -237,8 +230,8 @@ export default function ExperimentNew() {
     <div className="max-w-4xl mx-auto">
       <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">New Experiment</h1>
       <PageDescription>
-        An experiment runs the full experiment matrix — every combination of models × strategies × tool variants × extensions × verification modes × repetitions — against a labelled dataset.
-        Submit one here to measure how well each configuration catches known vulnerabilities, with an up-front cost estimate and optional spend cap.
+        An experiment runs a set of strategies against a labelled dataset. Each strategy encapsulates
+        its own model, tools, prompts, and verification config — pick one or more strategies below.
       </PageDescription>
       <div className="h-6" />
 
@@ -251,6 +244,7 @@ export default function ExperimentNew() {
       <form onSubmit={handleSubmit}>
         <div className="grid lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 space-y-6">
+            {/* Dataset */}
             <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
               <h2 className="font-semibold mb-3">Dataset</h2>
               <select
@@ -265,7 +259,7 @@ export default function ExperimentNew() {
                 <option value="">Select a dataset…</option>
                 {datasets.map((d) => (
                   <option key={d.name} value={d.name}>
-                    {d.name} ({d.label_count} labels, {d.languages.join('/')})
+                    {d.name} ({d.label_count} labels{d.languages.length > 0 ? `, ${d.languages.join('/')}` : ''})
                   </option>
                 ))}
               </select>
@@ -274,140 +268,43 @@ export default function ExperimentNew() {
               )}
             </div>
 
-            <div className={`bg-white dark:bg-gray-800 rounded-xl border p-5 ${
-              modelsError ? 'border-red-400 dark:border-red-600' : 'border-gray-200 dark:border-gray-700'
-            }`}>
-              <h2 className="font-semibold mb-3">Models</h2>
-
-              {droppedModels.length > 0 && (
-                <div
-                  className="mb-3 p-2 rounded-md bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-300 text-xs"
-                  data-testid="dropped-models-notice"
-                >
-                  Dropped {droppedModels.length} unavailable model{droppedModels.length !== 1 ? 's' : ''} from your selection:{' '}
-                  {droppedModels.join(', ')}
-                </div>
-              )}
-
-              <ModelSearchPicker
-                groups={models}
-                selected={selectedModels}
-                onChange={setSelectedModels}
-                error={modelsError}
-                label="Models"
-                allowUnavailableDefault={allowUnavailable}
-              />
-
-              <div className="mt-3">
-                <label className="flex items-center gap-2 cursor-pointer" data-testid="allow-unavailable-label">
-                  <input
-                    type="checkbox"
-                    checked={allowUnavailable}
-                    onChange={(e) => setAllowUnavailable(e.target.checked)}
-                    className="rounded"
-                    data-testid="allow-unavailable-checkbox"
-                  />
-                  <span className="text-sm text-gray-700 dark:text-gray-300">
-                    Allow unavailable models (override submit check)
-                  </span>
-                </label>
-              </div>
-
-              {unavailableError && (
-                <div
-                  className="mt-3 p-3 rounded-lg bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-300 text-sm"
-                  data-testid="unavailable-models-error"
-                >
-                  <p className="font-semibold mb-1">Some selected models are unavailable:</p>
-                  <ul className="list-disc list-inside text-xs space-y-0.5 mb-3">
-                    {unavailableError.map((m) => (
-                      <li key={m.id}>
-                        <span className="font-mono">{m.id}</span> — {m.status}
-                        {m.reason ? ` (${m.reason})` : ''}
-                      </li>
-                    ))}
-                  </ul>
-                  <button
-                    type="button"
-                    onClick={handleSubmitWithOverride}
-                    disabled={submitting}
-                    className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold transition-colors disabled:opacity-50"
-                    data-testid="submit-with-override-btn"
-                  >
-                    {submitting ? 'Submitting…' : 'Submit with override'}
-                  </button>
-                </div>
-              )}
-            </div>
-
+            {/* Strategies */}
             <div className={`bg-white dark:bg-gray-800 rounded-xl border p-5 ${
               strategiesError ? 'border-red-400 dark:border-red-600' : 'border-gray-200 dark:border-gray-700'
             }`}>
-              <h2 className="font-semibold mb-3">Strategies</h2>
-              <ChipGroup
-                label=""
-                options={strategies}
-                selected={selectedStrategies}
-                onChange={setSelectedStrategies}
-                error={strategiesError}
-              />
-            </div>
-
-            <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
-              <h2 className="font-semibold mb-3">Profile</h2>
-              <div className="flex flex-wrap gap-3">
-                {profiles.map((p) => (
-                  <label key={p} className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="profile"
-                      value={p}
-                      checked={selectedProfile === p}
-                      onChange={() => setSelectedProfile(p)}
-                    />
-                    <span className="text-sm font-mono text-gray-700 dark:text-gray-300">{p}</span>
-                  </label>
-                ))}
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="font-semibold">Strategies</h2>
+                {selectedStrategyIds.length > 0 && (
+                  <span className="px-1.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 dark:bg-amber-900 text-amber-700 dark:text-amber-300">
+                    {selectedStrategyIds.length} selected
+                  </span>
+                )}
               </div>
+              {strategies.length === 0 ? (
+                <p className="text-sm text-gray-400">No strategies available.{' '}
+                  <a href="/strategies/new" className="text-amber-600 hover:underline">Create one</a>.
+                </p>
+              ) : (
+                <div className="grid sm:grid-cols-2 gap-2">
+                  {strategies.map((s) => (
+                    <StrategyCard
+                      key={s.id}
+                      strategy={s}
+                      selected={selectedStrategyIds.includes(s.id)}
+                      onToggle={() => toggleStrategy(s.id)}
+                    />
+                  ))}
+                </div>
+              )}
+              {strategiesError && (
+                <p className="mt-1.5 text-xs text-red-600 dark:text-red-400">{strategiesError}</p>
+              )}
             </div>
 
+            {/* Options */}
             <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
-              <h2 className="font-semibold mb-4">Dimensions</h2>
+              <h2 className="font-semibold mb-4">Options</h2>
               <div className="space-y-4">
-                <ChipGroup
-                  label="Tool variants"
-                  options={['with_tools', 'without_tools']}
-                  selected={toolVariants}
-                  onChange={setToolVariants}
-                  error={toolVariantsError}
-                />
-                <ChipGroup
-                  label="Tool extensions"
-                  options={toolExtensions.map((te) => ({ value: te.key, label: te.label }))}
-                  selected={selectedToolExtensions}
-                  onChange={setSelectedToolExtensions}
-                  disabledOptions={toolExtensions.filter((te) => !te.available).map((te) => te.key)}
-                />
-                <div className="flex items-center gap-2">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={toolExtensionsPowerSet}
-                      onChange={(e) => setToolExtensionsPowerSet(e.target.checked)}
-                      className="rounded"
-                    />
-                    <span className="text-sm text-gray-700 dark:text-gray-300">
-                      Generate all combinations (power-set)
-                    </span>
-                  </label>
-                </div>
-                <ChipGroup
-                  label="Verification"
-                  options={['none', 'with_verification']}
-                  selected={verification}
-                  onChange={setVerification}
-                  error={verificationError}
-                />
                 <div>
                   <label className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1 block">
                     Repetitions
@@ -421,9 +318,25 @@ export default function ExperimentNew() {
                     className="w-24 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2"
                   />
                 </div>
+
+                <div>
+                  <label className="flex items-center gap-2 cursor-pointer" data-testid="allow-unavailable-label">
+                    <input
+                      type="checkbox"
+                      checked={allowUnavailable}
+                      onChange={(e) => setAllowUnavailable(e.target.checked)}
+                      className="rounded"
+                      data-testid="allow-unavailable-checkbox"
+                    />
+                    <span className="text-sm text-gray-700 dark:text-gray-300">
+                      Allow unavailable models (override submit check)
+                    </span>
+                  </label>
+                </div>
               </div>
             </div>
 
+            {/* Spend Cap */}
             <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
               <h2 className="font-semibold mb-3">Spend Cap (USD)</h2>
               <input
@@ -440,6 +353,33 @@ export default function ExperimentNew() {
                 className="w-48 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2"
               />
             </div>
+
+            {/* Unavailable models error */}
+            {unavailableError && (
+              <div
+                className="p-3 rounded-lg bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-300 text-sm"
+                data-testid="unavailable-models-error"
+              >
+                <p className="font-semibold mb-1">Some strategy models are unavailable:</p>
+                <ul className="list-disc list-inside text-xs space-y-0.5 mb-3">
+                  {unavailableError.map((m) => (
+                    <li key={m.id}>
+                      <span className="font-mono">{m.id}</span> — {m.status}
+                      {m.reason ? ` (${m.reason})` : ''}
+                    </li>
+                  ))}
+                </ul>
+                <button
+                  type="button"
+                  onClick={handleSubmitWithOverride}
+                  disabled={submitting}
+                  className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold transition-colors disabled:opacity-50"
+                  data-testid="submit-with-override-btn"
+                >
+                  {submitting ? 'Submitting…' : 'Submit with override'}
+                </button>
+              </div>
+            )}
           </div>
 
           <div className="space-y-4">

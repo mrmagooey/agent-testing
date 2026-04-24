@@ -13,8 +13,8 @@ import pytest
 from sec_review_framework.coordinator import ExperimentCoordinator, _compute_trend_summary
 from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
 from sec_review_framework.data.experiment import (
+    BundleSnapshot,
     ExperimentRun,
-    PromptSnapshot,
     ReviewProfileName,
     RunResult,
     RunStatus,
@@ -472,10 +472,13 @@ def _write_result_for(
     tool_extensions: frozenset | None = None,
 ) -> None:
     """Write a run_result.json to storage_root/outputs/batch_id/run_id/."""
+    from tests.helpers import make_test_bundle_snapshot
+
     ext = tool_extensions or frozenset()
     run = ExperimentRun(
         id=f"{batch_id}_{model_id}_{strategy.value}",
         experiment_id=batch_id,
+        strategy_id="builtin.single_agent",
         model_id=model_id,
         strategy=strategy,
         tool_variant=tool_variant,
@@ -498,11 +501,7 @@ def _write_result_for(
         status=RunStatus.COMPLETED,
         findings=[],
         strategy_output=strategy_output,
-        prompt_snapshot=PromptSnapshot.capture(
-            system_prompt="sys",
-            user_message_template="user",
-            finding_output_format="json",
-        ),
+        bundle_snapshot=make_test_bundle_snapshot(),
         tool_call_count=0,
         total_input_tokens=100,
         total_output_tokens=50,

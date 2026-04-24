@@ -146,7 +146,12 @@ def test_smoke_test_503_when_coordinator_none():
 
 
 def test_smoke_test_sets_max_turns_10(coordinator_client):
-    """submit_experiment receives a matrix with strategy_configs max_turns=10."""
+    """The smoke test uses the builtin.single_agent strategy.
+
+    In the new strategy-bundle architecture, max_turns is baked into the
+    strategy's default bundle rather than passed via strategy_configs.
+    We verify the submitted matrix references the expected builtin strategy.
+    """
     client, c, _ = coordinator_client
     captured = {}
 
@@ -159,7 +164,8 @@ def test_smoke_test_sets_max_turns_10(coordinator_client):
     with patch.object(c, "submit_experiment", side_effect=_capture):
         resp = client.post("/smoke-test")
     assert resp.status_code == 200
-    assert captured["matrix"].strategy_configs["single_agent"]["max_turns"] == 10
+    # Smoke test must target the builtin single_agent strategy.
+    assert "builtin.single_agent" in captured["matrix"].strategy_ids
 
 
 def test_smoke_test_returns_412_when_no_models(coordinator_client):
@@ -291,23 +297,19 @@ def test_get_run_404_message_is_informative(coordinator_client):
 @pytest.mark.asyncio
 async def test_get_run_shape_after_submit(tmp_path: Path):
     """A submitted run's detail endpoint returns expected shape fields."""
-    from sec_review_framework.data.experiment import (
-        ExperimentMatrix, ReviewProfileName, StrategyName, ToolVariant, VerificationVariant
-    )
+    from sec_review_framework.data.experiment import ExperimentMatrix
+    from sec_review_framework.coordinator import _seed_builtin_strategies
+
     db = Database(tmp_path / "test.db")
     await db.init()
+    await _seed_builtin_strategies(db)
     c = _make_coordinator(tmp_path, db)
 
     matrix = ExperimentMatrix(
         experiment_id="shape-test",
         dataset_name="ds",
         dataset_version="1.0",
-        model_ids=["gpt-4o"],
-        strategies=[StrategyName.SINGLE_AGENT],
-        tool_variants=[ToolVariant.WITH_TOOLS],
-        review_profiles=[ReviewProfileName.DEFAULT],
-        verification_variants=[VerificationVariant.NONE],
-        parallel_modes=[False],
+        strategy_ids=["builtin.single_agent"],
     )
     await c.submit_experiment(matrix)
 

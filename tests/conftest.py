@@ -18,9 +18,9 @@ from sec_review_framework.data.evaluation import (
     VerificationResult,
 )
 from sec_review_framework.data.experiment import (
+    BundleSnapshot,
     ExperimentMatrix,
     ExperimentRun,
-    PromptSnapshot,
     ReviewProfileName,
     RunResult,
     RunStatus,
@@ -42,6 +42,10 @@ from sec_review_framework.models.base import (
     RetryPolicy,
     ToolDefinition,
 )
+
+
+# Re-export the shared helper so conftest-based tests can still call it
+from tests.helpers import make_test_bundle_snapshot  # noqa: F401
 
 
 # ---------------------------------------------------------------------------
@@ -191,8 +195,9 @@ def sample_label() -> GroundTruthLabel:
 def sample_experiment_run() -> ExperimentRun:
     """A minimal experiment run fixture."""
     return ExperimentRun(
-        id="experiment-example_gpt-4o_single_agent_with_tools_default_none",
+        id="experiment-example_builtin.single_agent",
         experiment_id="experiment-example",
+        strategy_id="builtin.single_agent",
         model_id="gpt-4o",
         strategy=StrategyName.SINGLE_AGENT,
         tool_variant=ToolVariant.WITH_TOOLS,
@@ -211,17 +216,12 @@ def sample_experiment_run() -> ExperimentRun:
 
 @pytest.fixture
 def sample_experiment_matrix() -> ExperimentMatrix:
-    """A small experiment matrix: 2 models x 2 strategies = 4 base runs."""
+    """A small experiment matrix: 2 strategies = 2 base runs."""
     return ExperimentMatrix(
         experiment_id="test-experiment",
         dataset_name="test-dataset",
         dataset_version="1.0.0",
-        model_ids=["gpt-4o", "claude-opus-4"],
-        strategies=[StrategyName.SINGLE_AGENT, StrategyName.PER_FILE],
-        tool_variants=[ToolVariant.WITH_TOOLS],
-        review_profiles=[ReviewProfileName.DEFAULT],
-        verification_variants=[VerificationVariant.NONE],
-        parallel_modes=[False],
+        strategy_ids=["builtin.single_agent", "builtin.per_file"],
     )
 
 
@@ -253,16 +253,36 @@ def sample_run_result(
     sample_strategy_output: StrategyOutput,
 ) -> RunResult:
     """A fully populated RunResult for testing reports and serialization."""
+    from sec_review_framework.data.strategy_bundle import (
+        OrchestrationShape,
+        StrategyBundleDefault,
+        UserStrategy,
+    )
+    _bundle = StrategyBundleDefault(
+        system_prompt="You are a security reviewer.",
+        user_prompt_template="Review this code.",
+        model_id="gpt-4o",
+        tools=frozenset(["read_file"]),
+        verification="none",
+        max_turns=80,
+        tool_extensions=frozenset(),
+    )
+    _strategy = UserStrategy(
+        id="builtin.single_agent",
+        name="Single Agent (builtin)",
+        parent_strategy_id=None,
+        orchestration_shape=OrchestrationShape.SINGLE_AGENT,
+        default=_bundle,
+        overrides=[],
+        created_at=datetime(2026, 1, 1, 0, 0, 0),
+        is_builtin=True,
+    )
     return RunResult(
         experiment=sample_experiment_run,
         status=RunStatus.COMPLETED,
         findings=[sample_finding],
         strategy_output=sample_strategy_output,
-        prompt_snapshot=PromptSnapshot.capture(
-            system_prompt="You are a security reviewer.",
-            user_message_template="Review this code.",
-            finding_output_format="JSON array",
-        ),
+        bundle_snapshot=BundleSnapshot.capture(_strategy),
         tool_call_count=5,
         total_input_tokens=5000,
         total_output_tokens=1200,

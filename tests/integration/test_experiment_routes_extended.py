@@ -95,16 +95,14 @@ async def test_cancel_existing_experiment_returns_cancelled_count(tmp_path: Path
     await db.init()
     c = _make_coordinator(tmp_path, db)
 
+    from sec_review_framework.coordinator import _seed_builtin_strategies
+    await _seed_builtin_strategies(db)
+
     matrix = ExperimentMatrix(
         experiment_id="cancel-test",
         dataset_name="ds",
         dataset_version="1.0",
-        model_ids=["gpt-4o"],
-        strategies=[StrategyName.SINGLE_AGENT],
-        tool_variants=[ToolVariant.WITH_TOOLS],
-        review_profiles=[ReviewProfileName.DEFAULT],
-        verification_variants=[VerificationVariant.NONE],
-        parallel_modes=[False],
+        strategy_ids=["builtin.single_agent"],
     )
     await c.submit_experiment(matrix)
 
@@ -153,16 +151,14 @@ async def test_delete_existing_experiment_removes_it(tmp_path: Path):
     await db.init()
     c = _make_coordinator(tmp_path, db)
 
+    from sec_review_framework.coordinator import _seed_builtin_strategies
+    await _seed_builtin_strategies(db)
+
     matrix = ExperimentMatrix(
         experiment_id="del-test",
         dataset_name="ds",
         dataset_version="1.0",
-        model_ids=["gpt-4o"],
-        strategies=[StrategyName.SINGLE_AGENT],
-        tool_variants=[ToolVariant.WITH_TOOLS],
-        review_profiles=[ReviewProfileName.DEFAULT],
-        verification_variants=[VerificationVariant.NONE],
-        parallel_modes=[False],
+        strategy_ids=["builtin.single_agent"],
     )
     await c.submit_experiment(matrix)
 

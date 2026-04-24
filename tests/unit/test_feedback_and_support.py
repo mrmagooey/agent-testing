@@ -38,8 +38,9 @@ def _make_experiment_run(
     strategy: StrategyName = StrategyName.SINGLE_AGENT,
 ) -> ExperimentRun:
     return ExperimentRun(
-        id=f"{experiment_id}_{model_id}_{strategy.value}_with_tools_default_none",
+        id=f"{experiment_id}_{strategy.value}",
         experiment_id=experiment_id,
+        strategy_id=f"builtin.{strategy.value}",
         model_id=model_id,
         strategy=strategy,
         tool_variant=ToolVariant.WITH_TOOLS,
@@ -188,22 +189,30 @@ class TestFeedbackTracker:
 
 
 class TestPromptRegistry:
+    """Tests for PromptRegistry — now persists BundleSnapshot objects.
+
+    PromptSnapshot was renamed to BundleSnapshot (schema break accepted per plan).
+    PromptRegistry is retained as legacy persistence; it now saves/loads
+    BundleSnapshot objects which carry strategy_id and bundle_json instead of
+    raw prompt strings.
+    """
+
+    def _make_snapshot(self) -> "BundleSnapshot":  # noqa: F821
+        from tests.helpers import make_test_bundle_snapshot
+        return make_test_bundle_snapshot()
+
     def test_save_and_load_round_trip(self, tmp_path: Path):
-        from sec_review_framework.data.experiment import PromptSnapshot
+        from sec_review_framework.data.experiment import BundleSnapshot
 
         registry = PromptRegistry(config_root=tmp_path)
-        snapshot = PromptSnapshot.capture(
-            system_prompt="You are a security reviewer.",
-            user_message_template="Audit this code.",
-            finding_output_format="JSON array",
-        )
+        snapshot = self._make_snapshot()
 
         registry.save(StrategyName.SINGLE_AGENT, snapshot)
         loaded = registry.load(StrategyName.SINGLE_AGENT, snapshot.snapshot_id)
 
         assert loaded.snapshot_id == snapshot.snapshot_id
-        assert loaded.system_prompt == snapshot.system_prompt
-        assert loaded.user_message_template == snapshot.user_message_template
+        assert loaded.strategy_id == snapshot.strategy_id
+        assert loaded.bundle_json == snapshot.bundle_json
 
     def test_list_snapshots_empty_when_no_files(self, tmp_path: Path):
         registry = PromptRegistry(config_root=tmp_path)
@@ -211,13 +220,36 @@ class TestPromptRegistry:
         assert ids == []
 
     def test_list_snapshots_populated_after_save(self, tmp_path: Path):
-        from sec_review_framework.data.experiment import PromptSnapshot
+        from sec_review_framework.data.experiment import BundleSnapshot
+        from sec_review_framework.data.strategy_bundle import (
+            OrchestrationShape,
+            StrategyBundleDefault,
+            UserStrategy,
+        )
+        from datetime import datetime as _dt
+
+        def _snap(sid: str) -> BundleSnapshot:
+            s = UserStrategy(
+                id=sid, name=sid, parent_strategy_id=None,
+                orchestration_shape=OrchestrationShape.SINGLE_AGENT,
+                default=StrategyBundleDefault(
+                    system_prompt=f"sys-{sid}",
+                    user_prompt_template="user",
+                    model_id="fake-model",
+                    tools=frozenset(["read_file"]),
+                    verification="none",
+                    max_turns=10,
+                    tool_extensions=frozenset(),
+                ),
+                overrides=[],
+                created_at=_dt(2026, 1, 1),
+                is_builtin=False,
+            )
+            return BundleSnapshot.capture(s)
 
         registry = PromptRegistry(config_root=tmp_path)
-        snap1 = PromptSnapshot.capture(system_prompt="p1", user_message_template="u1",
-                                       finding_output_format="f")
-        snap2 = PromptSnapshot.capture(system_prompt="p2", user_message_template="u2",
-                                       finding_output_format="f")
+        snap1 = _snap("strat-1")
+        snap2 = _snap("strat-2")
 
         registry.save(StrategyName.PER_FILE, snap1)
         registry.save(StrategyName.PER_FILE, snap2)

@@ -17,9 +17,9 @@ import pytest
 from sec_review_framework.coordinator import ExperimentCoordinator, ExperimentCostTracker
 from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
 from sec_review_framework.data.experiment import (
+    BundleSnapshot,
     ExperimentMatrix,
     ExperimentRun,
-    PromptSnapshot,
     ReviewProfileName,
     RunResult,
     RunStatus,
@@ -75,17 +75,14 @@ def _minimal_matrix(experiment_id: str = "test-experiment") -> ExperimentMatrix:
         experiment_id=experiment_id,
         dataset_name="test-dataset",
         dataset_version="1.0.0",
-        model_ids=["gpt-4o"],
-        strategies=[StrategyName.SINGLE_AGENT],
-        tool_variants=[ToolVariant.WITH_TOOLS],
-        review_profiles=[ReviewProfileName.DEFAULT],
-        verification_variants=[VerificationVariant.NONE],
-        parallel_modes=[False],
+        strategy_ids=["builtin.single_agent"],
     )
 
 
 def _run_result_json(run: ExperimentRun) -> str:
     """Build a minimal RunResult JSON that passes model_validate_json."""
+    from tests.helpers import make_test_bundle_snapshot
+
     result = RunResult(
         experiment=run,
         status=RunStatus.COMPLETED,
@@ -93,11 +90,7 @@ def _run_result_json(run: ExperimentRun) -> str:
         strategy_output=StrategyOutput(
             findings=[], pre_dedup_count=0, post_dedup_count=0, dedup_log=[]
         ),
-        prompt_snapshot=PromptSnapshot.capture(
-            system_prompt="sys",
-            user_message_template="usr",
-            finding_output_format="fmt",
-        ),
+        bundle_snapshot=make_test_bundle_snapshot(),
         tool_call_count=0,
         total_input_tokens=100,
         total_output_tokens=50,
@@ -127,8 +120,9 @@ async def test_submit_experiment_creates_db_records(coordinator, db):
 
     runs = await db.list_runs("experiment-001")
     assert len(runs) == 1
-    assert runs[0]["model_id"] == "gpt-4o"
-    assert runs[0]["strategy"] == "single_agent"
+    # model_id and strategy are now derived from the resolved strategy bundle
+    assert runs[0]["model_id"] is not None
+    assert runs[0]["strategy"] is not None
 
 
 @pytest.mark.asyncio
@@ -137,17 +131,17 @@ async def test_submit_experiment_multi_dim_expands_correctly(coordinator, db):
         experiment_id="experiment-multi",
         dataset_name="ds",
         dataset_version="1.0",
-        model_ids=["gpt-4o", "claude-opus-4"],
-        strategies=[StrategyName.SINGLE_AGENT, StrategyName.PER_FILE],
-        tool_variants=[ToolVariant.WITH_TOOLS],
-        review_profiles=[ReviewProfileName.DEFAULT],
-        verification_variants=[VerificationVariant.NONE],
-        parallel_modes=[False],
+        strategy_ids=[
+            "builtin.single_agent",
+            "builtin.per_file",
+            "builtin.per_vuln_class",
+            "builtin.sast_first",
+        ],
     )
     await coordinator.submit_experiment(matrix)
 
     runs = await db.list_runs("experiment-multi")
-    assert len(runs) == 4  # 2 models * 2 strategies
+    assert len(runs) == 4  # 4 strategies
 
 
 # ---------------------------------------------------------------------------

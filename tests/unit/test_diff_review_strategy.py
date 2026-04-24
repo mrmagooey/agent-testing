@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -9,11 +10,45 @@ import pytest
 
 from sec_review_framework.strategies.diff_review import DiffReviewStrategy
 from sec_review_framework.data.findings import StrategyOutput
+from sec_review_framework.data.strategy_bundle import (
+    OrchestrationShape,
+    StrategyBundleDefault,
+    UserStrategy,
+)
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _make_user_strategy(
+    system_prompt: str = "You are a security reviewer.",
+    user_prompt_template: str = (
+        "Review this diff:\n{diff_text}\n\nFiles:\n{file_context}\n\n{finding_output_format}"
+    ),
+    max_turns: int = 60,
+) -> UserStrategy:
+    """Build a minimal UserStrategy for diff_review tests."""
+    return UserStrategy(
+        id="test.diff_review",
+        name="Test Diff Review",
+        parent_strategy_id=None,
+        orchestration_shape=OrchestrationShape.DIFF_REVIEW,
+        default=StrategyBundleDefault(
+            system_prompt=system_prompt,
+            user_prompt_template=user_prompt_template,
+            profile_modifier="",
+            model_id="fake-model",
+            tools=frozenset(),
+            verification="none",
+            max_turns=max_turns,
+            tool_extensions=frozenset(),
+        ),
+        overrides=[],
+        created_at=datetime(2026, 1, 1),
+        is_builtin=False,
+    )
 
 
 def _make_target(
@@ -44,7 +79,6 @@ def _make_target(
 
 
 def _make_model(response_text: str = "```json\n[]\n```") -> MagicMock:
-    from collections import deque
     from sec_review_framework.models.base import ModelResponse
 
     model = MagicMock()
@@ -69,7 +103,7 @@ def _run_strategy(
     target=None,
     model=None,
     tools=None,
-    config: dict | None = None,
+    strategy: UserStrategy | None = None,
 ) -> StrategyOutput:
     if target is None:
         target = _make_target()
@@ -77,11 +111,11 @@ def _run_strategy(
         model = _make_model()
     if tools is None:
         tools = _make_tools()
-    if config is None:
-        config = {"experiment_id": "test-exp", "max_turns": 1}
+    if strategy is None:
+        strategy = _make_user_strategy()
 
-    strategy = DiffReviewStrategy()
-    return strategy.run(target, model, tools, config)
+    impl = DiffReviewStrategy()
+    return impl.run(target, model, tools, strategy)
 
 
 # ---------------------------------------------------------------------------
@@ -136,7 +170,7 @@ class TestMissingDiffSpec:
         """When load_diff_spec() raises, the strategy should propagate the exception."""
         target = _make_target(load_diff_spec_raises=FileNotFoundError("No diff_spec.yaml"))
         with pytest.raises(FileNotFoundError):
-            DiffReviewStrategy().run(target, _make_model(), _make_tools(), {})
+            DiffReviewStrategy().run(target, _make_model(), _make_tools(), _make_user_strategy())
 
 
 # ---------------------------------------------------------------------------
@@ -189,12 +223,13 @@ class TestBinaryAndDeletedFiles:
 
 
 # ---------------------------------------------------------------------------
-# Max turns config
+# Max turns config — comes from the UserStrategy bundle
 # ---------------------------------------------------------------------------
 
 
 class TestMaxTurnsConfig:
-    def test_max_turns_passed_to_agentic_loop(self):
+    def test_max_turns_from_strategy_bundle(self):
+        """max_turns comes from the UserStrategy default bundle."""
         target = _make_target()
         model = _make_model()
         tools = _make_tools()
@@ -204,12 +239,14 @@ class TestMaxTurnsConfig:
             captured["max_turns"] = max_turns
             return "```json\n[]\n```"
 
+        strategy = _make_user_strategy(max_turns=42)
         with patch("sec_review_framework.strategies.diff_review.run_agentic_loop", side_effect=fake_loop):
-            DiffReviewStrategy().run(target, model, tools, {"max_turns": 42})
+            DiffReviewStrategy().run(target, model, tools, strategy)
 
         assert captured["max_turns"] == 42
 
     def test_default_max_turns_is_60(self):
+        """Default builtin diff_review max_turns is 60."""
         target = _make_target()
         model = _make_model()
         tools = _make_tools()
@@ -219,10 +256,47 @@ class TestMaxTurnsConfig:
             captured["max_turns"] = max_turns
             return "```json\n[]\n```"
 
+        strategy = _make_user_strategy(max_turns=60)
         with patch("sec_review_framework.strategies.diff_review.run_agentic_loop", side_effect=fake_loop):
-            DiffReviewStrategy().run(target, model, tools, {})
+            DiffReviewStrategy().run(target, model, tools, strategy)
 
         assert captured["max_turns"] == 60
+
+    def test_profile_modifier_appended_to_system_prompt(self):
+        """A non-empty profile_modifier should be appended to the system prompt."""
+        target = _make_target()
+        model = _make_model()
+        tools = _make_tools()
+        captured = {}
+
+        def fake_loop(model, tools, system_prompt, user_message, max_turns):
+            captured["system_prompt"] = system_prompt
+            return "```json\n[]\n```"
+
+        strategy = UserStrategy(
+            id="test.diff_review_mod",
+            name="Test",
+            parent_strategy_id=None,
+            orchestration_shape=OrchestrationShape.DIFF_REVIEW,
+            default=StrategyBundleDefault(
+                system_prompt="base prompt",
+                user_prompt_template="Review {diff_text}{file_context}{finding_output_format}",
+                profile_modifier="focus on injection",
+                model_id="fake-model",
+                tools=frozenset(),
+                verification="none",
+                max_turns=60,
+                tool_extensions=frozenset(),
+            ),
+            overrides=[],
+            created_at=datetime(2026, 1, 1),
+            is_builtin=False,
+        )
+
+        with patch("sec_review_framework.strategies.diff_review.run_agentic_loop", side_effect=fake_loop):
+            DiffReviewStrategy().run(target, model, tools, strategy)
+
+        assert captured["system_prompt"] == "base prompt\n\nfocus on injection"
 
 
 # ---------------------------------------------------------------------------
@@ -244,7 +318,7 @@ class TestMultipleChangedFiles:
             return "```json\n[]\n```"
 
         with patch("sec_review_framework.strategies.diff_review.run_agentic_loop", side_effect=fake_loop):
-            DiffReviewStrategy().run(target, model, tools=_make_tools(), config={})
+            DiffReviewStrategy().run(target, model, tools=_make_tools(), strategy=_make_user_strategy())
 
         msg = captured_user_msg.get("msg", "")
         assert "a.py" in msg

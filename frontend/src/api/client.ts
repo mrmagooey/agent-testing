@@ -552,8 +552,63 @@ export async function listAvailableModelIds(): Promise<string[]> {
   return groups.flatMap((g) => g.models.filter((m) => m.status === 'available').map((m) => m.id))
 }
 
+/**
+ * Legacy helper: returns strategy names as plain strings for old axis-based
+ * experiment configuration. New code should use listStrategiesFull().
+ */
 export function listStrategies(): Promise<string[]> {
   return fetchConfigList('/strategies')
+}
+
+// ─── Strategy Endpoints ────────────────────────────────────────────────────
+
+export type {
+  OrchestrationShape,
+  StrategySummary,
+  UserStrategy,
+  StrategyBundleDefault,
+  StrategyBundleOverride,
+  OverrideRule,
+  StrategyCreateBody,
+  StrategyValidateBody,
+  StrategyValidateResult,
+} from './strategies'
+
+import type {
+  StrategySummary,
+  UserStrategy,
+  StrategyCreateBody,
+  StrategyValidateBody,
+  StrategyValidateResult,
+} from './strategies'
+
+export function listStrategiesFull(): Promise<StrategySummary[]> {
+  return apiFetch<StrategySummary[]>('/strategies')
+}
+
+export function getStrategy(id: string): Promise<UserStrategy> {
+  return apiFetch<UserStrategy>(`/strategies/${encodeURIComponent(id)}`)
+}
+
+export function createStrategy(body: StrategyCreateBody): Promise<UserStrategy> {
+  return apiFetch<UserStrategy>('/strategies', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+export function validateStrategy(
+  id: string,
+  body: StrategyValidateBody
+): Promise<StrategyValidateResult> {
+  return apiFetch<StrategyValidateResult>(`/strategies/${encodeURIComponent(id)}/validate`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+export function deleteStrategy(id: string): Promise<void> {
+  return apiFetch<void>(`/strategies/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
 
 export function listProfiles(): Promise<string[]> {

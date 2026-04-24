@@ -116,8 +116,7 @@ class ExperimentRun(BaseModel):
 
     # HTTP result transport fields.  Populated at config-write time when
     # result_transport == "http"; excluded from DB config_json persistence via
-    # model_dump(exclude={"upload_token"}).  upload_url and upload_token are
-    # None for "pvc" runs.
+    # Field(exclude=True).  upload_url and upload_token are None for "pvc" runs.
     result_transport: Literal["pvc", "http"] = "pvc"
     upload_url: str | None = None
     upload_token: str | None = Field(default=None, exclude=True)

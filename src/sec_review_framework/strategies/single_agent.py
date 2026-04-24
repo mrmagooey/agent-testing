@@ -5,16 +5,15 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from sec_review_framework.data.findings import StrategyOutput
-from sec_review_framework.prompts.loader import load_system_prompt, load_user_prompt
 from sec_review_framework.strategies.base import ScanStrategy
 from sec_review_framework.strategies.common import (
     FINDING_OUTPUT_FORMAT,
     FindingParser,
-    build_system_prompt,
     run_agentic_loop,
 )
 
 if TYPE_CHECKING:
+    from sec_review_framework.data.strategy_bundle import UserStrategy
     from sec_review_framework.models.base import ModelProvider
     from sec_review_framework.tools.registry import ToolRegistry
 
@@ -34,9 +33,6 @@ class SingleAgentStrategy(ScanStrategy):
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _base_system_prompt(self) -> str:
-        return load_system_prompt("single_agent.txt")
-
     def _build_repo_summary(self, target) -> str:
         """Return a text representation of the repository file tree."""
         try:
@@ -55,13 +51,17 @@ class SingleAgentStrategy(ScanStrategy):
         target,
         model: "ModelProvider",
         tools: "ToolRegistry",
-        config: dict,
+        strategy: "UserStrategy",
     ) -> StrategyOutput:
-        system_prompt = build_system_prompt(self._base_system_prompt(), config)
-        repo_summary = self._build_repo_summary(target)
-        experiment_id = config.get("experiment_id", "")
+        resolved = strategy.default
+        system_prompt = resolved.system_prompt
+        if resolved.profile_modifier:
+            system_prompt = f"{system_prompt}\n\n{resolved.profile_modifier}"
 
-        user_message = load_user_prompt("single_agent.txt").format(
+        repo_summary = self._build_repo_summary(target)
+        experiment_id = ""  # experiment_id is not in UserStrategy; use empty string
+
+        user_message = resolved.user_prompt_template.format(
             repo_summary=repo_summary,
             finding_output_format=FINDING_OUTPUT_FORMAT,
         )
@@ -71,7 +71,7 @@ class SingleAgentStrategy(ScanStrategy):
             tools,
             system_prompt,
             user_message,
-            max_turns=config.get("max_turns", 80),
+            max_turns=resolved.max_turns,
         )
 
         findings = FindingParser().parse(

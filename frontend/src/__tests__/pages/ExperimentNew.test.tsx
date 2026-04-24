@@ -3,18 +3,7 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import ExperimentNew, { generatePowerSet } from '../../pages/ExperimentNew'
 
-// ─── Regression: React error #31 on /experiments/new ─────────────────────────
-//
-// The coordinator's /models, /strategies, /profiles endpoints return
-// `list[dict]` (e.g. `{"name": "default", "description": "..."}`).
-// The frontend previously typed these as `string[]` and dropped the items
-// straight into JSX (`<span>{p}</span>` inside the Profile radio list),
-// which triggers React error #31: "Objects are not valid as a React child."
-//
-// The e2e Playwright mocks happen to return real `string[]` for these
-// endpoints, so the bug only reproduces against the live coordinator.
-// This test simulates the real coordinator's object-shape responses and
-// asserts the page renders without throwing.
+// ─── Mock helpers ──────────────────────────────────────────────────────────────
 
 function makeResponse(body: unknown, status = 200): Response {
   return {
@@ -24,66 +13,34 @@ function makeResponse(body: unknown, status = 200): Response {
   } as unknown as Response
 }
 
-const GROUPED_MODELS = [
+const SAMPLE_STRATEGIES = [
   {
-    provider: 'openai',
-    probe_status: 'fresh',
-    models: [{ id: 'gpt-4o', display_name: 'GPT-4o', status: 'available' }],
+    id: 'builtin.single_agent',
+    name: 'Single Agent',
+    orchestration_shape: 'single_agent',
+    is_builtin: true,
+    parent_strategy_id: null,
   },
   {
-    provider: 'anthropic',
-    probe_status: 'fresh',
-    models: [{ id: 'claude-3-5-sonnet-20241022', display_name: 'Claude 3.5 Sonnet', status: 'available' }],
-  },
-]
-
-const GROUPED_MODELS_WITH_UNAVAILABLE = [
-  {
-    provider: 'openai',
-    probe_status: 'fresh',
-    models: [
-      { id: 'gpt-4o', display_name: 'GPT-4o', status: 'available' },
-      { id: 'gpt-4o-mini', display_name: 'GPT-4o Mini', status: 'key_missing' },
-    ],
-  },
-  {
-    provider: 'anthropic',
-    probe_status: 'fresh',
-    models: [{ id: 'claude-3-5-sonnet-20241022', display_name: 'Claude 3.5 Sonnet', status: 'available' }],
+    id: 'builtin.per_vuln_class',
+    name: 'Per Vuln Class',
+    orchestration_shape: 'per_vuln_class',
+    is_builtin: true,
+    parent_strategy_id: null,
   },
 ]
 
-function mockRealCoordinatorFetch(modelFixture = GROUPED_MODELS) {
-  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+function mockFetch(strategies = SAMPLE_STRATEGIES) {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input.toString()
-    // Phase 2 grouped-by-provider shape from /api/models
-    if (url.endsWith('/api/models')) {
-      return makeResponse(modelFixture)
-    }
     if (url.endsWith('/api/strategies')) {
-      return makeResponse([
-        { name: 'zero_shot', description: 'zero_shot scan strategy' },
-        { name: 'chain_of_thought', description: 'chain_of_thought scan strategy' },
-      ])
-    }
-    if (url.endsWith('/api/profiles')) {
-      return makeResponse([
-        { name: 'default', description: 'Default review profile.' },
-        { name: 'strict', description: 'Strict review profile.' },
-      ])
+      // Returns StrategySummary[] for the new listStrategiesFull()
+      return makeResponse(strategies)
     }
     if (url.endsWith('/api/datasets')) {
-      // Coordinator omits `languages` — must not crash the <option> renderer.
-      return makeResponse([{ name: 'cve-2024-python', label_count: 4 }])
+      return makeResponse([{ name: 'cve-2024-python', label_count: 4, languages: [] }])
     }
-    if (url.endsWith('/api/tool-extensions')) {
-      return makeResponse([
-        { key: 'tree_sitter', label: 'Tree-sitter', available: true },
-        { key: 'lsp', label: 'LSP', available: true },
-        { key: 'devdocs', label: 'DevDocs', available: false },
-      ])
-    }
-    if (url.endsWith('/api/experiments/estimate')) {
+    if (url.endsWith('/api/experiments/estimate') && init?.method === 'POST') {
       return makeResponse({ total_runs: 2, estimated_cost_usd: 1.0, by_model: {} })
     }
     return makeResponse({}, 404)
@@ -92,47 +49,28 @@ function mockRealCoordinatorFetch(modelFixture = GROUPED_MODELS) {
   return fetchMock
 }
 
-describe('ExperimentNew page rendering (React #31 regression)', () => {
+describe('ExperimentNew page rendering', () => {
   beforeEach(() => {
-    mockRealCoordinatorFetch()
+    mockFetch()
   })
 
   afterEach(() => {
     vi.restoreAllMocks()
   })
 
-  it('renders /experiments/new without throwing when the coordinator returns object-shape config payloads', async () => {
-    // Capture console.error so we can detect React's #31 warning even in
-    // environments where it would otherwise be swallowed.
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-
+  it('renders the New Experiment heading', async () => {
     render(
       <MemoryRouter initialEntries={['/experiments/new']}>
         <ExperimentNew />
       </MemoryRouter>,
     )
 
-    // Wait for the page to finish loading (Loading… disappears once Promise.all resolves).
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'New Experiment' })).toBeVisible()
     })
-
-    // The profile radio list must show the profile names (not [object Object]).
-    expect(screen.getByText('default')).toBeVisible()
-    expect(screen.getByText('strict')).toBeVisible()
-
-    // No React "Objects are not valid as a React child" error should have been logged.
-    const reactObjectErrors = errorSpy.mock.calls.filter((call) => {
-      const msg = call.map(String).join(' ')
-      return (
-        msg.includes('Objects are not valid as a React child') ||
-        msg.includes('Minified React error #31')
-      )
-    })
-    expect(reactObjectErrors).toEqual([])
   })
 
-  it('renders ModelSearchPicker with search input instead of ChipGroup for models', async () => {
+  it('renders strategy cards for available strategies', async () => {
     render(
       <MemoryRouter initialEntries={['/experiments/new']}>
         <ExperimentNew />
@@ -143,11 +81,9 @@ describe('ExperimentNew page rendering (React #31 regression)', () => {
       expect(screen.getByRole('heading', { name: 'New Experiment' })).toBeVisible()
     })
 
-    // ModelSearchPicker renders a search input
-    expect(screen.getByPlaceholderText('Search models…')).toBeVisible()
-    // Available model display names are shown in the picker
-    expect(screen.getByText('GPT-4o')).toBeVisible()
-    expect(screen.getByText('Claude 3.5 Sonnet')).toBeVisible()
+    // Strategy names should appear
+    expect(screen.getByText('Single Agent')).toBeVisible()
+    expect(screen.getByText('Per Vuln Class')).toBeVisible()
   })
 
   it('renders "Allow unavailable models" checkbox', async () => {
@@ -164,6 +100,49 @@ describe('ExperimentNew page rendering (React #31 regression)', () => {
     expect(screen.getByTestId('allow-unavailable-checkbox')).toBeVisible()
     expect(screen.getByTestId('allow-unavailable-checkbox')).not.toBeChecked()
   })
+
+  it('shows builtin badge on builtin strategies', async () => {
+    render(
+      <MemoryRouter initialEntries={['/experiments/new']}>
+        <ExperimentNew />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'New Experiment' })).toBeVisible()
+    })
+
+    // Both builtin strategies should show "builtin" badge
+    const builtinBadges = screen.getAllByText('builtin')
+    expect(builtinBadges.length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('selecting a strategy card toggles its selected state', async () => {
+    render(
+      <MemoryRouter initialEntries={['/experiments/new']}>
+        <ExperimentNew />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'New Experiment' })).toBeVisible()
+    })
+
+    const cards = screen.getAllByTestId('strategy-card')
+    expect(cards[0]).toHaveAttribute('data-selected', 'false')
+
+    // Click to select
+    fireEvent.click(cards[0])
+    await waitFor(() => {
+      expect(cards[0]).toHaveAttribute('data-selected', 'true')
+    })
+
+    // Click to deselect
+    fireEvent.click(cards[0])
+    await waitFor(() => {
+      expect(cards[0]).toHaveAttribute('data-selected', 'false')
+    })
+  })
 })
 
 describe('ExperimentNew — dropped unavailable models notice', () => {
@@ -171,8 +150,8 @@ describe('ExperimentNew — dropped unavailable models notice', () => {
     vi.restoreAllMocks()
   })
 
-  it('does not render dropped-models notice when no initial selection', async () => {
-    mockRealCoordinatorFetch(GROUPED_MODELS_WITH_UNAVAILABLE)
+  it('does not render dropped-models notice on initial load', async () => {
+    mockFetch()
 
     render(
       <MemoryRouter initialEntries={['/experiments/new']}>
@@ -184,7 +163,7 @@ describe('ExperimentNew — dropped unavailable models notice', () => {
       expect(screen.getByRole('heading', { name: 'New Experiment' })).toBeVisible()
     })
 
-    // No selection pre-loaded → no drop notice
+    // No drop notice initially
     expect(screen.queryByTestId('dropped-models-notice')).toBeNull()
   })
 })
@@ -198,30 +177,26 @@ describe('ExperimentNew — unavailable_models submit error + override', () => {
     let submissionCount = 0
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input.toString()
-      if (url.endsWith('/api/models')) return makeResponse(GROUPED_MODELS)
-      if (url.endsWith('/api/strategies')) return makeResponse([{ name: 'zero_shot', description: '' }])
-      if (url.endsWith('/api/profiles')) return makeResponse([{ name: 'default', description: '' }])
-      if (url.endsWith('/api/datasets')) return makeResponse([{ name: 'cve-2024-python', label_count: 4 }])
-      if (url.endsWith('/api/tool-extensions')) return makeResponse([])
-      if (url.endsWith('/api/experiments/estimate')) {
+      if (url.endsWith('/api/strategies')) {
+        return makeResponse(SAMPLE_STRATEGIES)
+      }
+      if (url.endsWith('/api/datasets')) {
+        return makeResponse([{ name: 'cve-2024-python', label_count: 4, languages: [] }])
+      }
+      if (url.endsWith('/api/experiments/estimate') && init?.method === 'POST') {
         return makeResponse({ total_runs: 2, estimated_cost_usd: 1.0, by_model: {} })
       }
       if (url.endsWith('/api/experiments') && init?.method === 'POST') {
         submissionCount++
         const body = JSON.parse(init.body as string) as Record<string, unknown>
         if (body.allow_unavailable_models) {
-          // Success on override
-          return makeResponse(
-            { experiment_id: 'exp-override-123', status: 'pending' },
-            201,
-          )
+          return makeResponse({ experiment_id: 'exp-override-123', status: 'pending' }, 201)
         }
-        // First submit: return unavailable_models error
         return makeResponse(
           {
             detail: {
               error: 'unavailable_models',
-              models: [{ id: 'gpt-4o', status: 'key_missing' }],
+              models: [{ id: 'claude-sonnet-4-5', status: 'key_missing' }],
             },
           },
           400,
@@ -246,32 +221,23 @@ describe('ExperimentNew — unavailable_models submit error + override', () => {
       expect(screen.getByRole('heading', { name: 'New Experiment' })).toBeVisible()
     })
 
-    // Fill required fields - select dataset (use the <select> element directly)
-    // getByRole('combobox') is ambiguous (matches both <select> and the cmdk input);
-    // use document.querySelector('select') to target the dataset dropdown unambiguously.
+    // Select dataset
     const datasetSelect = document.querySelector('select')!
     fireEvent.change(datasetSelect, { target: { value: 'cve-2024-python' } })
 
-    // Select GPT-4o via picker - click the item in the command list
-    const gpt4oItem = screen.getByText('GPT-4o')
-    fireEvent.click(gpt4oItem)
-
-    // Select strategy
-    const zeroShotCheckbox = screen.getByRole('checkbox', { name: /zero_shot/i })
-    fireEvent.click(zeroShotCheckbox)
+    // Select a strategy card
+    const cards = screen.getAllByTestId('strategy-card')
+    fireEvent.click(cards[0])
 
     // Submit
     const submitBtn = screen.getByRole('button', { name: 'Submit Experiment' })
     fireEvent.click(submitBtn)
 
-    // Wait for the unavailable models error to appear
     await waitFor(() => {
       expect(screen.getByTestId('unavailable-models-error')).toBeVisible()
     })
 
-    // Should list the offending model in the error panel
-    expect(screen.getByTestId('unavailable-models-error').textContent).toMatch(/gpt-4o/)
-    // Should show the override button
+    expect(screen.getByTestId('unavailable-models-error').textContent).toMatch(/claude-sonnet-4-5/)
     expect(screen.getByTestId('submit-with-override-btn')).toBeVisible()
   })
 
@@ -288,30 +254,24 @@ describe('ExperimentNew — unavailable_models submit error + override', () => {
       expect(screen.getByRole('heading', { name: 'New Experiment' })).toBeVisible()
     })
 
-    // Fill form
     const datasetSelect = document.querySelector('select')!
     fireEvent.change(datasetSelect, { target: { value: 'cve-2024-python' } })
-    fireEvent.click(screen.getByText('GPT-4o'))
-    const zeroShotCheckbox = screen.getByRole('checkbox', { name: /zero_shot/i })
-    fireEvent.click(zeroShotCheckbox)
+    const cards = screen.getAllByTestId('strategy-card')
+    fireEvent.click(cards[0])
 
-    // Submit → get error
     fireEvent.click(screen.getByRole('button', { name: 'Submit Experiment' }))
 
     await waitFor(() => {
       expect(screen.getByTestId('unavailable-models-error')).toBeVisible()
     })
 
-    // Click override button
     fireEvent.click(screen.getByTestId('submit-with-override-btn'))
 
-    // Verify the last POST included allow_unavailable_models
     await waitFor(() => {
       const postCalls = fetchMock.mock.calls.filter(([url, init]) => {
         const u = typeof url === 'string' ? url : url.toString()
         return u.endsWith('/api/experiments') && (init as RequestInit)?.method === 'POST'
       })
-      // There should be at least 2 POST calls (first fails, second succeeds)
       expect(postCalls.length).toBeGreaterThanOrEqual(2)
       const lastCall = postCalls[postCalls.length - 1]
       const body = JSON.parse((lastCall[1] as RequestInit).body as string) as Record<string, unknown>
@@ -332,22 +292,17 @@ describe('ExperimentNew — unavailable_models submit error + override', () => {
       expect(screen.getByRole('heading', { name: 'New Experiment' })).toBeVisible()
     })
 
-    // Fill form
-    const datasetSelect2 = document.querySelector('select')!
-    fireEvent.change(datasetSelect2, { target: { value: 'cve-2024-python' } })
-    fireEvent.click(screen.getByText('GPT-4o'))
-    const zeroShotCheckbox = screen.getByRole('checkbox', { name: /zero_shot/i })
-    fireEvent.click(zeroShotCheckbox)
+    const datasetSelect = document.querySelector('select')!
+    fireEvent.change(datasetSelect, { target: { value: 'cve-2024-python' } })
+    const cards = screen.getAllByTestId('strategy-card')
+    fireEvent.click(cards[0])
 
-    // Check the "Allow unavailable models" checkbox BEFORE submitting
     const allowCheckbox = screen.getByTestId('allow-unavailable-checkbox')
     fireEvent.click(allowCheckbox)
     expect(allowCheckbox).toBeChecked()
 
-    // Submit
     fireEvent.click(screen.getByRole('button', { name: 'Submit Experiment' }))
 
-    // Verify the POST included allow_unavailable_models:true
     await waitFor(() => {
       const postCalls = fetchMock.mock.calls.filter(([url, init]) => {
         const u = typeof url === 'string' ? url : url.toString()
@@ -411,7 +366,6 @@ describe('generatePowerSet', () => {
 
   it('preserves order of elements within subsets', () => {
     const result = generatePowerSet(['a', 'b', 'c'])
-    // Check that 'a' always comes before 'b' if both are present
     const withBoth = result.filter((s) => s.includes('a') && s.includes('b'))
     withBoth.forEach((subset) => {
       const aIdx = subset.indexOf('a')

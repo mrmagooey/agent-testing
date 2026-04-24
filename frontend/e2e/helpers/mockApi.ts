@@ -365,3 +365,136 @@ export async function mockApi(page: Page) {
     return route.continue()
   })
 }
+
+/**
+ * Layer an imported-dataset into the mock API so subsequent GET /datasets
+ * responses include the new dataset, and related per-dataset endpoints
+ * return plausible data.
+ *
+ * Must be called *after* mockApi() because it uses route.fallback() to
+ * chain on top of the existing handler rather than replace it.
+ *
+ * @param page   The Playwright page object.
+ * @param name   The dataset name that the import returned (e.g. 'cve-2024-imported').
+ */
+export async function mockImportedDataset(page: Page, name: string) {
+  const importedDataset = {
+    name,
+    source: 'cve',
+    label_count: 3,
+    file_count: 12,
+    size_bytes: 204800,
+    created_at: new Date().toISOString(),
+    languages: ['python'],
+  }
+
+  // Prepend the imported dataset to GET /datasets
+  await page.route('**/api/datasets', async (route) => {
+    const method = route.request().method()
+    if (method !== 'GET') {
+      return route.fallback()
+    }
+    const allDatasets = [importedDataset, ...(datasets as unknown[])]
+    return json(route, allDatasets)
+  })
+
+  // Labels for the imported dataset — reuse the shape from the base fixture
+  await page.route(`**/api/datasets/${name}/labels`, async (route) => {
+    return json(route, [
+      {
+        label_id: `${name}-label-001`,
+        dataset: name,
+        file_path: 'src/auth/login.py',
+        line_start: 10,
+        line_end: 15,
+        vuln_class: 'sqli',
+        cwe: 'CWE-89',
+        severity: 'critical',
+        description: `SQL injection in ${name}`,
+        source: 'cve',
+      },
+    ])
+  })
+
+  // File tree for the imported dataset
+  await page.route(`**/api/datasets/${name}/tree`, async (route) => {
+    return json(route, fileTree)
+  })
+
+  // File content for the imported dataset
+  await page.route(`**/api/datasets/${name}/file*`, async (route) => {
+    const url = new URL(route.request().url())
+    const reqPath = url.searchParams.get('path') ?? ''
+    return json(route, {
+      path: reqPath,
+      content: 'def login(username, password):\n    query = f"SELECT * FROM users WHERE username=\'{username}\'"\n    return db.execute(query)\n',
+      language: 'python',
+      line_count: 3,
+      size_bytes: 120,
+      labels: [],
+      binary: false,
+      truncated: false,
+    })
+  })
+
+  // Override the global /findings endpoint to include a finding that
+  // references the imported dataset, so the cross-feature assertion can verify
+  // the end-to-end chain.
+  await page.route('**/api/findings*', async (route) => {
+    const method = route.request().method()
+    if (method !== 'GET') {
+      return route.fallback()
+    }
+    const importedFinding = {
+      finding_id: `${name}-find-001`,
+      run_id: 'run-001-aaa',
+      experiment_id: 'newexperiment-1111-1111-1111-111111111111',
+      title: `SQL Injection discovered in ${name}`,
+      description: 'User-supplied input is concatenated directly into a SQL query.',
+      vuln_class: 'sqli',
+      severity: 'critical',
+      match_status: 'tp',
+      file_path: 'src/auth/login.py',
+      line_start: 10,
+      line_end: 15,
+      recommendation: 'Use parameterized queries.',
+      evidence_quality: 'strong',
+      matched_label_id: `${name}-label-001`,
+      experiment_name: 'CVE Import E2E Experiment',
+      model_id: 'gpt-4o',
+      strategy: 'zero_shot',
+      dataset_name: name,
+      created_at: new Date().toISOString(),
+      confidence: 0.95,
+      cwe_ids: ['CWE-89'],
+    }
+    const url = new URL(route.request().url())
+    const q = url.searchParams.get('q') ?? ''
+    const limitParam = Number(url.searchParams.get('limit') ?? 50)
+    const offsetParam = Number(url.searchParams.get('offset') ?? 0)
+    const allItems = [importedFinding]
+    const filtered = q
+      ? allItems.filter(
+          (item) =>
+            item.title.toLowerCase().includes(q.toLowerCase()) ||
+            item.description.toLowerCase().includes(q.toLowerCase()) ||
+            item.vuln_class.toLowerCase().includes(q.toLowerCase()),
+        )
+      : allItems
+    const paginated = filtered.slice(offsetParam, offsetParam + limitParam)
+    return json(route, {
+      total: filtered.length,
+      limit: limitParam,
+      offset: offsetParam,
+      facets: {
+        vuln_class: { sqli: 1 },
+        severity: { critical: 1 },
+        match_status: { tp: 1 },
+        model_id: { 'gpt-4o': 1 },
+        strategy: { zero_shot: 1 },
+        dataset_name: { [name]: 1 },
+      },
+      items: paginated,
+    })
+  })
+}

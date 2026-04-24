@@ -5,16 +5,15 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from sec_review_framework.data.findings import StrategyOutput
-from sec_review_framework.prompts.loader import load_system_prompt, load_user_prompt
 from sec_review_framework.strategies.base import ScanStrategy
 from sec_review_framework.strategies.common import (
     FINDING_OUTPUT_FORMAT,
     FindingParser,
-    build_system_prompt,
     run_agentic_loop,
 )
 
 if TYPE_CHECKING:
+    from sec_review_framework.data.strategy_bundle import UserStrategy
     from sec_review_framework.models.base import ModelProvider
     from sec_review_framework.tools.registry import ToolRegistry
 
@@ -44,13 +43,6 @@ class DiffReviewStrategy(ScanStrategy):
         return "diff_review"
 
     # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    def _base_system_prompt(self) -> str:
-        return load_system_prompt("diff_review.txt")
-
-    # ------------------------------------------------------------------
     # ScanStrategy.run()
     # ------------------------------------------------------------------
 
@@ -59,15 +51,19 @@ class DiffReviewStrategy(ScanStrategy):
         target,
         model: "ModelProvider",
         tools: "ToolRegistry",
-        config: dict,
+        strategy: "UserStrategy",
     ) -> StrategyOutput:
         # Load the diff spec — raises if no diff_spec.yaml (runner handles this)
         diff_spec = target.load_diff_spec()
         diff_text = target.get_diff(diff_spec.base_ref, diff_spec.head_ref)
         changed_files = target.get_changed_files(diff_spec.base_ref, diff_spec.head_ref)
 
-        system_prompt = build_system_prompt(self._base_system_prompt(), config)
-        experiment_id = config.get("experiment_id", "")
+        resolved = strategy.default
+        system_prompt = resolved.system_prompt
+        if resolved.profile_modifier:
+            system_prompt = f"{system_prompt}\n\n{resolved.profile_modifier}"
+
+        experiment_id = ""  # experiment_id is not in UserStrategy; use empty string
 
         # Build full-file context for each changed file
         file_context = ""
@@ -75,7 +71,7 @@ class DiffReviewStrategy(ScanStrategy):
             content = target.read_file(fp)
             file_context += f"\n--- {fp} (full file) ---\n{content}\n"
 
-        user_message = load_user_prompt("diff_review.txt").format(
+        user_message = resolved.user_prompt_template.format(
             diff_text=diff_text,
             file_context=file_context,
             finding_output_format=FINDING_OUTPUT_FORMAT,
@@ -86,7 +82,7 @@ class DiffReviewStrategy(ScanStrategy):
             tools,
             system_prompt,
             user_message,
-            max_turns=config.get("max_turns", 60),
+            max_turns=resolved.max_turns,
         )
 
         findings = FindingParser().parse(

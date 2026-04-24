@@ -1,10 +1,17 @@
-"""Prompt snapshot registry — persists PromptSnapshot objects to YAML files."""
+"""Prompt snapshot registry — persists BundleSnapshot objects to YAML files.
+
+NOTE: PromptSnapshot was renamed to BundleSnapshot (schema break accepted per plan).
+Existing YAML files written with the old PromptSnapshot schema will fail to load
+because BundleSnapshot requires ``strategy_id`` and ``bundle_json`` fields.
+TODO: Provide a migration script or best-effort reader if old YAML files need to
+be loaded.
+"""
 
 from pathlib import Path
 
 import yaml
 
-from sec_review_framework.data.experiment import PromptSnapshot, StrategyName
+from sec_review_framework.data.experiment import BundleSnapshot as PromptSnapshot, StrategyName
 
 
 class PromptRegistry:
