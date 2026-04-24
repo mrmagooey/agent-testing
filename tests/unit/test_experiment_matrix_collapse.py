@@ -404,3 +404,32 @@ def test_expand_uses_default_registry_when_none_given():
     runs = matrix.expand()  # no registry passed
     assert len(runs) == 1
     assert runs[0].strategy_id == "builtin.single_agent"
+
+
+# ---------------------------------------------------------------------------
+# bundle_json embedding (so workers can load user strategies without DB)
+# ---------------------------------------------------------------------------
+
+
+def test_expand_embeds_bundle_json_on_each_run():
+    """Every expanded run must carry the canonical bundle JSON."""
+    from sec_review_framework.data.strategy_bundle import UserStrategy, canonical_json
+
+    registry = _make_registry("my-custom")
+    matrix = ExperimentMatrix(
+        experiment_id="exp",
+        dataset_name="ds",
+        dataset_version="1.0",
+        strategy_ids=["my-custom"],
+        num_repetitions=2,
+    )
+    runs = matrix.expand(registry=registry)
+    assert len(runs) == 2
+    strategy = registry.get("my-custom")
+    expected = canonical_json(strategy)
+    for run in runs:
+        assert run.bundle_json == expected
+        # round-trip reconstructs the same UserStrategy
+        reconstructed = UserStrategy.model_validate_json(run.bundle_json)
+        assert reconstructed.id == strategy.id
+        assert reconstructed.default.system_prompt == strategy.default.system_prompt

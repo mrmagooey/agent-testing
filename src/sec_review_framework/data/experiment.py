@@ -91,6 +91,13 @@ class ExperimentRun(BaseModel):
     dataset_version: str
     tool_extensions: frozenset[ToolExtension] = frozenset()
 
+    # Canonical JSON of the full UserStrategy, populated by
+    # ExperimentMatrix.expand().  Workers reconstruct the strategy from this
+    # field so user-created strategies (stored only in the coordinator's DB)
+    # are visible without a DB round-trip.  Empty string means "fall back to
+    # the builtin registry" — used by legacy tests and builtin-only flows.
+    bundle_json: str = ""
+
     # Legacy / derived fields kept for worker compatibility while strategy
     # files still read from ExperimentRun directly.  They are populated by
     # ExperimentMatrix.expand() from the resolved strategy's default bundle.
@@ -191,6 +198,8 @@ class ExperimentMatrix(BaseModel):
         if registry is None:
             registry = load_default_registry()
 
+        from sec_review_framework.data.strategy_bundle import canonical_json
+
         runs: list[ExperimentRun] = []
         for strategy_id in self.strategy_ids:
             strategy = registry.get(strategy_id)
@@ -203,6 +212,7 @@ class ExperimentMatrix(BaseModel):
                 if rule.override.tool_extensions is not None:
                     ext_union = ext_union | rule.override.tool_extensions
             tool_extensions = frozenset(ToolExtension(e) for e in ext_union)
+            bundle_json = canonical_json(strategy)
 
             for rep in range(self.num_repetitions):
                 rep_suffix = f"_rep{rep}" if self.num_repetitions > 1 else ""
@@ -215,6 +225,7 @@ class ExperimentMatrix(BaseModel):
                         dataset_name=self.dataset_name,
                         dataset_version=self.dataset_version,
                         tool_extensions=tool_extensions,
+                        bundle_json=bundle_json,
                         # Populate legacy fields from the strategy default bundle
                         model_id=default_bundle.model_id,
                         verification_variant=VerificationVariant(default_bundle.verification),

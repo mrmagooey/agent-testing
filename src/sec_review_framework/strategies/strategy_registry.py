@@ -230,3 +230,16 @@ def load_default_registry() -> StrategyRegistry:
     registry = StrategyRegistry()
     seed_builtins(registry)
     return registry
+
+
+async def build_registry_from_db(db) -> StrategyRegistry:
+    """Return a StrategyRegistry containing builtins and DB-stored user strategies.
+
+    Called by the coordinator before expanding an ExperimentMatrix so that
+    user-created strategies are resolvable alongside the builtins.  Builtins
+    are seeded first, then user strategies (DB wins on id collision).
+    """
+    registry = load_default_registry()
+    for strategy in await db.list_user_strategies():
+        registry.register(strategy)
+    return registry

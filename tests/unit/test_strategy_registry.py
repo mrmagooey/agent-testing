@@ -14,6 +14,7 @@ from sec_review_framework.data.strategy_bundle import (
 )
 from sec_review_framework.strategies.strategy_registry import (
     StrategyRegistry,
+    build_registry_from_db,
     load_default_registry,
 )
 
@@ -218,3 +219,48 @@ def test_builtins_have_model_id():
         assert strategy.default.model_id, (
             f"{strategy.id} has empty model_id"
         )
+
+
+# ---------------------------------------------------------------------------
+# build_registry_from_db — user strategies must be resolvable alongside builtins
+# ---------------------------------------------------------------------------
+
+
+class _FakeDB:
+    def __init__(self, user_strategies: list[UserStrategy]) -> None:
+        self._user_strategies = user_strategies
+
+    async def list_user_strategies(self) -> list[UserStrategy]:
+        return list(self._user_strategies)
+
+
+@pytest.mark.asyncio
+async def test_build_registry_from_db_merges_builtins_with_user_strategies():
+    """Coordinator path: registry must see both builtins and DB user strategies."""
+    custom = UserStrategy(
+        id="user.my-custom",
+        name="My Custom",
+        parent_strategy_id="builtin.single_agent",
+        orchestration_shape=OrchestrationShape.SINGLE_AGENT,
+        default=StrategyBundleDefault(
+            system_prompt="Custom sys",
+            user_prompt_template="Custom {repo_summary}",
+            model_id="claude-opus-4-5",
+            tools=frozenset(),
+            verification="none",
+            max_turns=5,
+            tool_extensions=frozenset(),
+        ),
+        overrides=[],
+        created_at=_NOW,
+        is_builtin=False,
+    )
+    db = _FakeDB([custom])
+    registry = await build_registry_from_db(db)
+
+    # Builtins still present
+    assert registry.get("builtin.single_agent").is_builtin is True
+    # User strategy resolvable
+    got = registry.get("user.my-custom")
+    assert got.id == "user.my-custom"
+    assert got.default.system_prompt == "Custom sys"

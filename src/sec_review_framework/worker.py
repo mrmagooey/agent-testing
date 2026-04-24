@@ -77,13 +77,19 @@ def check_tool_extension_superset(
         if rule.override.tool_extensions is not None:
             required |= set(rule.override.tool_extensions)
 
-    # Convert required str values to ToolExtension for comparison
     required_exts: set[ToolExtension] = set()
+    unknown: list[str] = []
     for ext_val in required:
         try:
             required_exts.add(ToolExtension(ext_val))
         except ValueError:
-            pass  # Unknown extension values are ignored silently
+            unknown.append(ext_val)
+
+    if unknown:
+        raise RuntimeError(
+            f"Run {run_id} references unknown tool_extension values "
+            f"{sorted(unknown)} — typo in strategy bundle?"
+        )
 
     missing = required_exts - enabled
     if missing:
@@ -124,22 +130,31 @@ class StrategyFactory:
         return cls()
 
 
-def _load_user_strategy(strategy_id: str):
-    """Load a UserStrategy from the default registry.
+def _load_user_strategy(strategy_id: str, bundle_json: str = ""):
+    """Reconstruct the UserStrategy for a run.
+
+    Prefers *bundle_json* (populated by ExperimentMatrix.expand) so that
+    user-created strategies persisted only in the coordinator's DB are
+    visible to the worker without a DB round-trip.  Falls back to the
+    builtin registry for legacy runs with an empty bundle_json.
 
     Raises
     ------
     KeyError
-        If *strategy_id* is not registered.
+        If *strategy_id* cannot be resolved.
     """
+    if bundle_json:
+        from sec_review_framework.data.strategy_bundle import UserStrategy
+        return UserStrategy.model_validate_json(bundle_json)
+
     from sec_review_framework.strategies.strategy_registry import load_default_registry
     registry = load_default_registry()
     try:
         return registry.get(strategy_id)
     except KeyError:
         raise KeyError(
-            f"Strategy {strategy_id!r} not found in the default registry. "
-            f"Unknown strategy_id — cannot proceed."
+            f"Strategy {strategy_id!r} not found in the default registry "
+            f"and no bundle_json was embedded in the run."
         )
 
 
@@ -163,7 +178,7 @@ class ExperimentWorker:
             # ------------------------------------------------------------------
             # Load the UserStrategy and check tool-extension superset
             # ------------------------------------------------------------------
-            user_strategy = _load_user_strategy(run.strategy_id)
+            user_strategy = _load_user_strategy(run.strategy_id, run.bundle_json)
             enabled_extensions = get_enabled_extensions()
             check_tool_extension_superset(run.id, user_strategy, enabled_extensions)
 

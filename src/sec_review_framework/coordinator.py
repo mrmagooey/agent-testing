@@ -193,7 +193,10 @@ class ExperimentCoordinator:
     # ------------------------------------------------------------------
 
     async def submit_experiment(self, matrix: ExperimentMatrix) -> str:
-        runs = matrix.expand()
+        from sec_review_framework.strategies.strategy_registry import build_registry_from_db
+
+        registry = await build_registry_from_db(self.db)
+        runs = matrix.expand(registry=registry)
         experiment_id = matrix.experiment_id
 
         await self.db.create_experiment(
@@ -2562,7 +2565,10 @@ async def list_experiments() -> list[dict]:
 @app.post("/experiments/estimate")
 async def estimate_experiment(req: EstimateRequest) -> dict:
     """Pre-flight cost estimate. Call before submit to avoid expensive mistakes."""
-    runs = req.matrix.expand()
+    from sec_review_framework.strategies.strategy_registry import build_registry_from_db
+
+    registry = await build_registry_from_db(coordinator.db)
+    runs = req.matrix.expand(registry=registry)
     estimates_by_model: dict[str, float] = {}
     for run in runs:
         tokens = int(req.target_kloc * AVG_TOKENS_PER_KLOC)
