@@ -11,6 +11,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+
+class UploadTokenAlreadyExists(Exception):
+    """Raised by issue_upload_token when a token for run_id already exists."""
+
+    def __init__(self, run_id: str) -> None:
+        self.run_id = run_id
+        super().__init__(f"Upload token already issued for run {run_id!r}")
+
 if TYPE_CHECKING:
     from sec_review_framework.data.strategy_bundle import UserStrategy
 
@@ -695,20 +703,28 @@ class Database:
 
         Returns the plaintext token (32 URL-safe bytes).  The token is stored
         hashed; the plaintext is never persisted.
+
+        Raises:
+            UploadTokenAlreadyExists: if a token for *run_id* already exists.
+                Callers must not rely on "issue or get existing" semantics — call
+                get_upload_token_issued() first if re-issue must be skipped.
         """
         token = secrets.token_urlsafe(32)
         token_hash = hashlib.sha256(token.encode()).hexdigest()
         issued_at = datetime.now(UTC).isoformat()
         async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
+            async with db.execute(
                 """
                 INSERT INTO run_upload_tokens (run_id, token_hash, issued_at, consumed_at)
                 VALUES (?, ?, ?, NULL)
                 ON CONFLICT(run_id) DO NOTHING
                 """,
                 (run_id, token_hash, issued_at),
-            )
+            ) as cursor:
+                rowcount = cursor.rowcount
             await db.commit()
+        if rowcount == 0:
+            raise UploadTokenAlreadyExists(run_id)
         return token
 
     async def consume_upload_token(self, run_id: str, token: str) -> bool:

@@ -459,11 +459,19 @@ async def test_revoke_upload_tokens_for_experiment(db: Database) -> None:
 
 
 @pytest.mark.asyncio
-async def test_issue_upload_token_idempotent(db: Database) -> None:
-    """Calling issue_upload_token twice on the same run does not raise."""
+async def test_issue_upload_token_raises_on_duplicate(db: Database) -> None:
+    """Calling issue_upload_token twice for the same run_id raises UploadTokenAlreadyExists.
+
+    Regression test for the silent-broken-token bug: the old implementation
+    returned a new plaintext token even when the INSERT was a no-op, producing
+    a token whose hash did not match the stored one.  The fix raises instead.
+    """
+    from sec_review_framework.db import UploadTokenAlreadyExists
+
     await _setup_run(db, "run-tok-idem", "exp-tok-idem")
-    token1 = await db.issue_upload_token("run-tok-idem")
-    # Second call — uses ON CONFLICT DO NOTHING so the original hash is preserved
-    token2 = await db.issue_upload_token("run-tok-idem")
-    # Original token still works
-    assert await db.consume_upload_token("run-tok-idem", token1) is True
+    await db.issue_upload_token("run-tok-idem")
+    # Second call must raise — the original hash is preserved in the DB and
+    # the caller must NOT receive a mismatched plaintext token.
+    with pytest.raises(UploadTokenAlreadyExists) as exc_info:
+        await db.issue_upload_token("run-tok-idem")
+    assert exc_info.value.run_id == "run-tok-idem"

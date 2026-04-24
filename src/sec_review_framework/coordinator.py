@@ -450,17 +450,23 @@ class ExperimentCoordinator:
                     run.id,
                 )
 
+        # Labels shared between the Job metadata and the pod template metadata.
+        # Kubernetes does NOT propagate Job labels to pods automatically, so we
+        # set them explicitly on both to ensure the NetworkPolicy selector
+        # (app: sec-review-worker) matches the spawned pods.
+        _pod_labels = {
+            "app": "sec-review-worker",
+            "experiment": self._k8s_safe(experiment_id),
+            "model": self._k8s_safe(run.model_id),
+            "strategy": self._k8s_safe(run.strategy.value),
+            "run-hash": run_hash,
+        }
+
         job = kubernetes.client.V1Job(
             metadata=kubernetes.client.V1ObjectMeta(
                 name=job_name,
                 namespace=self.namespace,
-                labels={
-                    "app": "sec-review-worker",
-                    "experiment": self._k8s_safe(experiment_id),
-                    "model": self._k8s_safe(run.model_id),
-                    "strategy": self._k8s_safe(run.strategy.value),
-                    "run-hash": run_hash,
-                },
+                labels=_pod_labels,
                 annotations={
                     "sec-review.io/run-id": run.id,
                     "sec-review.io/experiment-id": experiment_id,
@@ -470,6 +476,7 @@ class ExperimentCoordinator:
                 backoff_limit=1,
                 active_deadline_seconds=1800,
                 template=kubernetes.client.V1PodTemplateSpec(
+                    metadata=kubernetes.client.V1ObjectMeta(labels=_pod_labels),
                     spec=kubernetes.client.V1PodSpec(
                         restart_policy="Never",
                         containers=[
@@ -643,6 +650,9 @@ class ExperimentCoordinator:
         # Allowed filenames and per-file size caps (bytes).
         _DEFAULT_MAX = int(os.environ.get("MAX_ARTIFACT_BYTES", str(16 * 1024 * 1024)))
         _LARGE_MAX = int(os.environ.get("MAX_ARTIFACT_BYTES_LARGE", str(256 * 1024 * 1024)))
+        # Global aggregate cap across all parts — guards against many small artifacts
+        # totalling far more than any single per-artifact cap.
+        _MAX_TOTAL_BYTES = int(os.environ.get("MAX_TOTAL_BYTES", str(512 * 1024 * 1024)))
         _ALLOWED = {
             "run_result.json",
             "findings.jsonl",
@@ -672,6 +682,8 @@ class ExperimentCoordinator:
         received_files: set[str] = set()
         total_bytes_received = 0
         errors: list[str] = []
+        # Sentinel list so _on_part_data can signal aggregate limit exceeded.
+        _total_exceeded: list[bool] = [False]
 
         # State for the streaming parser callbacks
         current_filename: list[str | None] = [None]
@@ -731,6 +743,12 @@ class ExperimentCoordinator:
             chunk = data[start:end]
             current_size[0] += len(chunk)
             total_bytes_received += len(chunk)
+            if total_bytes_received > _MAX_TOTAL_BYTES:
+                _total_exceeded[0] = True
+                raise RuntimeError(
+                    f"Aggregate upload size exceeds limit "
+                    f"({_MAX_TOTAL_BYTES // (1024 * 1024)} MiB)"
+                )
             if current_size[0] > current_cap[0]:
                 size_exceeded[0] = True
                 return
@@ -773,6 +791,12 @@ class ExperimentCoordinator:
                 parser.write(chunk)
         except Exception as exc:
             shutil.rmtree(staging_dir, ignore_errors=True)
+            if _total_exceeded[0]:
+                _upload_counter.labels(outcome="size_exceeded").inc()
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"Aggregate upload size exceeds limit ({_MAX_TOTAL_BYTES // (1024 * 1024)} MiB)",
+                ) from exc
             _upload_counter.labels(outcome="stream_error").inc()
             logger.error("Upload stream error for run %s: %s", run_id, exc)
             raise HTTPException(status_code=400, detail=f"Stream error: {exc}") from exc
