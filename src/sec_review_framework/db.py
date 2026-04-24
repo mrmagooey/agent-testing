@@ -664,10 +664,32 @@ class Database:
                 rows = await cursor.fetchall()
                 return [dict(row) for row in rows]
 
+    # Allowlist of columns that callers may update in llm_providers.
+    _LLM_PROVIDER_UPDATABLE_COLS: frozenset[str] = frozenset({
+        "display_name",
+        "adapter",
+        "model_id",
+        "api_base",
+        "api_key_ciphertext",
+        "auth_type",
+        "region",
+        "enabled",
+        "last_probe_at",
+        "last_probe_status",
+        "last_probe_error",
+        "updated_at",
+    })
+
     async def update_llm_provider(self, provider_id: str, fields: dict) -> None:
         """Partial update. ``fields`` must not include ``id``."""
         if not fields:
             return
+        unknown = set(fields) - self._LLM_PROVIDER_UPDATABLE_COLS
+        if unknown:
+            raise ValueError(
+                f"update_llm_provider: unknown column(s): {sorted(unknown)}. "
+                f"Allowed: {sorted(self._LLM_PROVIDER_UPDATABLE_COLS)}"
+            )
         set_clauses = ", ".join(f"{k} = :{k}" for k in fields)
         fields["_id"] = provider_id
         async with aiosqlite.connect(self.db_path) as db:
@@ -706,9 +728,22 @@ class Database:
                 d["allow_unavailable_models"] = bool(d["allow_unavailable_models"])
                 return d
 
+    # Allowlist of columns that callers may update in app_settings.
+    _APP_SETTINGS_UPDATABLE_COLS: frozenset[str] = frozenset({
+        "allow_unavailable_models",
+        "evidence_assessor",
+        "evidence_judge_model",
+    })
+
     async def update_app_settings(self, fields: dict) -> dict:
         """Partial update. Returns the updated row."""
         if fields:
+            unknown = set(fields) - self._APP_SETTINGS_UPDATABLE_COLS
+            if unknown:
+                raise ValueError(
+                    f"update_app_settings: unknown column(s): {sorted(unknown)}. "
+                    f"Allowed: {sorted(self._APP_SETTINGS_UPDATABLE_COLS)}"
+                )
             # Coerce bool → int for SQLite
             row = dict(fields)
             if "allow_unavailable_models" in row:
