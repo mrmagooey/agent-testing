@@ -111,6 +111,7 @@ const SLUG_RE = /^[a-z0-9][a-z0-9_-]*$/
 function validateSlug(v: string): string | null {
   if (!v) return 'Required'
   if (!SLUG_RE.test(v)) return 'Slug: lowercase letters, digits, hyphens, underscores only'
+  if (v.length > 32) return 'Maximum 32 characters'
   return null
 }
 

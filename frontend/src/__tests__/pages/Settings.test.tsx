@@ -591,3 +591,50 @@ describe('ProvidersPanel — probe', () => {
     })
   })
 })
+
+// ─── Slug validation ──────────────────────────────────────────────────────
+
+describe('ProvidersPanel — slug validation', () => {
+  it('rejects a 33-character slug client-side before submit', async () => {
+    renderSettings()
+    await waitFor(() => {
+      expect(screen.getByText('My LLM')).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /Add Custom Provider/i }))
+    await waitFor(() => {
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+    })
+
+    // Type a 33-character slug (exceeds max 32)
+    const slugInput = screen.getByPlaceholderText('my-provider')
+    fireEvent.change(slugInput, { target: { value: 'a'.repeat(33) } })
+
+    // Fill required fields so only slug validation fails
+    fireEvent.change(screen.getByPlaceholderText('My Provider'), {
+      target: { value: 'Too Long Provider' },
+    })
+    fireEvent.change(screen.getByPlaceholderText('gpt-4o'), {
+      target: { value: 'gpt-4o' },
+    })
+
+    const adapterSelect = screen.getAllByRole('combobox')[0]
+    fireEvent.click(adapterSelect)
+    await waitFor(() => screen.getByText('anthropic_compat'))
+    fireEvent.click(screen.getByText('anthropic_compat'))
+
+    const authSelect = screen.getAllByRole('combobox')[screen.getAllByRole('combobox').length - 1]
+    fireEvent.click(authSelect)
+    await waitFor(() => screen.getAllByText('none'))
+    const noneItems = screen.getAllByText('none')
+    fireEvent.click(noneItems[noneItems.length - 1])
+
+    fireEvent.click(screen.getByRole('button', { name: /Add Provider/i }))
+
+    // Client-side validation must reject before any API call
+    await waitFor(() => {
+      expect(screen.getByText('Maximum 32 characters')).toBeInTheDocument()
+    })
+    expect(mockCreateLlmProvider).not.toHaveBeenCalled()
+  })
+})
