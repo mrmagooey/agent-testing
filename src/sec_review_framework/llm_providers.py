@@ -16,11 +16,13 @@ All endpoints are mounted under /api/ by the coordinator's HTTP middleware.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 import re
 import uuid
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, field_validator, model_validator
@@ -48,6 +50,76 @@ def _scrub_error(raw: str) -> str:
     for pattern in _SCRUB_PATTERNS:
         scrubbed = pattern.sub("[REDACTED]", scrubbed)
     return scrubbed[:_SCRUB_MAX_LEN]
+
+
+# ---------------------------------------------------------------------------
+# SSRF guard for api_base URLs
+# ---------------------------------------------------------------------------
+
+# RFC-1918 and other private/link-local ranges.
+_PRIVATE_NETS = [
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),    # ULA
+]
+
+
+def _validate_api_base(url: str | None) -> str | None:
+    """Reject URLs that could be used for SSRF.
+
+    Rules:
+    - Must use https:// scheme (http:// allowed only for localhost / 127.x)
+    - Literal private-IP hostnames are rejected regardless of scheme
+    Returns the original URL unchanged if valid, raises ValueError if not.
+    """
+    if url is None:
+        return None
+
+    parsed = urlparse(url)
+    scheme = (parsed.scheme or "").lower()
+    hostname = (parsed.hostname or "").lower()
+
+    if scheme not in ("http", "https"):
+        raise ValueError(
+            f"api_base must use http:// or https:// scheme, got '{scheme}://'"
+        )
+
+    # Try to parse the hostname as a literal IP address.
+    try:
+        addr = ipaddress.ip_address(hostname)
+    except ValueError:
+        # Not a bare IP — no SSRF concern from a literal address perspective.
+        # We do not resolve DNS here; only literal IPs are blocked.
+        addr = None
+
+    if addr is not None:
+        for net in _PRIVATE_NETS:
+            if addr in net:
+                # Allow http://localhost and http://127.x (dev-friendly), but
+                # only if the scheme is http. https to localhost is also fine.
+                is_loopback = addr.is_loopback
+                if is_loopback:
+                    # Loopback with either scheme is permitted.
+                    break
+                raise ValueError(
+                    f"api_base '{url}' resolves to a private/reserved IP address "
+                    f"({addr}), which is not allowed to prevent SSRF"
+                )
+
+    if addr is None and scheme == "http":
+        # Non-IP http:// — only allow if hostname is literally "localhost"
+        if hostname not in ("localhost",):
+            raise ValueError(
+                "api_base with http:// scheme is only allowed for localhost. "
+                "Use https:// for remote endpoints."
+            )
+
+    return url
+
 
 router = APIRouter()
 
@@ -87,6 +159,13 @@ class ProviderCreateRequest(BaseModel):
     def _name_slug(cls, v: str) -> str:
         return _validate_slug(v)
 
+    @field_validator("display_name")
+    @classmethod
+    def _display_name_len(cls, v: str) -> str:
+        if len(v) > 120:
+            raise ValueError("display_name must be 120 characters or fewer")
+        return v
+
     @field_validator("adapter")
     @classmethod
     def _adapter_valid(cls, v: str) -> str:
@@ -102,6 +181,11 @@ class ProviderCreateRequest(BaseModel):
         if v not in allowed:
             raise ValueError(f"auth_type must be one of {sorted(allowed)}")
         return v
+
+    @field_validator("api_base")
+    @classmethod
+    def _api_base_ssrf(cls, v: str | None) -> str | None:
+        return _validate_api_base(v)
 
 
 class ProviderPatchRequest(BaseModel):
@@ -133,6 +217,18 @@ class ProviderPatchRequest(BaseModel):
         if v not in allowed:
             raise ValueError(f"auth_type must be one of {sorted(allowed)}")
         return v
+
+    @field_validator("display_name")
+    @classmethod
+    def _display_name_len(cls, v: str | None) -> str | None:
+        if v is not None and len(v) > 120:
+            raise ValueError("display_name must be 120 characters or fewer")
+        return v
+
+    @field_validator("api_base")
+    @classmethod
+    def _api_base_ssrf(cls, v: str | None) -> str | None:
+        return _validate_api_base(v)
 
 
 class AppSettingsPatchRequest(BaseModel):
@@ -437,6 +533,11 @@ async def patch_llm_provider(provider_id: str, body: ProviderPatchRequest) -> di
     update_fields: dict = {"updated_at": datetime.now(UTC).isoformat()}
     network_changed = False
 
+    # Use model_fields_set to distinguish "field was explicitly supplied"
+    # (even as null) from "field was omitted entirely". This allows callers
+    # to clear nullable fields like api_base and region by sending null.
+    provided = body.model_fields_set
+
     if body.display_name is not None:
         update_fields["display_name"] = body.display_name
     if body.adapter is not None:
@@ -445,13 +546,14 @@ async def patch_llm_provider(provider_id: str, body: ProviderPatchRequest) -> di
     if body.model_id is not None:
         update_fields["model_id"] = body.model_id
         network_changed = True
-    if body.api_base is not None:
+    if "api_base" in provided:
+        # Explicit null → clear; explicit string → set; omitted → skip
         update_fields["api_base"] = body.api_base
         network_changed = True
     if body.auth_type is not None:
         update_fields["auth_type"] = body.auth_type
         network_changed = True
-    if body.region is not None:
+    if "region" in provided:
         update_fields["region"] = body.region
         network_changed = True
     if body.enabled is not None:

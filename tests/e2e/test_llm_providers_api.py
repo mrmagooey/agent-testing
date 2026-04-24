@@ -336,6 +336,142 @@ def test_create_provider_invalid_slug_rejected(client: TestClient):
     assert resp.status_code == 422
 
 
+def test_patch_api_base_can_be_cleared(client: TestClient):
+    """PATCH with api_base=null must clear the field (suggestion #6)."""
+    dto = _create_provider(
+        client,
+        name="clear-api-base",
+        api_base="https://api.example.com",
+    )
+    provider_id = dto["id"]
+
+    # Explicitly clear api_base with null
+    resp = client.patch(f"/api/llm-providers/{provider_id}", json={"api_base": None})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["api_base"] is None
+
+
+def test_create_provider_rejects_private_ip_api_base(client: TestClient):
+    """api_base with a private/RFC-1918 IP must be rejected with 422 (SSRF guard, suggestion #7)."""
+    resp = client.post("/api/llm-providers", json={
+        "name": "ssrf-private",
+        "display_name": "SSRF test",
+        "adapter": "openai_compat",
+        "model_id": "m",
+        "auth_type": "none",
+        "api_base": "https://192.168.1.100:8080",
+    })
+    assert resp.status_code == 422, resp.text
+
+
+def test_create_provider_rejects_http_non_localhost(client: TestClient):
+    """http:// scheme is only allowed for localhost (SSRF guard, suggestion #7)."""
+    resp = client.post("/api/llm-providers", json={
+        "name": "ssrf-http",
+        "display_name": "SSRF http test",
+        "adapter": "openai_compat",
+        "model_id": "m",
+        "auth_type": "none",
+        "api_base": "http://remote.example.com/v1",
+    })
+    assert resp.status_code == 422, resp.text
+
+
+def test_create_provider_allows_https_remote(client: TestClient):
+    """https:// remote URLs are accepted."""
+    dto = _create_provider(
+        client,
+        name="https-remote",
+        api_base="https://api.openai.com/v1",
+    )
+    assert dto["api_base"] == "https://api.openai.com/v1"
+
+
+def test_create_provider_allows_http_localhost(client: TestClient):
+    """http://localhost is allowed for local dev."""
+    dto = _create_provider(
+        client,
+        name="http-localhost",
+        api_base="http://localhost:11434/v1",
+    )
+    assert "localhost" in dto["api_base"]
+
+
+def test_create_provider_rejects_10_x_ip(client: TestClient):
+    """10.x.x.x addresses are blocked (RFC-1918)."""
+    resp = client.post("/api/llm-providers", json={
+        "name": "ssrf-10x",
+        "display_name": "SSRF 10x",
+        "adapter": "openai_compat",
+        "model_id": "m",
+        "auth_type": "none",
+        "api_base": "https://10.0.0.1/v1",
+    })
+    assert resp.status_code == 422, resp.text
+
+
+def test_create_provider_display_name_too_long(client: TestClient):
+    """display_name over 120 chars must be rejected (suggestion #9)."""
+    resp = client.post("/api/llm-providers", json={
+        "name": "long-name",
+        "display_name": "x" * 121,
+        "adapter": "litellm",
+        "model_id": "m",
+        "auth_type": "none",
+    })
+    assert resp.status_code == 422, resp.text
+
+
+def test_create_provider_display_name_max_allowed(client: TestClient):
+    """display_name of exactly 120 chars must be accepted."""
+    dto = _create_provider(
+        client,
+        name="max-name",
+        display_name="x" * 120,
+    )
+    assert len(dto["display_name"]) == 120
+
+
+def test_db_persist_across_reinit(tmp_path):
+    """Custom provider must survive Database teardown and re-init (suggestion #8)."""
+    _ensure_fernet_env()
+    db_path = tmp_path / "persist_test.db"
+
+    db1 = Database(db_path)
+    _run_async(db1.init())
+
+    from datetime import UTC, datetime
+    row = {
+        "id": "persist-id-001",
+        "name": "persist-provider",
+        "display_name": "Persist Provider",
+        "adapter": "openai_compat",
+        "model_id": "gpt-4",
+        "api_base": None,
+        "api_key_ciphertext": None,
+        "auth_type": "api_key",
+        "region": None,
+        "enabled": 1,
+        "last_probe_at": None,
+        "last_probe_status": None,
+        "last_probe_error": None,
+        "created_at": datetime.now(UTC).isoformat(),
+        "updated_at": datetime.now(UTC).isoformat(),
+    }
+    _run_async(db1.create_llm_provider(row))
+    # Simulate teardown by letting db1 go out of scope
+    del db1
+
+    # Re-init against same file
+    db2 = Database(db_path)
+    _run_async(db2.init())
+    rows = _run_async(db2.list_llm_providers())
+    names = [r["name"] for r in rows]
+    assert "persist-provider" in names, f"Expected persist-provider in {names}"
+
+    _clear_fernet_env()
+
+
 def test_full_crud_roundtrip(client: TestClient):
     """Create → list → patch → probe → delete."""
     # Create
