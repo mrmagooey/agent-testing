@@ -2,9 +2,10 @@
 
 Provides:
 - FINDING_OUTPUT_FORMAT: format instructions injected into every strategy prompt
-- build_system_prompt(): injects review profile modifier
+- build_system_prompt(): injects review profile modifier (legacy; kept for callers
+  that still pass a ``config`` dict directly)
 - run_agentic_loop(): standard tool-use loop
-- run_subagents(): sequential or parallel multi-agent execution
+- run_subagents(): sequential or parallel multi-agent execution (bundle-keyed only)
 - FindingParser: extracts and validates Finding objects from LLM output
 - deduplicate(): merges overlapping findings, returns StrategyOutput with dedup log
 - ModelProviderCache: per-run cache of ModelProvider instances keyed by model_id
@@ -58,7 +59,7 @@ Include all genuine findings. Do not include false alarms you are uncertain abou
 
 
 # ---------------------------------------------------------------------------
-# System prompt construction
+# System prompt construction (legacy helper — kept for external callers)
 # ---------------------------------------------------------------------------
 
 def build_system_prompt(base_prompt: str, config: dict) -> str:
@@ -200,36 +201,26 @@ def filter_tools(tools: "ToolRegistry", allowed: frozenset[str]) -> "ToolRegistr
 
 def _resolve_task_fields(
     task: dict,
-    strategy: "UserStrategy | None",
+    strategy: "UserStrategy",
 ) -> tuple[str, str, int]:
-    """Extract system_prompt, user_message, max_turns from a task dict.
+    """Extract system_prompt, user_message, max_turns from a bundle-keyed task dict.
 
-    Supports two shapes:
+    Each task dict must contain:
+        ``{"key": <str>, "user_message": <str>}``
 
-    **Legacy** (existing callers):
-        ``{"system_prompt": ..., "user_message": ..., "max_turns": ...}``
-
-    **Bundle-keyed** (new callers):
-        ``{"key": ..., "user_message": ..., "max_turns": ...}``
-        Requires *strategy* to be non-None.
-
-    When *key* is present and *strategy* is provided, the bundle is resolved
-    and system_prompt / max_turns come from the resolved bundle.  The task
-    dict may still override ``max_turns`` directly.
+    *strategy* is used to resolve the bundle for the given key.  The task
+    dict may override ``max_turns`` directly; otherwise the bundle's default
+    is used.
     """
-    if "key" in task and strategy is not None:
-        from sec_review_framework.data.strategy_bundle import resolve_bundle
+    from sec_review_framework.data.strategy_bundle import resolve_bundle
 
-        bundle = resolve_bundle(strategy, task["key"])
-        system_prompt = bundle.system_prompt
-        if bundle.profile_modifier:
-            system_prompt = f"{system_prompt}\n\n{bundle.profile_modifier}"
-        user_message = task.get("user_message", "")
-        max_turns = task.get("max_turns", bundle.max_turns)
-        return system_prompt, user_message, max_turns
-
-    # Legacy path — fields must be present in the task dict
-    return task["system_prompt"], task["user_message"], task["max_turns"]
+    bundle = resolve_bundle(strategy, task["key"])
+    system_prompt = bundle.system_prompt
+    if bundle.profile_modifier:
+        system_prompt = f"{system_prompt}\n\n{bundle.profile_modifier}"
+    user_message = task.get("user_message", "")
+    max_turns = task.get("max_turns", bundle.max_turns)
+    return system_prompt, user_message, max_turns
 
 
 def run_subagents(
@@ -242,20 +233,9 @@ def run_subagents(
 ) -> list[str]:
     """Run multiple agentic loops either sequentially or in parallel.
 
-    Supports two task-dict shapes:
-
-    **Legacy** (backwards-compatible):
-        Each task dict must contain ``system_prompt`` (str),
-        ``user_message`` (str), and ``max_turns`` (int).
-
-    **Bundle-keyed** (new):
-        Each task dict must contain ``key`` (str | None) and
-        ``user_message`` (str).  ``strategy`` must be provided so the bundle
-        can be resolved.  ``max_turns`` in the task dict overrides the
-        bundle's default if present.
-
-    If ``key`` is absent in the task dict the legacy path is used regardless
-    of whether *strategy* is set, so existing callers keep working unchanged.
+    Each task dict must contain ``key`` (str) and ``user_message`` (str).
+    ``strategy`` must be provided so the bundle can be resolved per task.
+    ``max_turns`` in the task dict overrides the bundle's default if present.
 
     When ``parallel=True``, each subagent receives a cloned ToolRegistry so
     audit logs do not interleave.
@@ -266,11 +246,17 @@ def run_subagents(
         tools: Tool registry; cloned per thread when parallel=True.
         parallel: If True, use ThreadPoolExecutor.
         max_workers: Maximum worker threads when parallel=True.
-        strategy: Optional UserStrategy for bundle-keyed task dicts.
+        strategy: UserStrategy for bundle resolution.
 
     Returns:
         List of raw LLM output strings, in the same order as ``tasks``.
     """
+    if strategy is None:
+        raise ValueError(
+            "run_subagents() requires a UserStrategy for bundle resolution. "
+            "Pass strategy=<UserStrategy>."
+        )
+
     if not parallel:
         results = []
         for t in tasks:
