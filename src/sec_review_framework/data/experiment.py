@@ -3,6 +3,7 @@
 import hashlib
 from datetime import UTC, datetime
 from enum import Enum
+from typing import Literal
 from pydantic import BaseModel, Field, field_serializer
 
 from sec_review_framework.data.evaluation import EvaluationResult, VerificationResult
@@ -112,6 +113,13 @@ class ExperimentRun(BaseModel):
     parallel: bool = False
     repetition_index: int = 0
     created_at: datetime | None = None
+
+    # HTTP result transport fields.  Populated at config-write time when
+    # result_transport == "http"; excluded from DB config_json persistence via
+    # Field(exclude=True).  upload_url and upload_token are None for "pvc" runs.
+    result_transport: Literal["pvc", "http"] = "pvc"
+    upload_url: str | None = None
+    upload_token: str | None = Field(default=None, exclude=True)
 
     @field_serializer("tool_extensions")
     def _serialize_tool_extensions(self, value: frozenset[ToolExtension]) -> list[str]:

@@ -681,3 +681,463 @@ async def test_shutdown_cancels_background_tasks_when_gated_on(tmp_path, monkeyp
                 assert client.get("/health").status_code == 200
     # TestClient.__exit__ triggers the shutdown handler, which cancels + awaits.
     assert coord_module._background_tasks == set()
+
+
+# ---------------------------------------------------------------------------
+# Upload handler — POST /internal/runs/{run_id}/result  (Step 4)
+# ---------------------------------------------------------------------------
+
+def _build_multipart(files: dict[str, bytes]) -> tuple[bytes, str]:
+    """Build a raw multipart/form-data body for testing.
+
+    Returns (body_bytes, content_type_header).
+    """
+    boundary = b"testboundary1234567890"
+    parts = []
+    for name, data in files.items():
+        parts.append(
+            b"--" + boundary + b"\r\n"
+            b'Content-Disposition: form-data; name="file"; filename="' + name.encode() + b'"\r\n'
+            b"Content-Type: application/octet-stream\r\n"
+            b"\r\n" + data + b"\r\n"
+        )
+    body = b"".join(parts) + b"--" + boundary + b"--\r\n"
+    content_type = f"multipart/form-data; boundary={boundary.decode()}"
+    return body, content_type
+
+
+async def _setup_upload_run(db: Database, tmp_path: Path, run_id: str = "upload-run-1") -> tuple[str, str]:
+    """Create an experiment + run in the DB and issue a token. Returns (experiment_id, token)."""
+    exp_id = f"exp-for-{run_id}"
+    await db.create_experiment(
+        experiment_id=exp_id,
+        config_json="{}",
+        total_runs=1,
+        max_cost_usd=None,
+    )
+    await db.create_run(
+        run_id=run_id,
+        experiment_id=exp_id,
+        config_json="{}",
+        model_id="gpt-4o",
+        strategy="single_agent",
+        tool_variant="with_tools",
+        review_profile="default",
+        verification_variant="none",
+    )
+    token = await db.issue_upload_token(run_id)
+    return exp_id, token
+
+
+@pytest.mark.asyncio
+async def test_upload_handler_success(tmp_path: Path) -> None:
+    """A valid multipart upload with run_result.json returns 200 and commits files."""
+    from sec_review_framework.coordinator import _seed_builtin_strategies
+
+    db = Database(tmp_path / "test.db")
+    await db.init()
+    await _seed_builtin_strategies(db)
+    c = _make_coordinator(tmp_path, db)
+    c.result_transport = "http"
+
+    run_id = "upload-run-ok"
+    exp_id, token = await _setup_upload_run(db, tmp_path, run_id)
+
+    body, ct = _build_multipart({
+        "run_result.json": b'{"status": "completed"}',
+        "findings.jsonl": b'{"id": "f1"}\n',
+    })
+
+    with patch.object(coord_module, "coordinator", c):
+        with patch.object(c, "reconcile", return_value=None):
+            with TestClient(app) as client:
+                resp = client.post(
+                    f"/api/internal/runs/{run_id}/result",
+                    content=body,
+                    headers={
+                        "Content-Type": ct,
+                        "Authorization": f"Bearer {token}",
+                    },
+                )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["run_id"] == run_id
+    assert "run_result.json" in data["files"]
+
+    # File should be committed to the final dir
+    final_dir = tmp_path / "storage" / "outputs" / exp_id / run_id
+    assert (final_dir / "run_result.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_upload_handler_missing_bearer_returns_403(tmp_path: Path) -> None:
+    """Omitting the Authorization header returns 403."""
+    from sec_review_framework.coordinator import _seed_builtin_strategies
+
+    db = Database(tmp_path / "test.db")
+    await db.init()
+    await _seed_builtin_strategies(db)
+    c = _make_coordinator(tmp_path, db)
+
+    run_id = "upload-run-no-auth"
+    exp_id, _ = await _setup_upload_run(db, tmp_path, run_id)
+    body, ct = _build_multipart({"run_result.json": b"{}"})
+
+    with patch.object(coord_module, "coordinator", c):
+        with patch.object(c, "reconcile", return_value=None):
+            with TestClient(app) as client:
+                resp = client.post(
+                    f"/api/internal/runs/{run_id}/result",
+                    content=body,
+                    headers={"Content-Type": ct},
+                )
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_upload_handler_wrong_token_returns_403(tmp_path: Path) -> None:
+    """An incorrect bearer token returns 403."""
+    from sec_review_framework.coordinator import _seed_builtin_strategies
+
+    db = Database(tmp_path / "test.db")
+    await db.init()
+    await _seed_builtin_strategies(db)
+    c = _make_coordinator(tmp_path, db)
+
+    run_id = "upload-run-bad-tok"
+    exp_id, _real_token = await _setup_upload_run(db, tmp_path, run_id)
+    body, ct = _build_multipart({"run_result.json": b"{}"})
+
+    with patch.object(coord_module, "coordinator", c):
+        with patch.object(c, "reconcile", return_value=None):
+            with TestClient(app) as client:
+                resp = client.post(
+                    f"/api/internal/runs/{run_id}/result",
+                    content=body,
+                    headers={
+                        "Content-Type": ct,
+                        "Authorization": "Bearer wrong-token-value",
+                    },
+                )
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_upload_handler_duplicate_returns_409(tmp_path: Path) -> None:
+    """A second upload for the same run returns 409 (result dir already exists)."""
+    from sec_review_framework.coordinator import _seed_builtin_strategies
+
+    db = Database(tmp_path / "test.db")
+    await db.init()
+    await _seed_builtin_strategies(db)
+    c = _make_coordinator(tmp_path, db)
+    c.result_transport = "http"
+
+    run_id = "upload-run-dup"
+    exp_id, token = await _setup_upload_run(db, tmp_path, run_id)
+
+    body, ct = _build_multipart({"run_result.json": b'{"status": "completed"}'})
+
+    # Pre-create the final dir so rename fails with FileExistsError
+    final_dir = tmp_path / "storage" / "outputs" / exp_id / run_id
+    final_dir.mkdir(parents=True, exist_ok=True)
+
+    with patch.object(coord_module, "coordinator", c):
+        with patch.object(c, "reconcile", return_value=None):
+            with TestClient(app) as client:
+                resp = client.post(
+                    f"/api/internal/runs/{run_id}/result",
+                    content=body,
+                    headers={
+                        "Content-Type": ct,
+                        "Authorization": f"Bearer {token}",
+                    },
+                )
+    assert resp.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_upload_handler_missing_run_result_json_returns_422(tmp_path: Path) -> None:
+    """Uploading without run_result.json returns 422 Unprocessable Entity."""
+    from sec_review_framework.coordinator import _seed_builtin_strategies
+
+    db = Database(tmp_path / "test.db")
+    await db.init()
+    await _seed_builtin_strategies(db)
+    c = _make_coordinator(tmp_path, db)
+    c.result_transport = "http"
+
+    run_id = "upload-run-no-result"
+    exp_id, token = await _setup_upload_run(db, tmp_path, run_id)
+
+    # Upload only a non-essential file
+    body, ct = _build_multipart({"findings.jsonl": b'{"id": "f1"}\n'})
+
+    with patch.object(coord_module, "coordinator", c):
+        with patch.object(c, "reconcile", return_value=None):
+            with TestClient(app) as client:
+                resp = client.post(
+                    f"/api/internal/runs/{run_id}/result",
+                    content=body,
+                    headers={
+                        "Content-Type": ct,
+                        "Authorization": f"Bearer {token}",
+                    },
+                )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_upload_handler_path_traversal_rejected(tmp_path: Path) -> None:
+    """Files with path-traversal filenames (../../etc/passwd) are silently ignored.
+
+    The handler should not crash and run_result.json must still be required,
+    so the upload returns 422 (missing run_result.json) rather than 200.
+    """
+    from sec_review_framework.coordinator import _seed_builtin_strategies
+
+    db = Database(tmp_path / "test.db")
+    await db.init()
+    await _seed_builtin_strategies(db)
+    c = _make_coordinator(tmp_path, db)
+    c.result_transport = "http"
+
+    run_id = "upload-run-traversal"
+    exp_id, token = await _setup_upload_run(db, tmp_path, run_id)
+
+    # Build body with a traversal filename
+    boundary = b"testboundary9876"
+    body = (
+        b"--" + boundary + b"\r\n"
+        b'Content-Disposition: form-data; name="file"; filename="../../etc/passwd"\r\n'
+        b"Content-Type: application/octet-stream\r\n"
+        b"\r\nEVIL\r\n"
+        b"--" + boundary + b"--\r\n"
+    )
+    ct = f"multipart/form-data; boundary={boundary.decode()}"
+
+    with patch.object(coord_module, "coordinator", c):
+        with patch.object(c, "reconcile", return_value=None):
+            with TestClient(app) as client:
+                resp = client.post(
+                    f"/api/internal/runs/{run_id}/result",
+                    content=body,
+                    headers={
+                        "Content-Type": ct,
+                        "Authorization": f"Bearer {token}",
+                    },
+                )
+    # Path-traversal file was ignored; run_result.json missing → 422
+    assert resp.status_code == 422
+
+    # No files should have been written outside the staging area
+    # (staging area is cleaned up on error, so the output dir shouldn't exist)
+    outputs_dir = tmp_path / "storage" / "outputs" / exp_id
+    for child in (outputs_dir.iterdir() if outputs_dir.exists() else []):
+        assert not child.name.startswith(".."), "path traversal file written!"
+
+
+@pytest.mark.asyncio
+async def test_upload_token_is_single_use_via_http(tmp_path: Path) -> None:
+    """After a successful upload, the same token is rejected with 403."""
+    from sec_review_framework.coordinator import _seed_builtin_strategies
+
+    db = Database(tmp_path / "test.db")
+    await db.init()
+    await _seed_builtin_strategies(db)
+    c = _make_coordinator(tmp_path, db)
+    c.result_transport = "http"
+
+    run_id = "upload-run-single-use"
+    exp_id, token = await _setup_upload_run(db, tmp_path, run_id)
+    body, ct = _build_multipart({"run_result.json": b'{"status": "completed"}'})
+    headers = {"Content-Type": ct, "Authorization": f"Bearer {token}"}
+
+    with patch.object(coord_module, "coordinator", c):
+        with patch.object(c, "reconcile", return_value=None):
+            with TestClient(app) as client:
+                # First upload succeeds
+                r1 = client.post(f"/api/internal/runs/{run_id}/result", content=body, headers=headers)
+                assert r1.status_code == 200
+                # Second attempt with same token → 403
+                r2 = client.post(f"/api/internal/runs/{run_id}/result", content=body, headers=headers)
+                assert r2.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Item 3: Aggregate-size cap (MAX_TOTAL_BYTES)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_upload_aggregate_cap_returns_413_and_cleans_staging(tmp_path: Path) -> None:
+    """Uploading files whose combined size exceeds MAX_TOTAL_BYTES returns 413.
+
+    The staging directory must be cleaned up after rejection so the disk is not
+    littered with partial uploads.  Uses a tiny cap (1024 bytes) set via env so
+    the test body stays small.
+    """
+    import os
+    from sec_review_framework.coordinator import _seed_builtin_strategies
+
+    db = Database(tmp_path / "test.db")
+    await db.init()
+    await _seed_builtin_strategies(db)
+    c = _make_coordinator(tmp_path, db)
+    c.result_transport = "http"
+
+    run_id = "upload-run-agg-cap"
+    exp_id, token = await _setup_upload_run(db, tmp_path, run_id)
+
+    # Build a multipart body larger than the tiny cap.
+    # Each file is 600 bytes; two files together = 1200 bytes > 1024 limit.
+    large_data = b"X" * 600
+    body, ct = _build_multipart({
+        "run_result.json": large_data,
+        "findings.jsonl": large_data,
+    })
+
+    with patch.object(coord_module, "coordinator", c):
+        with patch.object(c, "reconcile", return_value=None):
+            # Override MAX_TOTAL_BYTES to 1024 bytes for this test only.
+            with patch.dict(os.environ, {"MAX_TOTAL_BYTES": "1024"}):
+                with TestClient(app) as client:
+                    resp = client.post(
+                        f"/api/internal/runs/{run_id}/result",
+                        content=body,
+                        headers={
+                            "Content-Type": ct,
+                            "Authorization": f"Bearer {token}",
+                        },
+                    )
+
+    assert resp.status_code == 413, (
+        f"Expected 413 when aggregate size exceeds cap, got {resp.status_code}: {resp.text}"
+    )
+
+    # Staging dir must have been cleaned up — no .staging-* dirs should remain.
+    outputs_dir = tmp_path / "storage" / "outputs" / exp_id
+    if outputs_dir.exists():
+        staging_dirs = list(outputs_dir.glob(".staging-*"))
+        assert staging_dirs == [], (
+            f"Staging dirs not cleaned up after 413: {staging_dirs}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Item 4: Per-artifact size cap integration test (MAX_ARTIFACT_BYTES)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_upload_single_artifact_oversize_returns_413_and_cleans_staging(
+    tmp_path: Path,
+) -> None:
+    """Uploading a single artifact exceeding MAX_ARTIFACT_BYTES returns 413.
+
+    Regression: handler-side per-file size enforcement was previously untested
+    at the API level.  Uses a tiny cap (1024 bytes) so the test body stays small.
+    """
+    import os
+    from sec_review_framework.coordinator import _seed_builtin_strategies
+
+    db = Database(tmp_path / "test.db")
+    await db.init()
+    await _seed_builtin_strategies(db)
+    c = _make_coordinator(tmp_path, db)
+    c.result_transport = "http"
+
+    run_id = "upload-run-artifact-cap"
+    exp_id, token = await _setup_upload_run(db, tmp_path, run_id)
+
+    # Single file that exceeds the tiny per-artifact cap.
+    oversize_data = b"Y" * 2000  # 2000 bytes > 1024 cap
+    body, ct = _build_multipart({"run_result.json": oversize_data})
+
+    with patch.object(coord_module, "coordinator", c):
+        with patch.object(c, "reconcile", return_value=None):
+            with patch.dict(os.environ, {"MAX_ARTIFACT_BYTES": "1024"}):
+                with TestClient(app) as client:
+                    resp = client.post(
+                        f"/api/internal/runs/{run_id}/result",
+                        content=body,
+                        headers={
+                            "Content-Type": ct,
+                            "Authorization": f"Bearer {token}",
+                        },
+                    )
+
+    assert resp.status_code == 413, (
+        f"Expected 413 when single artifact exceeds per-file cap, got {resp.status_code}: {resp.text}"
+    )
+
+    # Staging dir must have been cleaned up.
+    outputs_dir = tmp_path / "storage" / "outputs" / exp_id
+    if outputs_dir.exists():
+        staging_dirs = list(outputs_dir.glob(".staging-*"))
+        assert staging_dirs == [], (
+            f"Staging dirs not cleaned up after 413: {staging_dirs}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Item 5: Unknown filename rejection
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_upload_unknown_filename_not_written_to_disk(tmp_path: Path) -> None:
+    """A file with a name outside the allowlist must NOT be written to disk.
+
+    The handler silently ignores unknown filenames (they fail the allowlist check
+    in _on_header_end and current_fh is left as None).  The request still fails
+    422 because run_result.json is not present — the important invariant is that
+    no file named ``evil.exe`` (or anything not in _ALLOWED) reaches the filesystem.
+    """
+    from sec_review_framework.coordinator import _seed_builtin_strategies
+
+    db = Database(tmp_path / "test.db")
+    await db.init()
+    await _seed_builtin_strategies(db)
+    c = _make_coordinator(tmp_path, db)
+    c.result_transport = "http"
+
+    run_id = "upload-run-unknown-fname"
+    exp_id, token = await _setup_upload_run(db, tmp_path, run_id)
+
+    # Build body with a filename NOT in the allowlist.
+    boundary = b"testboundary-unknown"
+    body = (
+        b"--" + boundary + b"\r\n"
+        b'Content-Disposition: form-data; name="file"; filename="evil.exe"\r\n'
+        b"Content-Type: application/octet-stream\r\n"
+        b"\r\nEVIL_PAYLOAD\r\n"
+        b"--" + boundary + b"--\r\n"
+    )
+    ct = f"multipart/form-data; boundary={boundary.decode()}"
+
+    with patch.object(coord_module, "coordinator", c):
+        with patch.object(c, "reconcile", return_value=None):
+            with TestClient(app) as client:
+                resp = client.post(
+                    f"/api/internal/runs/{run_id}/result",
+                    content=body,
+                    headers={
+                        "Content-Type": ct,
+                        "Authorization": f"Bearer {token}",
+                    },
+                )
+
+    # Unknown filename is ignored; run_result.json missing → 422.
+    assert resp.status_code == 422, (
+        f"Expected 422 (missing run_result.json) when only an unknown filename is "
+        f"uploaded, got {resp.status_code}: {resp.text}"
+    )
+
+    # Verify evil.exe was NOT written anywhere under the storage root.
+    storage_root = tmp_path / "storage"
+    evil_files = list(storage_root.rglob("evil.exe"))
+    assert evil_files == [], (
+        f"evil.exe should not have been written to disk but found: {evil_files}"
+    )

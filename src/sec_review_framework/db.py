@@ -1,12 +1,23 @@
 """SQLite-based persistence for the coordinator service. Uses aiosqlite for async access."""
 
 import aiosqlite
+import hashlib
+import hmac
 import json
 import re
+import secrets
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+
+class UploadTokenAlreadyExists(Exception):
+    """Raised by issue_upload_token when a token for run_id already exists."""
+
+    def __init__(self, run_id: str) -> None:
+        self.run_id = run_id
+        super().__init__(f"Upload token already issued for run {run_id!r}")
 
 if TYPE_CHECKING:
     from sec_review_framework.data.strategy_bundle import UserStrategy
@@ -182,6 +193,18 @@ class Database:
                     INSERT INTO findings_fts(rowid, title, description, vuln_class, cwe_ids)
                     VALUES (new.rowid, new.title, new.description, new.vuln_class, new.cwe_ids);
                 END
+            """)
+
+            # ---------------------------------------------------------------------------
+            # Upload tokens table (HTTP result transport)
+            # ---------------------------------------------------------------------------
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS run_upload_tokens (
+                    run_id TEXT PRIMARY KEY REFERENCES runs(id),
+                    token_hash TEXT NOT NULL,
+                    issued_at TEXT NOT NULL,
+                    consumed_at TEXT
+                )
             """)
 
             await db.commit()
@@ -670,6 +693,118 @@ class Database:
         Until then this always returns False so DELETE works on all user strategies.
         """
         return False
+
+    # ---------------------------------------------------------------------------
+    # Upload tokens (HTTP result transport)
+    # ---------------------------------------------------------------------------
+
+    async def issue_upload_token(self, run_id: str) -> str:
+        """Generate a fresh bearer token for *run_id*, store its SHA-256 hash.
+
+        Returns the plaintext token (32 URL-safe bytes).  The token is stored
+        hashed; the plaintext is never persisted.
+
+        Raises:
+            UploadTokenAlreadyExists: if a token for *run_id* already exists.
+                Callers must not rely on "issue or get existing" semantics — call
+                get_upload_token_issued() first if re-issue must be skipped.
+        """
+        token = secrets.token_urlsafe(32)
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        issued_at = datetime.now(UTC).isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                """
+                INSERT INTO run_upload_tokens (run_id, token_hash, issued_at, consumed_at)
+                VALUES (?, ?, ?, NULL)
+                ON CONFLICT(run_id) DO NOTHING
+                """,
+                (run_id, token_hash, issued_at),
+            ) as cursor:
+                rowcount = cursor.rowcount
+            await db.commit()
+        if rowcount == 0:
+            raise UploadTokenAlreadyExists(run_id)
+        return token
+
+    async def consume_upload_token(self, run_id: str, token: str) -> bool:
+        """Atomically mark the token as consumed if it matches and was not yet used.
+
+        Returns True if the token was valid and is now consumed; False otherwise.
+        Uses timing-safe comparison via ``hmac.compare_digest``.
+        """
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        async with aiosqlite.connect(self.db_path) as db:
+            # Fetch the stored hash without side-effects first so we can do a
+            # timing-safe comparison in Python (SQLite's = is not timing-safe).
+            async with db.execute(
+                "SELECT token_hash FROM run_upload_tokens WHERE run_id = ? AND consumed_at IS NULL",
+                (run_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+
+            if row is None:
+                return False
+
+            stored_hash: str = row[0]
+            if not hmac.compare_digest(stored_hash, token_hash):
+                return False
+
+            # Atomically mark as consumed; the WHERE guards against races.
+            consumed_at = datetime.now(UTC).isoformat()
+            async with db.execute(
+                """
+                UPDATE run_upload_tokens
+                SET consumed_at = ?
+                WHERE run_id = ? AND consumed_at IS NULL AND token_hash = ?
+                """,
+                (consumed_at, run_id, token_hash),
+            ) as cursor:
+                updated = cursor.rowcount
+
+            await db.commit()
+            return updated > 0
+
+    async def get_upload_token_issued(self, run_id: str) -> bool:
+        """Return True if a token has been issued for *run_id* (consumed or not)."""
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                "SELECT 1 FROM run_upload_tokens WHERE run_id = ?",
+                (run_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+                return row is not None
+
+    async def is_upload_token_consumed(self, run_id: str) -> bool:
+        """Return True if the token for *run_id* has already been consumed."""
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                "SELECT consumed_at FROM run_upload_tokens WHERE run_id = ?",
+                (run_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+                if row is None:
+                    return False
+                return row[0] is not None
+
+    async def revoke_upload_tokens_for_experiment(self, experiment_id: str) -> int:
+        """Delete all upload tokens for runs belonging to *experiment_id*.
+
+        Returns the number of tokens deleted.
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                """
+                DELETE FROM run_upload_tokens
+                WHERE run_id IN (
+                    SELECT id FROM runs WHERE experiment_id = ?
+                )
+                """,
+                (experiment_id,),
+            ) as cursor:
+                deleted = cursor.rowcount
+            await db.commit()
+            return deleted
 
 
 def _infer_match_status(finding: dict) -> str | None:

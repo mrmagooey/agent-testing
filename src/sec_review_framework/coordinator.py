@@ -97,6 +97,28 @@ _TOOL_EXTENSION_LABELS: dict[ToolExtension, str] = {
     ToolExtension.DEVDOCS: "DevDocs",
 }
 
+# ---------------------------------------------------------------------------
+# Prometheus metrics (optional — prometheus-client is a coordinator dep)
+# ---------------------------------------------------------------------------
+try:
+    from prometheus_client import Counter as _Counter, make_asgi_app as _make_asgi_app
+    _upload_counter = _Counter(
+        "upload_total",
+        "Worker result upload attempts by outcome",
+        ["outcome"],
+    )
+    _PROMETHEUS_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    _PROMETHEUS_AVAILABLE = False
+    # Stub counter so the handler code is unconditionally importable in tests.
+    class _StubCounter:
+        def labels(self, **_kw: object) -> "_StubCounter":
+            return self
+        def inc(self, _amount: float = 1) -> None:
+            pass
+    _upload_counter = _StubCounter()  # type: ignore[assignment]
+    _make_asgi_app = None  # type: ignore[assignment]
+
 # Kubernetes is optional — not available in dev environments
 try:
     import kubernetes
@@ -165,6 +187,8 @@ class ExperimentCoordinator:
         llm_secret_name: str = "llm-api-keys",
         config_map_name: str = "experiment-config",
         worker_image_pull_policy: str = "IfNotPresent",
+        result_transport: str = "pvc",
+        coordinator_internal_url: str = "",
     ):
         self.k8s_client = k8s_client
         self.storage_root = storage_root
@@ -181,6 +205,8 @@ class ExperimentCoordinator:
         self.llm_secret_name = llm_secret_name
         self.config_map_name = config_map_name
         self.worker_image_pull_policy = worker_image_pull_policy
+        self.result_transport = result_transport
+        self.coordinator_internal_url = coordinator_internal_url
         self._cost_trackers: dict[str, ExperimentCostTracker] = {}
         self._feedback_tracker = FeedbackTracker()
         # Per-instance TTL cache for get_trends (class-level dict would be shared across instances).
@@ -218,11 +244,35 @@ class ExperimentCoordinator:
                 tool_extensions=run.tool_extensions,
             )
 
-        # Persist run configs to shared storage for worker pods to read
+        # Persist run configs to shared storage for worker pods to read.
+        # When result_transport == "http", embed the upload URL and token so the
+        # worker knows how to deliver its artifacts.  The token is excluded from
+        # the DB config_json (model_dump excludes upload_token via Field(exclude=True))
+        # but IS written to the on-disk per-run JSON that the worker reads.
         config_dir = self.storage_root / "config" / "runs"
         config_dir.mkdir(parents=True, exist_ok=True)
         for run in runs:
-            (config_dir / f"{run.id}.json").write_text(run.model_dump_json(indent=2))
+            if self.result_transport == "http":
+                token = await self.db.issue_upload_token(run.id)
+                upload_url = (
+                    f"{self.coordinator_internal_url}"
+                    f"/api/internal/runs/{run.id}/result"
+                )
+                run = run.model_copy(update={
+                    "result_transport": "http",
+                    "upload_url": upload_url,
+                    "upload_token": token,
+                })
+            # Write the full run config (including upload_token) to disk for the worker.
+            # upload_token is excluded from DB persistence via Field(exclude=True),
+            # but we need it on disk, so we dump via model_dump and include it explicitly.
+            run_dict = run.model_dump(mode="json")
+            if run.upload_token is not None:
+                run_dict["upload_token"] = run.upload_token
+            import json as _json
+            (config_dir / f"{run.id}.json").write_text(
+                _json.dumps(run_dict, indent=2, default=str)
+            )
 
         self._cost_trackers[experiment_id] = ExperimentCostTracker(
             experiment_id, matrix.max_experiment_cost_usd
@@ -318,11 +368,16 @@ class ExperimentCoordinator:
         if run_hash not in job_name:
             job_name = f"{job_name[: 63 - len(run_hash) - 1]}-{run_hash}"
 
+        # Under http transport the PVC is read-only for workers (they only read
+        # datasets/devdocs/run-config).  A dedicated emptyDir is used for tmp output.
+        use_http_transport = self.result_transport == "http"
+
         # Build volume/mount lists, then extend them if extensions need it.
         volume_mounts = [
             kubernetes.client.V1VolumeMount(
                 name="shared-data",
                 mount_path="/data",
+                read_only=use_http_transport,
             ),
             kubernetes.client.V1VolumeMount(
                 name="config",
@@ -343,6 +398,20 @@ class ExperimentCoordinator:
                 ),
             ),
         ]
+
+        if use_http_transport:
+            volume_mounts.append(
+                kubernetes.client.V1VolumeMount(
+                    name="worker-tmp",
+                    mount_path="/tmp/worker",
+                )
+            )
+            volumes.append(
+                kubernetes.client.V1Volume(
+                    name="worker-tmp",
+                    empty_dir=kubernetes.client.V1EmptyDirVolumeSource(),
+                )
+            )
 
         # DevDocs emptyDir fallback ------------------------------------------------
         # In environments where the devdocs-sync Job has not run (e.g. kind/e2e
@@ -381,17 +450,23 @@ class ExperimentCoordinator:
                     run.id,
                 )
 
+        # Labels shared between the Job metadata and the pod template metadata.
+        # Kubernetes does NOT propagate Job labels to pods automatically, so we
+        # set them explicitly on both to ensure the NetworkPolicy selector
+        # (app: sec-review-worker) matches the spawned pods.
+        _pod_labels = {
+            "app": "sec-review-worker",
+            "experiment": self._k8s_safe(experiment_id),
+            "model": self._k8s_safe(run.model_id),
+            "strategy": self._k8s_safe(run.strategy.value),
+            "run-hash": run_hash,
+        }
+
         job = kubernetes.client.V1Job(
             metadata=kubernetes.client.V1ObjectMeta(
                 name=job_name,
                 namespace=self.namespace,
-                labels={
-                    "app": "sec-review-worker",
-                    "experiment": self._k8s_safe(experiment_id),
-                    "model": self._k8s_safe(run.model_id),
-                    "strategy": self._k8s_safe(run.strategy.value),
-                    "run-hash": run_hash,
-                },
+                labels=_pod_labels,
                 annotations={
                     "sec-review.io/run-id": run.id,
                     "sec-review.io/experiment-id": experiment_id,
@@ -401,6 +476,7 @@ class ExperimentCoordinator:
                 backoff_limit=1,
                 active_deadline_seconds=1800,
                 template=kubernetes.client.V1PodTemplateSpec(
+                    metadata=kubernetes.client.V1ObjectMeta(labels=_pod_labels),
                     spec=kubernetes.client.V1PodSpec(
                         restart_policy="Never",
                         containers=[
@@ -411,7 +487,11 @@ class ExperimentCoordinator:
                                 command=[
                                     "python", "-m", "sec_review_framework.worker",
                                     "--run-config", f"/data/config/runs/{run.id}.json",
-                                    "--output-dir", f"/data/outputs/{experiment_id}/{run.id}",
+                                    "--output-dir", (
+                                        "/tmp/worker/out"
+                                        if use_http_transport
+                                        else f"/data/outputs/{experiment_id}/{run.id}"
+                                    ),
                                     "--datasets-dir", "/data/datasets",
                                 ],
                                 env=[
@@ -421,6 +501,16 @@ class ExperimentCoordinator:
                                     kubernetes.client.V1EnvVar(
                                         name="TOOL_EXTENSIONS",
                                         value=",".join(sorted(e.value for e in run.tool_extensions)),
+                                    ),
+                                    *(
+                                        [
+                                            kubernetes.client.V1EnvVar(
+                                                name="COORDINATOR_INTERNAL_URL",
+                                                value=self.coordinator_internal_url,
+                                            )
+                                        ]
+                                        if use_http_transport
+                                        else []
                                     ),
                                 ],
                                 env_from=[
@@ -513,6 +603,282 @@ class ExperimentCoordinator:
             "cells": cell_list,
         }
 
+    async def handle_run_result_upload(self, run_id: str, request: "Request") -> dict:
+        """Handle a streamed multipart artifact upload from a worker pod.
+
+        Flow:
+          1. Extract bearer token from Authorization header.
+          2. Consume (atomic single-use) the upload token — returns 403 on failure.
+          3. Derive experiment_id from DB.
+          4. Create a staging dir under /data/outputs/{exp}/.staging-{run_id}-{uuid}/
+          5. Stream multipart parts to disk (never buffer in memory).
+          6. Validate filenames against allowlist; enforce per-artifact size cap.
+          7. Verify run_result.json is present.
+          8. os.rename(staging → final); on FileExistsError → 409.
+        """
+        import time as _time
+        import uuid as _uuid
+        from multipart.multipart import MultipartParser as _MultipartParser
+
+        t_start = _time.monotonic()
+
+        # --- Auth ---
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            _upload_counter.labels(outcome="auth_missing").inc()
+            raise HTTPException(status_code=403, detail="Missing bearer token")
+        token = auth_header[len("Bearer "):]
+
+        if not await self.db.consume_upload_token(run_id, token):
+            _upload_counter.labels(outcome="auth_failed").inc()
+            raise HTTPException(status_code=403, detail="Invalid or already-used upload token")
+
+        # --- Resolve experiment ---
+        run_row = await self.db.get_run(run_id)
+        if run_row is None:
+            _upload_counter.labels(outcome="not_found").inc()
+            raise HTTPException(status_code=404, detail=f"Run {run_id!r} not found")
+        experiment_id: str = run_row["experiment_id"]
+
+        # --- Staging dir ---
+        outputs_dir = self.storage_root / "outputs" / experiment_id
+        staging_dir = outputs_dir / f".staging-{run_id}-{_uuid.uuid4().hex}"
+        final_dir = outputs_dir / run_id
+
+        staging_dir.mkdir(parents=True, exist_ok=True)
+
+        # Allowed filenames and per-file size caps (bytes).
+        _DEFAULT_MAX = int(os.environ.get("MAX_ARTIFACT_BYTES", str(16 * 1024 * 1024)))
+        _LARGE_MAX = int(os.environ.get("MAX_ARTIFACT_BYTES_LARGE", str(256 * 1024 * 1024)))
+        # Global aggregate cap across all parts — guards against many small artifacts
+        # totalling far more than any single per-artifact cap.
+        _MAX_TOTAL_BYTES = int(os.environ.get("MAX_TOTAL_BYTES", str(512 * 1024 * 1024)))
+        _ALLOWED = {
+            "run_result.json",
+            "findings.jsonl",
+            "tool_calls.jsonl",
+            "conversation.jsonl",
+            "findings_pre_verification.jsonl",
+            "report.md",
+        }
+        _SIZE_CAPS: dict[str, int] = {
+            "conversation.jsonl": _LARGE_MAX,
+        }
+
+        # --- Stream multipart parts to disk ---
+        content_type = request.headers.get("content-type", "")
+        boundary: bytes | None = None
+        for part in content_type.split(";"):
+            part = part.strip()
+            if part.startswith("boundary="):
+                boundary = part[len("boundary="):].strip('"').encode("latin-1")
+                break
+
+        if boundary is None:
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            _upload_counter.labels(outcome="bad_request").inc()
+            raise HTTPException(status_code=400, detail="Missing multipart boundary")
+
+        received_files: set[str] = set()
+        total_bytes_received = 0
+        errors: list[str] = []
+        # Sentinel list so _on_part_data can signal aggregate limit exceeded.
+        _total_exceeded: list[bool] = [False]
+
+        # State for the streaming parser callbacks
+        current_filename: list[str | None] = [None]
+        current_fh: list[object] = [None]
+        current_size: list[int] = [0]
+        current_cap: list[int] = [_DEFAULT_MAX]
+        size_exceeded: list[bool] = [False]
+
+        def _on_part_begin() -> None:
+            current_filename[0] = None
+            current_fh[0] = None
+            current_size[0] = 0
+            current_cap[0] = _DEFAULT_MAX
+            size_exceeded[0] = False
+
+        def _on_header_field(data: bytes, start: int, end: int) -> None:
+            pass  # We'll parse header value for Content-Disposition
+
+        _hdr_name: list[bytes] = [b""]
+        _hdr_val: list[bytes] = [b""]
+
+        def _on_header_field_cb(data: bytes, start: int, end: int) -> None:
+            _hdr_name[0] = _hdr_name[0] + data[start:end]
+
+        def _on_header_value_cb(data: bytes, start: int, end: int) -> None:
+            _hdr_val[0] = _hdr_val[0] + data[start:end]
+
+        def _on_header_end() -> None:
+            name = _hdr_name[0].decode("latin-1", errors="replace").lower().strip()
+            val = _hdr_val[0].decode("latin-1", errors="replace").strip()
+            if name == "content-disposition":
+                # Extract filename from: form-data; name="file"; filename="foo.json"
+                fname: str | None = None
+                for seg in val.split(";"):
+                    seg = seg.strip()
+                    if seg.lower().startswith("filename="):
+                        fname = seg[len("filename="):].strip('"').strip("'")
+                if fname is not None:
+                    # Path-traversal protection: reject any non-plain filename
+                    import posixpath as _pp
+                    safe = _pp.basename(fname.replace("\\", "/"))
+                    if safe in _ALLOWED:
+                        current_filename[0] = safe
+                        current_cap[0] = _SIZE_CAPS.get(safe, _DEFAULT_MAX)
+            _hdr_name[0] = b""
+            _hdr_val[0] = b""
+
+        def _on_headers_finished() -> None:
+            fname = current_filename[0]
+            if fname and fname not in received_files:
+                current_fh[0] = open(staging_dir / fname, "wb")
+            else:
+                current_fh[0] = None
+
+        def _on_part_data(data: bytes, start: int, end: int) -> None:
+            nonlocal total_bytes_received
+            chunk = data[start:end]
+            current_size[0] += len(chunk)
+            total_bytes_received += len(chunk)
+            if total_bytes_received > _MAX_TOTAL_BYTES:
+                _total_exceeded[0] = True
+                raise RuntimeError(
+                    f"Aggregate upload size exceeds limit "
+                    f"({_MAX_TOTAL_BYTES // (1024 * 1024)} MiB)"
+                )
+            if current_size[0] > current_cap[0]:
+                size_exceeded[0] = True
+                return
+            fh = current_fh[0]
+            if fh is not None:
+                fh.write(chunk)  # type: ignore[union-attr]
+
+        def _on_part_end() -> None:
+            fh = current_fh[0]
+            fname = current_filename[0]
+            if fh is not None:
+                fh.close()  # type: ignore[union-attr]
+                current_fh[0] = None
+            if size_exceeded[0]:
+                # Remove oversized file
+                if fname:
+                    oversized = staging_dir / fname
+                    if oversized.exists():
+                        oversized.unlink()
+                errors.append(
+                    f"{fname}: exceeds max size "
+                    f"({current_cap[0] // (1024*1024)} MiB)"
+                )
+            elif fname is not None:
+                received_files.add(fname)
+
+        callbacks = {
+            "on_part_begin": _on_part_begin,
+            "on_header_field": _on_header_field_cb,
+            "on_header_value": _on_header_value_cb,
+            "on_header_end": _on_header_end,
+            "on_headers_finished": _on_headers_finished,
+            "on_part_data": _on_part_data,
+            "on_part_end": _on_part_end,
+        }
+
+        parser = _MultipartParser(boundary, callbacks)
+        try:
+            async for chunk in request.stream():
+                parser.write(chunk)
+        except Exception as exc:
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            if _total_exceeded[0]:
+                _upload_counter.labels(outcome="size_exceeded").inc()
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"Aggregate upload size exceeds limit ({_MAX_TOTAL_BYTES // (1024 * 1024)} MiB)",
+                ) from exc
+            _upload_counter.labels(outcome="stream_error").inc()
+            logger.error("Upload stream error for run %s: %s", run_id, exc)
+            raise HTTPException(status_code=400, detail=f"Stream error: {exc}") from exc
+        finally:
+            # Ensure any open file handle is closed even on error
+            if current_fh[0] is not None:
+                try:
+                    current_fh[0].close()  # type: ignore[union-attr]
+                except Exception:
+                    pass
+
+        if errors:
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            _upload_counter.labels(outcome="size_exceeded").inc()
+            raise HTTPException(status_code=413, detail={"errors": errors})
+
+        if "run_result.json" not in received_files:
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            _upload_counter.labels(outcome="missing_result").inc()
+            raise HTTPException(
+                status_code=422, detail="run_result.json is required but was not uploaded"
+            )
+
+        # --- Atomic rename staging → final ---
+        # Pre-check: on Linux os.rename() raises OSError(ENOTEMPTY) not
+        # FileExistsError when the target directory already exists, so an
+        # explicit existence check gives us a reliable 409.
+        if final_dir.exists():
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            _upload_counter.labels(outcome="conflict").inc()
+            raise HTTPException(
+                status_code=409,
+                detail=f"Result for run {run_id!r} already exists",
+            )
+        try:
+            os.rename(staging_dir, final_dir)
+        except FileExistsError:
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            _upload_counter.labels(outcome="conflict").inc()
+            raise HTTPException(
+                status_code=409,
+                detail=f"Result for run {run_id!r} already exists",
+            )
+        except OSError as exc:
+            # Cross-device move fallback (shouldn't happen on single PVC but be safe)
+            try:
+                import shutil as _shutil
+                _shutil.copytree(str(staging_dir), str(final_dir))
+                shutil.rmtree(staging_dir, ignore_errors=True)
+            except FileExistsError:
+                shutil.rmtree(staging_dir, ignore_errors=True)
+                _upload_counter.labels(outcome="conflict").inc()
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Result for run {run_id!r} already exists",
+                ) from exc
+            except Exception as inner_exc:
+                shutil.rmtree(staging_dir, ignore_errors=True)
+                _upload_counter.labels(outcome="rename_error").inc()
+                raise HTTPException(
+                    status_code=500, detail=f"Failed to commit result: {inner_exc}"
+                ) from inner_exc
+
+        duration_ms = int((_time.monotonic() - t_start) * 1000)
+        logger.info(
+            "Upload complete",
+            extra={
+                "run_id": run_id,
+                "experiment_id": experiment_id,
+                "bytes_received": total_bytes_received,
+                "duration_ms": duration_ms,
+                "outcome": "ok",
+            },
+        )
+        _upload_counter.labels(outcome="ok").inc()
+        return {
+            "run_id": run_id,
+            "experiment_id": experiment_id,
+            "files": sorted(received_files),
+            "bytes_received": total_bytes_received,
+        }
+
     async def finalize_experiment(self, experiment_id: str) -> None:
         results = self.collect_results(experiment_id)
         output_dir = self.storage_root / "outputs" / experiment_id
@@ -552,6 +918,8 @@ class ExperimentCoordinator:
 
     async def delete_experiment(self, experiment_id: str) -> None:
         await self.cancel_experiment(experiment_id)
+        # Revoke any pending upload tokens before removing files.
+        await self.db.revoke_upload_tokens_for_experiment(experiment_id)
         experiment_dir = self.storage_root / "outputs" / experiment_id
         if experiment_dir.exists():
             shutil.rmtree(experiment_dir, ignore_errors=True)
@@ -619,6 +987,38 @@ class ExperimentCoordinator:
                         continue
                     from sec_review_framework.data.experiment import ExperimentRun
                     run = ExperimentRun.model_validate_json(run_config_path.read_text())
+                    # For HTTP transport: skip re-dispatch if the token has already been
+                    # consumed (meaning the run completed successfully via upload).
+                    if run.result_transport == "http":
+                        if await self.db.is_upload_token_consumed(run.id):
+                            logger.info(
+                                "Run %s upload token already consumed — skipping re-dispatch",
+                                run.id,
+                            )
+                            continue
+                        # Token not yet issued — this shouldn't happen normally since
+                        # submit_experiment issues tokens, but handle gracefully.
+                        if not await self.db.get_upload_token_issued(run.id):
+                            logger.warning(
+                                "Run %s has no upload token; issuing one for re-dispatch",
+                                run.id,
+                            )
+                            token = await self.db.issue_upload_token(run.id)
+                            upload_url = (
+                                f"{self.coordinator_internal_url}"
+                                f"/api/internal/runs/{run.id}/result"
+                            )
+                            run = run.model_copy(update={
+                                "result_transport": "http",
+                                "upload_url": upload_url,
+                                "upload_token": token,
+                            })
+                            import json as _json
+                            run_dict = run.model_dump(mode="json")
+                            run_dict["upload_token"] = run.upload_token
+                            run_config_path.write_text(
+                                _json.dumps(run_dict, indent=2, default=str)
+                            )
                     try:
                         self._create_k8s_job(experiment_id, run)
                     except Exception as e:
@@ -2123,16 +2523,34 @@ def _compute_trend_summary(points: list[dict]) -> dict:
 async def retention_cleanup_loop(
     storage_root: Path, retention_days: int, interval_s: int = 3600
 ) -> None:
-    """Background task: deletes experiment directories older than retention_days."""
+    """Background task: deletes experiment directories older than retention_days.
+
+    Also scrubs stale .staging-* directories older than 1 hour to recover
+    disk space from aborted HTTP uploads.
+    """
     while True:
         await asyncio.sleep(interval_s)
         cutoff = datetime.now(UTC) - timedelta(days=retention_days)
+        staging_cutoff = datetime.now(UTC) - timedelta(hours=1)
         outputs_dir = storage_root / "outputs"
         if not outputs_dir.exists():
             continue
         for experiment_dir in outputs_dir.iterdir():
             if not experiment_dir.is_dir():
                 continue
+            # Scrub stale staging dirs (HTTP upload aborts)
+            for child in experiment_dir.iterdir():
+                if child.is_dir() and child.name.startswith(".staging-"):
+                    try:
+                        mtime = datetime.fromtimestamp(child.stat().st_mtime, UTC)
+                        if mtime < staging_cutoff:
+                            shutil.rmtree(child, ignore_errors=True)
+                            logger.info(
+                                "Retention cleanup: removed stale staging dir %s", child.name
+                            )
+                    except Exception:
+                        pass
+            # Remove old experiment output directories
             mtime = datetime.fromtimestamp(experiment_dir.stat().st_mtime, UTC)
             if mtime < cutoff:
                 shutil.rmtree(experiment_dir, ignore_errors=True)
@@ -2448,6 +2866,8 @@ def build_coordinator_from_env() -> ExperimentCoordinator:
         worker_image_pull_policy=os.environ.get(
             "WORKER_IMAGE_PULL_POLICY", "IfNotPresent"
         ),
+        result_transport=os.environ.get("WORKER_RESULT_TRANSPORT", "pvc"),
+        coordinator_internal_url=os.environ.get("COORDINATOR_INTERNAL_URL", ""),
     )
 
 
@@ -3082,6 +3502,31 @@ def list_templates() -> list[dict]:
 def list_tool_extensions() -> list[dict]:
     """List available MCP tool extensions with availability status."""
     return coordinator.list_tool_extensions()
+
+
+# ---------------------------------------------------------------------------
+# Internal upload endpoint (Step 4)
+# ---------------------------------------------------------------------------
+
+@app.post("/internal/runs/{run_id}/result", status_code=200)
+async def upload_run_result(run_id: str, request: Request) -> dict:
+    """Receive streamed multipart artifact bundle from a worker pod.
+
+    Served at both /internal/... and /api/internal/... via the /api prefix
+    middleware already present in the app.  Workers authenticate with a
+    per-run bearer token issued at dispatch time.
+    """
+    return await coordinator.handle_run_result_upload(run_id, request)
+
+
+# ---------------------------------------------------------------------------
+# Prometheus metrics endpoint (Step 10)
+# ---------------------------------------------------------------------------
+
+if _PROMETHEUS_AVAILABLE and _make_asgi_app is not None:
+    from starlette.routing import Mount
+    _metrics_app = _make_asgi_app()
+    app.mount("/metrics", _metrics_app)
 
 
 # Static files — mount last so all API routes take priority

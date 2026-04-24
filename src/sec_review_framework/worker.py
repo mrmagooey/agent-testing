@@ -3,6 +3,9 @@
 import argparse
 import json
 import os
+import random
+import sys
+import tempfile
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -314,21 +317,112 @@ class ExperimentWorker:
             completed_at=datetime.now(UTC).replace(tzinfo=None),
         )
 
-        output_dir.mkdir(parents=True, exist_ok=True)
-        _result_file = output_dir / "run_result.json"
-        _result_tmp = _result_file.with_suffix(".json.tmp")
-        _result_tmp.write_text(result.model_dump_json(indent=2))
-        _result_tmp.replace(_result_file)
-        self._write_jsonl(output_dir / "findings.jsonl", findings)
-        tool_audit_entries = tools.audit_log.entries if tools is not None else []
-        self._write_jsonl(output_dir / "tool_calls.jsonl", tool_audit_entries)
-        self._write_jsonl(output_dir / "conversation.jsonl", model.conversation_log)
-        if findings_pre_verification:
-            self._write_jsonl(
-                output_dir / "findings_pre_verification.jsonl",
-                findings_pre_verification,
+        # Always write artifacts first to a pod-local temp dir.
+        local_dir = Path(tempfile.mkdtemp(prefix="worker-out-"))
+        try:
+            _result_file = local_dir / "run_result.json"
+            _result_tmp = _result_file.with_suffix(".json.tmp")
+            _result_tmp.write_text(result.model_dump_json(indent=2))
+            _result_tmp.replace(_result_file)
+            self._write_jsonl(local_dir / "findings.jsonl", findings)
+            tool_audit_entries = tools.audit_log.entries if tools is not None else []
+            self._write_jsonl(local_dir / "tool_calls.jsonl", tool_audit_entries)
+            self._write_jsonl(local_dir / "conversation.jsonl", model.conversation_log)
+            if findings_pre_verification:
+                self._write_jsonl(
+                    local_dir / "findings_pre_verification.jsonl",
+                    findings_pre_verification,
+                )
+            MarkdownReportGenerator().render_run(result, local_dir)
+
+            if run.result_transport == "http":
+                self._upload_artifacts(run, local_dir)
+            else:
+                # PVC path: copy artifacts from temp dir to output_dir on shared PVC.
+                output_dir.mkdir(parents=True, exist_ok=True)
+                import shutil as _shutil
+                for artifact in local_dir.iterdir():
+                    _shutil.copy2(str(artifact), str(output_dir / artifact.name))
+        finally:
+            import shutil as _shutil2
+            _shutil2.rmtree(local_dir, ignore_errors=True)
+
+    def _upload_artifacts(self, run: ExperimentRun, local_dir: Path) -> None:
+        """Stream-upload artifacts from *local_dir* to the coordinator via HTTP.
+
+        Retry policy: 5 attempts, exponential backoff base 2s with jitter,
+        max 60s per sleep. Retries on connection errors, 5xx, 429.
+        Fast-exit on 403/409 (another replica won or token already consumed).
+        """
+        import httpx
+
+        if not run.upload_url or not run.upload_token:
+            raise RuntimeError(
+                f"Run {run.id} has result_transport='http' but missing upload_url or upload_token"
             )
-        MarkdownReportGenerator().render_run(result, output_dir)
+
+        _ARTIFACT_NAMES = [
+            "run_result.json",
+            "findings.jsonl",
+            "tool_calls.jsonl",
+            "conversation.jsonl",
+            "findings_pre_verification.jsonl",
+            "report.md",
+        ]
+
+        max_attempts = 5
+        base_delay = 2.0
+        max_delay = 60.0
+
+        for attempt in range(max_attempts):
+            try:
+                files = []
+                file_handles = []
+                try:
+                    for name in _ARTIFACT_NAMES:
+                        p = local_dir / name
+                        if p.exists():
+                            fh = open(p, "rb")
+                            file_handles.append(fh)
+                            files.append(("file", (name, fh, "application/octet-stream")))
+
+                    with httpx.Client(timeout=300.0) as client:
+                        resp = client.post(
+                            run.upload_url,
+                            files=files,
+                            headers={"Authorization": f"Bearer {run.upload_token}"},
+                        )
+                finally:
+                    for fh in file_handles:
+                        fh.close()
+
+                if resp.status_code in (403, 409):
+                    # 403: token invalid/consumed — another replica completed this run.
+                    # 409: result already committed — safe to exit 0.
+                    return
+
+                if resp.status_code < 300:
+                    return
+
+                # 5xx or 429: retry
+                if resp.status_code in (429,) or resp.status_code >= 500:
+                    pass  # fall through to retry
+                else:
+                    # Non-retriable client error
+                    raise RuntimeError(
+                        f"Upload failed with status {resp.status_code}: {resp.text}"
+                    )
+
+            except httpx.TransportError:
+                pass  # Connection error — retry
+
+            if attempt < max_attempts - 1:
+                delay = min(base_delay * (2 ** attempt) + random.uniform(0, 1), max_delay)
+                time.sleep(delay)
+            else:
+                raise RuntimeError(
+                    f"Upload for run {run.id} failed after {max_attempts} attempts"
+                )
 
     def _write_jsonl(self, path: Path, items: list) -> None:
         with open(path, "w") as f:
@@ -349,7 +443,12 @@ def main() -> None:
 
     run = ExperimentRun.model_validate_json(Path(args.run_config).read_text())
     worker = ExperimentWorker()
-    worker.run(run, Path(args.output_dir), Path(args.datasets_dir))
+    try:
+        worker.run(run, Path(args.output_dir), Path(args.datasets_dir))
+    except RuntimeError as exc:
+        # Terminal upload failure — exit non-zero so K8s Job backoffLimit can retry.
+        print(f"Worker failed: {exc}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

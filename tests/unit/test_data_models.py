@@ -429,3 +429,91 @@ def test_allow_unavailable_models_excluded_from_model_dump():
     matrix, _ = _minimal_matrix(allow_unavailable_models=True)
     dumped = matrix.model_dump()
     assert "allow_unavailable_models" not in dumped
+
+
+# ---------------------------------------------------------------------------
+# HTTP result transport fields on ExperimentRun
+# ---------------------------------------------------------------------------
+
+
+def _make_run(**kwargs) -> ExperimentRun:
+    """Build a minimal ExperimentRun with optional overrides."""
+    defaults = dict(
+        id="run-1",
+        experiment_id="exp-1",
+        strategy_id="builtin.single_agent",
+        dataset_name="ds",
+        dataset_version="1.0",
+    )
+    defaults.update(kwargs)
+    return ExperimentRun(**defaults)
+
+
+def test_experiment_run_default_transport_is_pvc():
+    """ExperimentRun defaults to result_transport='pvc' (preserves old behaviour)."""
+    run = _make_run()
+    assert run.result_transport == "pvc"
+
+
+def test_experiment_run_http_transport_fields():
+    """result_transport, upload_url, upload_token can be set."""
+    run = _make_run(
+        result_transport="http",
+        upload_url="http://coordinator/api/internal/runs/run-1/result",
+        upload_token="my-secret-token",
+    )
+    assert run.result_transport == "http"
+    assert run.upload_url == "http://coordinator/api/internal/runs/run-1/result"
+    assert run.upload_token == "my-secret-token"
+
+
+def test_upload_token_excluded_from_model_dump_json():
+    """upload_token must not appear in model_dump_json() — never persisted to DB."""
+    run = _make_run(
+        result_transport="http",
+        upload_url="http://coordinator/api/internal/runs/run-1/result",
+        upload_token="super-secret",
+    )
+    dumped = json.loads(run.model_dump_json())
+    assert "upload_token" not in dumped
+    # upload_url and result_transport ARE included
+    assert dumped["upload_url"] == "http://coordinator/api/internal/runs/run-1/result"
+    assert dumped["result_transport"] == "http"
+
+
+def test_upload_token_excluded_from_model_dump_dict():
+    """upload_token must not appear in model_dump() (dict form) either."""
+    run = _make_run(
+        result_transport="http",
+        upload_url="http://coordinator/api/internal/runs/run-1/result",
+        upload_token="super-secret",
+    )
+    dumped = run.model_dump()
+    assert "upload_token" not in dumped
+
+
+def test_upload_token_readable_as_attribute():
+    """upload_token is excluded from serialisation but readable as an attribute."""
+    run = _make_run(upload_token="readable")
+    assert run.upload_token == "readable"
+
+
+def test_experiment_run_roundtrip_without_token():
+    """An ExperimentRun with upload_token can be round-tripped via JSON safely.
+
+    The on-disk JSON (from model_dump with manual token injection) should
+    deserialise correctly and preserve upload_token when present.
+    """
+    run = _make_run(
+        result_transport="http",
+        upload_url="http://coordinator/api/internal/runs/run-1/result",
+        upload_token="tok123",
+    )
+    # Simulate what submit_experiment writes to disk (manually includes token)
+    run_dict = run.model_dump(mode="json")
+    run_dict["upload_token"] = run.upload_token
+    import json as _json
+    restored = ExperimentRun.model_validate(_json.loads(_json.dumps(run_dict, default=str)))
+    assert restored.result_transport == "http"
+    assert restored.upload_url == run.upload_url
+    assert restored.upload_token == "tok123"
