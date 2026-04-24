@@ -8,8 +8,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from sec_review_framework.data.experiment import (
+    BundleSnapshot,
     ExperimentRun,
-    PromptSnapshot,
     RunResult,
     RunStatus,
     StrategyName,
@@ -120,11 +120,10 @@ class ExperimentWorker:
             run.model_id, total_input, total_output
         )
 
-        prompt_snapshot = PromptSnapshot.capture(
-            system_prompt=strategy_output.system_prompt or "",
-            user_message_template=strategy_output.user_message or "",
-            finding_output_format="",
-        )
+        from sec_review_framework.strategies.strategy_registry import load_default_registry
+        _registry = load_default_registry()
+        _strategy = _registry.get(run.strategy_id)
+        bundle_snapshot = BundleSnapshot.capture(_strategy)
 
         result = RunResult(
             experiment=run,
@@ -134,7 +133,7 @@ class ExperimentWorker:
             verification_result=verification_result,
             evaluation=evaluation,
             strategy_output=strategy_output,
-            prompt_snapshot=prompt_snapshot,
+            bundle_snapshot=bundle_snapshot,
             tool_call_count=len(tools.audit_log.entries),
             total_input_tokens=total_input,
             total_output_tokens=total_output,

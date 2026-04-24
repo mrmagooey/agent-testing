@@ -30,7 +30,7 @@ from sec_review_framework.data.findings import (
     VulnClass,
     StrategyOutput,
 )
-from sec_review_framework.data.experiment import PromptSnapshot
+from sec_review_framework.data.experiment import BundleSnapshot as PromptSnapshot
 
 
 def _make_run_result(
@@ -41,9 +41,12 @@ def _make_run_result(
     dataset_name: str = "ds-test",
     num_findings: int = 2,
 ) -> RunResult:
+    from tests.helpers import make_test_bundle_snapshot
+
     run = ExperimentRun(
         id=run_id,
         experiment_id=experiment_id,
+        strategy_id="builtin.single_agent",
         model_id=model_id,
         strategy=StrategyName(strategy),
         tool_variant=ToolVariant.WITH_TOOLS,
@@ -79,11 +82,7 @@ def _make_run_result(
             post_dedup_count=num_findings,
             dedup_log=[],
         ),
-        prompt_snapshot=PromptSnapshot.capture(
-            system_prompt="sys",
-            user_message_template="user",
-            finding_output_format="fmt",
-        ),
+        bundle_snapshot=make_test_bundle_snapshot(),
         tool_call_count=0,
         total_input_tokens=100,
         total_output_tokens=50,

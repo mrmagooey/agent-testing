@@ -18,8 +18,8 @@ import pytest
 from sec_review_framework.coordinator import ExperimentCoordinator
 from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
 from sec_review_framework.data.experiment import (
+    BundleSnapshot,
     ExperimentRun,
-    PromptSnapshot,
     ReviewProfileName,
     RunResult,
     RunStatus,
@@ -63,10 +63,11 @@ def _make_coordinator(tmp_path: Path, db: Database) -> ExperimentCoordinator:
 
 
 def _make_run(experiment_id: str = EXPERIMENT_ID, run_id: str | None = None) -> ExperimentRun:
-    rid = run_id or f"{experiment_id}_{MODEL_ID}_single_agent_with_tools_default_none"
+    rid = run_id or f"{experiment_id}_builtin.single_agent"
     return ExperimentRun(
         id=rid,
         experiment_id=experiment_id,
+        strategy_id="builtin.single_agent",
         model_id=MODEL_ID,
         strategy=StrategyName.SINGLE_AGENT,
         tool_variant=ToolVariant.WITH_TOOLS,
@@ -79,6 +80,8 @@ def _make_run(experiment_id: str = EXPERIMENT_ID, run_id: str | None = None) -> 
 
 
 def _make_run_result(run: ExperimentRun, status: RunStatus = RunStatus.COMPLETED) -> RunResult:
+    from tests.helpers import make_test_bundle_snapshot
+
     strategy_output = StrategyOutput(
         findings=[],
         pre_dedup_count=0,
@@ -90,11 +93,7 @@ def _make_run_result(run: ExperimentRun, status: RunStatus = RunStatus.COMPLETED
         status=status,
         findings=[],
         strategy_output=strategy_output,
-        prompt_snapshot=PromptSnapshot.capture(
-            system_prompt="sys",
-            user_message_template="user",
-            finding_output_format="json",
-        ),
+        bundle_snapshot=make_test_bundle_snapshot(),
         tool_call_count=0,
         total_input_tokens=100,
         total_output_tokens=50,
