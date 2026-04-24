@@ -360,3 +360,52 @@ def test_fernet_imported_eagerly_in_lifespan():
             os.environ["LLM_PROVIDER_ENCRYPTION_KEY"] = backup
         if mod_name in sys.modules:
             del sys.modules[mod_name]
+
+
+async def test_probe_failure_logs_scrubbed_error_only(caplog):
+    """Probe error logging must not leak API keys to the log aggregation system.
+
+    When a custom provider probe fails with an exception containing an API key,
+    the raw exception message must never be logged. Only the scrubbed version
+    should appear in log output.
+    """
+    import logging
+    import asyncio
+    import unittest.mock as mock
+    from sec_review_framework.llm_providers import _probe_custom_provider
+
+    # Set up caplog to capture WARNING level
+    caplog.set_level(logging.WARNING)
+
+    # Create a mock row with a probe that fails with an API key in the exception
+    row = {
+        "name": "test-provider",
+        "adapter": "openai_compat",
+        "api_base": "https://api.example.com",
+        "model_id": "gpt-4",
+        "auth_type": "api_key",
+        "api_key_ciphertext": None,
+    }
+
+    # Mock litellm.completion to raise an exception with an API key
+    # Patch at the module level where it's imported
+    with mock.patch("litellm.completion") as mock_completion:
+        mock_completion.side_effect = ValueError(
+            "AuthenticationError: Invalid key sk-abc123verylongkey for model gpt-4"
+        )
+        result = await _probe_custom_provider(row)
+
+    # Verify the DB result has scrubbed error
+    assert result["last_probe_status"] == "failed"
+    assert result["last_probe_error"] is not None
+    assert "abc123verylongkey" not in result["last_probe_error"]
+    assert "[REDACTED]" in result["last_probe_error"]
+
+    # Verify the raw API key never appears in any log record
+    for record in caplog.records:
+        assert "abc123verylongkey" not in record.getMessage(), \
+            f"API key leaked in log: {record.getMessage()}"
+
+    # Verify that a warning was logged
+    assert len(caplog.records) > 0
+    assert any(r.levelname == "WARNING" for r in caplog.records)

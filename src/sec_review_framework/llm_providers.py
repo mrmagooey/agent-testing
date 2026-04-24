@@ -364,12 +364,13 @@ async def _probe_custom_provider(row: dict) -> dict:
         }
     except Exception as exc:
         full_err = str(exc)
-        logger.warning(
-            "Custom provider probe failed for %s: %s",
-            row.get("name"),
-            full_err,
-        )
         scrubbed_err = _scrub_error(full_err)
+        logger.warning(
+            "Custom provider probe failed for %s (%s): %s",
+            row.get("name"),
+            type(exc).__name__,
+            scrubbed_err,
+        )
         return {
             "last_probe_at": now_iso,
             "last_probe_status": "failed",
