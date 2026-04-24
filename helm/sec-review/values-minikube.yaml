@@ -62,6 +62,10 @@ workerTools:
 # Use PVC transport for local dev: simpler setup, no network hop needed.
 workerResultTransport: "pvc"
 
+# Enable bundle import in local dev environments.
+coordinator:
+  importEnabled: "true"
+
 # Example: point the local_llm probe at a LAN inference endpoint.
 # providerEndpoints:
 #   localLlm:

@@ -15,6 +15,11 @@ from pathlib import Path
 RECONCILE_INTERVAL_S = int(os.environ.get("RECONCILE_INTERVAL_S", "5"))
 RUN_STALL_TIMEOUT_S = int(os.environ.get("RUN_STALL_TIMEOUT_S", "300"))
 
+# Import endpoint gate.  Default ON (empty string / unset → enabled).
+# Set IMPORT_ENABLED=false to disable in production.
+_IMPORT_ENABLED_RAW = os.environ.get("IMPORT_ENABLED", "true").strip().lower()
+IMPORT_ENABLED: bool = _IMPORT_ENABLED_RAW not in ("false", "0", "no", "off")
+
 # Resolve the frontend dist directory once at import time.
 # Allow override via FRONTEND_DIST_DIR for non-standard layouts / tests.
 # When the package is installed via pip the module lands in site-packages, so
@@ -38,7 +43,7 @@ def _resolve_frontend_dist() -> Path:
 
 FRONTEND_DIST_DIR = _resolve_frontend_dist()
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError
@@ -2243,6 +2248,124 @@ class ExperimentCoordinator:
                     zf.write(f, f.relative_to(output_dir))
         return zip_path
 
+    # ------------------------------------------------------------------
+    # Bundle export / import
+    # ------------------------------------------------------------------
+
+    async def export_experiment_bundle(
+        self,
+        experiment_id: str,
+        *,
+        include_datasets: bool = False,
+    ) -> Path:
+        """Build a .secrev.zip bundle and return its path.
+
+        Delegates to ``bundle.async_write_bundle``.  The zip is written to
+        ``storage_root/outputs/<id>/<id>.secrev.zip``.
+        """
+        from sec_review_framework.bundle import async_write_bundle
+
+        output_dir = self.storage_root / "outputs" / experiment_id
+        output_dir.mkdir(parents=True, exist_ok=True)
+        out_path = output_dir / f"{experiment_id}.secrev.zip"
+
+        return await async_write_bundle(
+            self.db,
+            self.storage_root,
+            experiment_id,
+            include_datasets=include_datasets,
+            out_path=out_path,
+        )
+
+    async def import_experiment_bundle(
+        self,
+        upload: "UploadFile",
+        conflict_policy: str = "reject",
+        rebuild_findings_index: bool = True,
+    ) -> dict:
+        """Stream *upload* to a temp file, then apply the bundle.
+
+        After DB insert, re-indexes findings for all imported runs (same
+        as ``scripts/backfill_findings_index.py``).
+        """
+        import tempfile as _tempfile
+        from sec_review_framework.bundle import async_apply_bundle, BundleConflictError
+        from sec_review_framework.data.experiment import RunResult
+
+        tmp_dir = self.storage_root / "tmp"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+
+        # Stream upload to a temp file on storage_root so large bundles
+        # don't live in memory.
+        with _tempfile.NamedTemporaryFile(
+            dir=tmp_dir, suffix=".secrev.zip.tmp", delete=False
+        ) as tmp_f:
+            tmp_path = Path(tmp_f.name)
+            try:
+                while True:
+                    chunk = await upload.read(64 * 1024)
+                    if not chunk:
+                        break
+                    tmp_f.write(chunk)
+            except Exception:
+                tmp_path.unlink(missing_ok=True)
+                raise
+
+        try:
+            try:
+                summary = await async_apply_bundle(
+                    self.db,
+                    self.storage_root,
+                    tmp_path,
+                    conflict_policy=conflict_policy,
+                )
+            except BundleConflictError as exc:
+                raise HTTPException(status_code=409, detail=str(exc))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+
+            # Re-index findings if requested
+            findings_indexed = 0
+            if rebuild_findings_index:
+                target_exp_id = summary["experiment_id"]
+                exp_outputs = self.storage_root / "outputs" / target_exp_id
+                if exp_outputs.exists():
+                    for run_dir in exp_outputs.iterdir():
+                        if not run_dir.is_dir():
+                            continue
+                        result_file = run_dir / "run_result.json"
+                        if not result_file.exists():
+                            continue
+                        try:
+                            result = RunResult.model_validate_json(
+                                result_file.read_text()
+                            )
+                            if result.findings:
+                                await self.db.upsert_findings_for_run(
+                                    run_id=result.experiment.id,
+                                    experiment_id=target_exp_id,
+                                    findings=[
+                                        f.model_dump(mode="json")
+                                        for f in result.findings
+                                    ],
+                                    model_id=result.experiment.model_id,
+                                    strategy=result.experiment.strategy.value,
+                                    dataset_name=result.experiment.dataset_name,
+                                )
+                                findings_indexed += 1
+                        except Exception as exc:
+                            logger.warning(
+                                "import: could not index findings for run in %s: %s",
+                                run_dir,
+                                exc,
+                            )
+
+            summary["findings_indexed"] = findings_indexed
+            return summary
+
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
     def effective_registry(self) -> list["ModelProviderConfig"]:  # type: ignore[name-defined]
         """Return the probe-driven model registry.
 
@@ -2537,6 +2660,15 @@ async def retention_cleanup_loop(
             continue
         for experiment_dir in outputs_dir.iterdir():
             if not experiment_dir.is_dir():
+                continue
+            # Skip experiment directories that contain a .secrev.zip bundle —
+            # the bundle is a deliberate export artifact and must survive retention.
+            bundle_present = any(
+                f.suffix == ".secrev.zip"
+                for f in experiment_dir.iterdir()
+                if f.is_file()
+            )
+            if bundle_present:
                 continue
             # Scrub stale staging dirs (HTTP upload aborts)
             for child in experiment_dir.iterdir():
@@ -3031,6 +3163,61 @@ async def download_reports(experiment_id: str) -> FileResponse:
     zip_path = coordinator.package_reports(experiment_id)
     return FileResponse(
         zip_path, media_type="application/zip", filename=f"{experiment_id}_reports.zip"
+    )
+
+
+@app.get("/experiments/{experiment_id}/export")
+async def export_experiment_bundle(
+    experiment_id: str,
+    include_datasets: bool = False,
+) -> FileResponse:
+    """Export a portable .secrev.zip bundle for the given experiment.
+
+    The bundle includes DB rows, all run artifacts, and optionally
+    dataset repos/labels when ``include_datasets=true``.
+    """
+    try:
+        zip_path = await coordinator.export_experiment_bundle(
+            experiment_id, include_datasets=include_datasets
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return FileResponse(
+        str(zip_path),
+        media_type="application/zip",
+        filename=f"{experiment_id}.secrev.zip",
+    )
+
+
+@app.post("/experiments/import")
+async def import_experiment_bundle(
+    file: UploadFile,
+    conflict_policy: str = Form(default="reject"),
+    rebuild_findings_index: bool = Form(default=True),
+) -> dict:
+    """Import a .secrev.zip bundle.
+
+    Accepts multipart/form-data with:
+      - ``file``                  — the .secrev.zip bundle
+      - ``conflict_policy``       — reject (default) | rename | merge
+      - ``rebuild_findings_index`` — true (default) | false
+
+    Returns:
+      {experiment_id, renamed_from, runs_imported, runs_skipped,
+       datasets_missing, warnings, findings_indexed}
+
+    Gated by the ``IMPORT_ENABLED`` env var (default: true).
+    """
+    if not IMPORT_ENABLED:
+        raise HTTPException(
+            status_code=403,
+            detail="Bundle import is disabled on this deployment. "
+            "Set IMPORT_ENABLED=true to enable.",
+        )
+    return await coordinator.import_experiment_bundle(
+        file,
+        conflict_policy=conflict_policy,
+        rebuild_findings_index=rebuild_findings_index,
     )
 
 
