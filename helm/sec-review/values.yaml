@@ -65,6 +65,10 @@ coordinator:
   # Must point at the mount path of the shared PVC.
   storageRoot: /data
 
+  # Bundle import endpoint gate.  Default false in production — enable explicitly
+  # in dev/minikube overrides.  Set to "true" to allow POST /experiments/import.
+  importEnabled: "false"
+
   # Name of the ConfigMap containing config/*.yaml; rendered into /app/config
   configMapName: experiment-config
 

@@ -184,6 +184,71 @@ class Database:
             )
             await db.commit()
 
+    async def import_experiment_rows(
+        self,
+        experiment_row: dict | None,
+        run_rows: list[dict],
+    ) -> None:
+        """Insert imported experiment and run rows in a single transaction.
+
+        Preserves ``created_at``, ``completed_at``, and ``tool_extensions``
+        verbatim from the source bundle.  Pass ``experiment_row=None`` for the
+        ``merge`` conflict policy (experiment already exists; only runs inserted).
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            if experiment_row is not None:
+                await db.execute(
+                    """
+                    INSERT INTO experiments (
+                        id, config_json, status, total_runs, max_cost_usd,
+                        spent_usd, created_at, completed_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        experiment_row.get("id"),
+                        experiment_row.get("config_json"),
+                        experiment_row.get("status", "completed"),
+                        experiment_row.get("total_runs"),
+                        experiment_row.get("max_cost_usd"),
+                        experiment_row.get("spent_usd", 0.0),
+                        experiment_row.get("created_at"),
+                        experiment_row.get("completed_at"),
+                    ),
+                )
+
+            for run in run_rows:
+                await db.execute(
+                    """
+                    INSERT INTO runs (
+                        id, experiment_id, config_json, status, model_id,
+                        strategy, tool_variant, review_profile,
+                        verification_variant, estimated_cost_usd,
+                        duration_seconds, result_path, error,
+                        created_at, completed_at, tool_extensions
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        run.get("id"),
+                        run.get("experiment_id"),
+                        run.get("config_json"),
+                        run.get("status", "completed"),
+                        run.get("model_id"),
+                        run.get("strategy"),
+                        run.get("tool_variant"),
+                        run.get("review_profile"),
+                        run.get("verification_variant"),
+                        run.get("estimated_cost_usd"),
+                        run.get("duration_seconds"),
+                        run.get("result_path"),
+                        run.get("error"),
+                        run.get("created_at"),
+                        run.get("completed_at"),
+                        run.get("tool_extensions", ""),
+                    ),
+                )
+
+            await db.commit()
+
     async def get_experiment(self, experiment_id: str) -> dict | None:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row

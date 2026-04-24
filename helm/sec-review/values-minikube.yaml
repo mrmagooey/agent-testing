@@ -59,6 +59,10 @@ workerTools:
   devdocs:
     enabled: false
 
+# Enable bundle import in local dev environments.
+coordinator:
+  importEnabled: "true"
+
 # Example: point the local_llm probe at a LAN inference endpoint.
 # providerEndpoints:
 #   localLlm:
