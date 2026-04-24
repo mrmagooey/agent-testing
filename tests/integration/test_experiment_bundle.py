@@ -101,10 +101,12 @@ def _make_finding(idx: int, exp_id: str, run_id: str = "") -> dict:
 def _make_run_result_json(run_id: str, exp_id: str, findings_count: int = 4) -> str:
     """Produce a minimal JSON run_result.json string."""
     findings = [_make_finding(i, exp_id, run_id) for i in range(findings_count)]
+    strategy_id = "single_agent_default"
     data = {
         "experiment": {
             "id": run_id,
             "experiment_id": exp_id,
+            "strategy_id": strategy_id,
             "model_id": "gpt-4o",
             "strategy": "single_agent",
             "tool_variant": "with_tools",
@@ -126,12 +128,11 @@ def _make_run_result_json(run_id: str, exp_id: str, findings_count: int = 4) -> 
             "post_dedup_count": findings_count,
             "dedup_log": [],
         },
-        "prompt_snapshot": {
-            "snapshot_id": "abc123",
+        "bundle_snapshot": {
+            "snapshot_id": "abc123def456789a",
+            "strategy_id": strategy_id,
             "captured_at": "2026-01-01T00:00:00",
-            "system_prompt": "You are a reviewer.",
-            "user_message_template": "Review this.",
-            "finding_output_format": "JSON",
+            "bundle_json": "{}",
         },
         "tool_call_count": 5,
         "total_input_tokens": 1000,
