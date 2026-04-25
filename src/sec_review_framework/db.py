@@ -6,6 +6,7 @@ import hmac
 import json
 import re
 import secrets
+import uuid
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -249,6 +250,60 @@ class Database:
                 INSERT OR IGNORE INTO app_settings (id, allow_unavailable_models, evidence_assessor, evidence_judge_model)
                 VALUES (1, 0, 'heuristic', NULL)
             """)
+
+            # ---------------------------------------------------------------------------
+            # Datasets + dataset labels
+            # ---------------------------------------------------------------------------
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS datasets (
+                    name             TEXT PRIMARY KEY,
+                    kind             TEXT NOT NULL CHECK (kind IN ('git', 'derived')),
+                    origin_url       TEXT,
+                    origin_commit    TEXT,
+                    origin_ref       TEXT,
+                    cve_id           TEXT,
+                    base_dataset     TEXT REFERENCES datasets(name),
+                    recipe_json      TEXT,
+                    metadata_json    TEXT NOT NULL DEFAULT '{}',
+                    created_at       TEXT NOT NULL,
+                    materialized_at  TEXT,
+                    CHECK (
+                        (kind = 'git'     AND origin_url IS NOT NULL AND origin_commit IS NOT NULL)
+                     OR (kind = 'derived' AND base_dataset IS NOT NULL AND recipe_json IS NOT NULL)
+                    )
+                )
+            """)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS dataset_labels (
+                    id                   TEXT PRIMARY KEY,
+                    dataset_name         TEXT NOT NULL REFERENCES datasets(name) ON DELETE CASCADE,
+                    dataset_version      TEXT NOT NULL,
+                    file_path            TEXT NOT NULL,
+                    line_start           INTEGER NOT NULL,
+                    line_end             INTEGER NOT NULL,
+                    cwe_id               TEXT NOT NULL,
+                    vuln_class           TEXT NOT NULL,
+                    severity             TEXT NOT NULL,
+                    description          TEXT NOT NULL,
+                    source               TEXT NOT NULL CHECK (source IN ('cve_patch','injected','manual')),
+                    source_ref           TEXT,
+                    confidence           TEXT NOT NULL,
+                    created_at           TEXT NOT NULL,
+                    notes                TEXT,
+                    introduced_in_diff   INTEGER,
+                    patch_lines_changed  INTEGER
+                )
+            """)
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_dataset_labels_dataset "
+                "ON dataset_labels(dataset_name, dataset_version)"
+            )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_dataset_labels_cwe "
+                "ON dataset_labels(cwe_id)"
+            )
+            # Enable foreign key enforcement for cascade deletes on dataset_labels
+            await db.execute("PRAGMA foreign_keys = ON")
 
             await db.commit()
 
@@ -1058,6 +1113,258 @@ class Database:
                 deleted = cursor.rowcount
             await db.commit()
             return deleted
+
+    # ---------------------------------------------------------------------------
+    # Datasets
+    # ---------------------------------------------------------------------------
+
+    async def create_dataset(self, row: dict) -> None:
+        """Insert a new dataset row. Raises sqlite3.IntegrityError on duplicate name
+        or CHECK violation. Caller must supply: name, kind, created_at, plus
+        kind-appropriate fields (origin_url+origin_commit for 'git'; base_dataset+
+        recipe_json for 'derived'). metadata_json defaults to '{}' if absent."""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("PRAGMA foreign_keys = ON")
+            await db.execute(
+                """
+                INSERT INTO datasets (
+                    name, kind, origin_url, origin_commit, origin_ref,
+                    cve_id, base_dataset, recipe_json, metadata_json,
+                    created_at, materialized_at
+                ) VALUES (
+                    :name, :kind, :origin_url, :origin_commit, :origin_ref,
+                    :cve_id, :base_dataset, :recipe_json, :metadata_json,
+                    :created_at, :materialized_at
+                )
+                """,
+                {
+                    "name": row["name"],
+                    "kind": row["kind"],
+                    "origin_url": row.get("origin_url"),
+                    "origin_commit": row.get("origin_commit"),
+                    "origin_ref": row.get("origin_ref"),
+                    "cve_id": row.get("cve_id"),
+                    "base_dataset": row.get("base_dataset"),
+                    "recipe_json": row.get("recipe_json"),
+                    "metadata_json": row.get("metadata_json", "{}"),
+                    "created_at": row["created_at"],
+                    "materialized_at": row.get("materialized_at"),
+                },
+            )
+            await db.commit()
+
+    async def get_dataset(self, name: str) -> dict | None:
+        """Return the row as a dict (None if missing). Keys mirror columns."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM datasets WHERE name = ?", (name,)
+            ) as cursor:
+                row = await cursor.fetchone()
+                return dict(row) if row else None
+
+    async def list_datasets(self) -> list[dict]:
+        """All rows, ordered by created_at desc."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM datasets ORDER BY created_at DESC"
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
+
+    async def update_dataset_materialized_at(self, name: str, ts: str) -> None:
+        """Set materialized_at = ts for the named dataset. No-op if missing."""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE datasets SET materialized_at = ? WHERE name = ?",
+                (ts, name),
+            )
+            await db.commit()
+
+    async def import_datasets(
+        self, rows: list[dict], *, conflict_policy: str
+    ) -> list[str]:
+        """Insert N dataset rows in one transaction. conflict_policy in
+        {"reject","rename","merge"}:
+          - reject: raise on any name collision (no rows inserted)
+          - rename: append "_imported_<8-char-uuid>" suffix on collisions; rewrite
+            any base_dataset references in the same batch that pointed at a
+            renamed name. Returns the final names in input order.
+          - merge: skip rows whose name already exists; insert the rest. Returns
+            the final names (existing-name preserved for skipped rows) in input
+            order.
+        Returns the list of final names so the caller can rewrite references."""
+        if conflict_policy not in ("reject", "rename", "merge"):
+            raise ValueError(
+                f"import_datasets: invalid conflict_policy {conflict_policy!r}. "
+                "Must be one of: reject, rename, merge"
+            )
+
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("PRAGMA foreign_keys = ON")
+
+            # Fetch all existing dataset names for collision detection.
+            async with db.execute("SELECT name FROM datasets") as cursor:
+                existing_names: set[str] = {r[0] for r in await cursor.fetchall()}
+
+            # Build a mapping from original names → final names for the batch.
+            # We also track names used within the batch itself to catch intra-batch dups.
+            original_to_final: dict[str, str] = {}
+            names_used_in_batch: set[str] = set()
+
+            for r in rows:
+                orig = r["name"]
+                if orig in existing_names or orig in names_used_in_batch:
+                    if conflict_policy == "reject":
+                        raise Exception(
+                            f"import_datasets(reject): dataset {orig!r} already exists"
+                        )
+                    elif conflict_policy == "rename":
+                        suffix = uuid.uuid4().hex[:8]
+                        new_name = f"{orig}_imported_{suffix}"
+                        # Ensure the new name is also not taken.
+                        while new_name in existing_names or new_name in names_used_in_batch:
+                            suffix = uuid.uuid4().hex[:8]
+                            new_name = f"{orig}_imported_{suffix}"
+                        original_to_final[orig] = new_name
+                        names_used_in_batch.add(new_name)
+                    else:
+                        # merge: keep original name; row will be skipped
+                        original_to_final[orig] = orig
+                        names_used_in_batch.add(orig)
+                else:
+                    original_to_final[orig] = orig
+                    names_used_in_batch.add(orig)
+
+            for r in rows:
+                orig = r["name"]
+                final_name = original_to_final[orig]
+                is_collision = orig in existing_names or (
+                    orig in names_used_in_batch and final_name != orig
+                )
+
+                if conflict_policy == "merge" and orig in existing_names:
+                    # Skip rows that already exist.
+                    continue
+
+                # Rewrite base_dataset if it referred to a renamed original name.
+                base_dataset = r.get("base_dataset")
+                if base_dataset is not None and base_dataset in original_to_final:
+                    base_dataset = original_to_final[base_dataset]
+
+                await db.execute(
+                    """
+                    INSERT INTO datasets (
+                        name, kind, origin_url, origin_commit, origin_ref,
+                        cve_id, base_dataset, recipe_json, metadata_json,
+                        created_at, materialized_at
+                    ) VALUES (
+                        :name, :kind, :origin_url, :origin_commit, :origin_ref,
+                        :cve_id, :base_dataset, :recipe_json, :metadata_json,
+                        :created_at, :materialized_at
+                    )
+                    """,
+                    {
+                        "name": final_name,
+                        "kind": r["kind"],
+                        "origin_url": r.get("origin_url"),
+                        "origin_commit": r.get("origin_commit"),
+                        "origin_ref": r.get("origin_ref"),
+                        "cve_id": r.get("cve_id"),
+                        "base_dataset": base_dataset,
+                        "recipe_json": r.get("recipe_json"),
+                        "metadata_json": r.get("metadata_json", "{}"),
+                        "created_at": r["created_at"],
+                        "materialized_at": r.get("materialized_at"),
+                    },
+                )
+
+            await db.commit()
+
+        return [original_to_final[r["name"]] for r in rows]
+
+    # ---------------------------------------------------------------------------
+    # Dataset labels
+    # ---------------------------------------------------------------------------
+
+    async def append_dataset_labels(self, rows: list[dict]) -> None:
+        """INSERT OR IGNORE on PK (id). Single transaction. Idempotent."""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("PRAGMA foreign_keys = ON")
+            for row in rows:
+                await db.execute(
+                    """
+                    INSERT OR IGNORE INTO dataset_labels (
+                        id, dataset_name, dataset_version, file_path,
+                        line_start, line_end, cwe_id, vuln_class, severity,
+                        description, source, source_ref, confidence,
+                        created_at, notes, introduced_in_diff, patch_lines_changed
+                    ) VALUES (
+                        :id, :dataset_name, :dataset_version, :file_path,
+                        :line_start, :line_end, :cwe_id, :vuln_class, :severity,
+                        :description, :source, :source_ref, :confidence,
+                        :created_at, :notes, :introduced_in_diff, :patch_lines_changed
+                    )
+                    """,
+                    {
+                        "id": row["id"],
+                        "dataset_name": row["dataset_name"],
+                        "dataset_version": row["dataset_version"],
+                        "file_path": row["file_path"],
+                        "line_start": row["line_start"],
+                        "line_end": row["line_end"],
+                        "cwe_id": row["cwe_id"],
+                        "vuln_class": row["vuln_class"],
+                        "severity": row["severity"],
+                        "description": row["description"],
+                        "source": row["source"],
+                        "source_ref": row.get("source_ref"),
+                        "confidence": row["confidence"],
+                        "created_at": row["created_at"],
+                        "notes": row.get("notes"),
+                        "introduced_in_diff": row.get("introduced_in_diff"),
+                        "patch_lines_changed": row.get("patch_lines_changed"),
+                    },
+                )
+            await db.commit()
+
+    async def list_dataset_labels(
+        self,
+        name: str,
+        version: str | None = None,
+        cwe: str | None = None,
+        severity: str | None = None,
+        source: str | None = None,
+    ) -> list[dict]:
+        """List labels for a dataset, optionally filtered. Returns dict rows
+        matching column names. Use parameterised SQL — no string interpolation."""
+        where_clauses: list[str] = ["dataset_name = ?"]
+        params: list = [name]
+
+        if version is not None:
+            where_clauses.append("dataset_version = ?")
+            params.append(version)
+        if cwe is not None:
+            where_clauses.append("cwe_id = ?")
+            params.append(cwe)
+        if severity is not None:
+            where_clauses.append("severity = ?")
+            params.append(severity)
+        if source is not None:
+            where_clauses.append("source = ?")
+            params.append(source)
+
+        where_sql = " AND ".join(where_clauses)
+
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                f"SELECT * FROM dataset_labels WHERE {where_sql}",
+                params,
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
 
 
 def _infer_match_status(finding: dict) -> str | None:
