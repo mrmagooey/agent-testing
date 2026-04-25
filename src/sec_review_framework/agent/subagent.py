@@ -314,12 +314,20 @@ def _run_child_sync(
     # Build child deps for recursive subagent dispatch
     child_deps = parent_deps.child_deps()
 
+    # Resolve structured output type (if the strategy declares one)
+    from sec_review_framework.agent.output_types import resolve_output_type
+
+    output_type = resolve_output_type(bundle.output_type_name)
+
     # Build the child agent
-    child_agent: Agent[SubagentDeps, Any] = Agent(
-        model,
-        system_prompt=bundle.system_prompt,
-        tools=tool_callables,
-    )
+    child_agent_kwargs: dict[str, Any] = {
+        "system_prompt": bundle.system_prompt,
+        "tools": tool_callables,
+    }
+    if output_type is not None:
+        child_agent_kwargs["output_type"] = output_type
+
+    child_agent: Agent[SubagentDeps, Any] = Agent(model, **child_agent_kwargs)
 
     # Format the child's user_prompt_template with the input_data dict.
     # Unknown placeholders are left as-is (via a defaultdict-style fallback).
