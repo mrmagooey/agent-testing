@@ -251,7 +251,7 @@ class TestPerFileV2Registry:
     def test_file_reviewer_subagent_registered(self) -> None:
         registry = load_default_registry()
         subagent = registry.get("builtin_v2.file_reviewer")
-        assert subagent.use_new_runner is True
+        assert subagent.use_new_runner is False
         assert subagent.parent_strategy_id == "builtin_v2.per_file"
 
     def test_per_file_v2_has_non_empty_prompts(self) -> None:
@@ -493,8 +493,11 @@ class TestPerFileParityV2:
         """Per-call token cost should be within ±20%.
 
         v2 makes 1 parent call; legacy makes N subagent calls (1 per file).
-        The per-call cost must be within ±20%.  Total cost differs by design
-        (v2 consolidates dispatch, legacy fans out per file).
+        The per-call cost must be within ±20%.  Total-cost parity is out of
+        scope for per_file: the v2 runner pays a supervisor turn cost (1 parent
+        call) plus N subagent calls, while the legacy runner pays N direct calls.
+        We measure per-call drift instead, which is the architecturally meaningful
+        comparison.
         """
         all_findings = [_FINDING_AUTH]
         _, v2_provider = self._run_v2_per_file(all_findings)

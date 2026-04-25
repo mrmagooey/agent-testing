@@ -298,7 +298,7 @@ def seed_builtins(registry: StrategyRegistry) -> None:
             overrides=[],
             created_at=_CREATED_AT,
             is_builtin=True,
-            use_new_runner=True,
+            # subagent — dispatched via _run_child_sync, not worker.py
         )
     )
 
@@ -351,7 +351,7 @@ def seed_builtins(registry: StrategyRegistry) -> None:
             overrides=[],
             created_at=_CREATED_AT,
             is_builtin=True,
-            use_new_runner=True,
+            # subagent — dispatched via _run_child_sync, not worker.py
         )
     )
 

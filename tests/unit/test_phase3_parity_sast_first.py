@@ -223,7 +223,7 @@ class TestSastFirstV2Registry:
     def test_triage_agent_subagent_registered(self) -> None:
         registry = load_default_registry()
         subagent = registry.get("builtin_v2.triage_agent")
-        assert subagent.use_new_runner is True
+        assert subagent.use_new_runner is False
         assert subagent.parent_strategy_id == "builtin_v2.sast_first"
 
     def test_sast_first_v2_has_non_empty_prompts(self) -> None:
