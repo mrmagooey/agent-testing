@@ -94,7 +94,13 @@ class SemgrepTool(Tool):
         if not str(scan_target).startswith(str(self._repo_path.resolve())):
             return f"Error: path escapes repository root: {path_str!r}"
 
-        matches = self._run_semgrep(target=scan_target, config=config)
+        try:
+            matches = self._run_semgrep(target=scan_target, config=config)
+        except SemgrepBinaryNotFoundError:
+            return (
+                "Error: semgrep binary not found on PATH; "
+                "the SAST sidecar is unavailable. Skipping SAST step."
+            )
         if isinstance(matches, str):
             # Error string returned from _run_semgrep.
             return matches
@@ -117,13 +123,18 @@ class SemgrepTool(Tool):
 
         Intended for SASTFirstStrategy, which passes findings to the LLM as
         pre-computed context rather than letting the agent invoke the tool.
+
+        Returns an empty list for non-fatal errors (malformed JSON, non-zero
+        exit code); raises ``SemgrepBinaryNotFoundError`` if the semgrep
+        binary is not on PATH.
         """
         result = self._run_semgrep(
             target=self._repo_path.resolve(),
             config=self._config,
         )
         if isinstance(result, str):
-            # Error — return empty list so the strategy can continue gracefully.
+            # Non-fatal error (bad exit code, malformed JSON) — return empty
+            # list so the strategy can continue gracefully.
             return []
         return result
 

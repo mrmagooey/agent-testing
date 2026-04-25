@@ -11,7 +11,6 @@ import pytest
 
 from sec_review_framework.tools.semgrep import SASTMatch, SemgrepBinaryNotFoundError, SemgrepTool
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -80,14 +79,17 @@ def test_invoke_path_escape_blocked(tmp_path: Path):
     assert "escapes" in result
 
 
-def test_missing_semgrep_binary_raises_domain_error(tmp_path: Path):
-    """When the semgrep binary is absent, SemgrepBinaryNotFoundError is raised."""
+def test_invoke_returns_error_string_when_binary_missing(tmp_path: Path):
+    """invoke() must return an error string (not raise) when the semgrep binary is absent.
+
+    The Tool.invoke() contract requires a str return so the LLM sees a clean
+    tool-result message rather than an unhandled exception aborting the run.
+    """
     tool = SemgrepTool(repo_path=tmp_path)
     with patch("subprocess.run", side_effect=FileNotFoundError):
-        with pytest.raises(SemgrepBinaryNotFoundError) as exc_info:
-            tool.invoke({"path": "."})
-    assert "PATH" in str(exc_info.value)
-    assert "sidecar" in str(exc_info.value)
+        result = tool.invoke({"path": "."})
+    assert isinstance(result, str), "invoke() must return str, not raise"
+    assert "not found" in result.lower() or "unavailable" in result.lower()
 
 
 def test_semgrep_binary_not_found_error_is_runtime_error(tmp_path: Path):
