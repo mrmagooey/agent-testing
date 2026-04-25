@@ -76,6 +76,7 @@ filterwarnings = [
 
 [dependency-groups]
 dev = [
+    "mcp>=1.16.0",
     "pytest-asyncio>=0.25",
     "pytest-cov>=7.1.0",
 ]

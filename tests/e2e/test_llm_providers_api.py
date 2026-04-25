@@ -33,9 +33,16 @@ def _generate_fernet_key() -> str:
 
 _TEST_KEY: str = _generate_fernet_key()
 
+# Saved prior value of LLM_PROVIDER_ENCRYPTION_KEY so teardown can restore it
+# rather than unconditionally popping the variable (which would break later
+# tests that rely on the default key set in conftest.py).
+_prior_encryption_key: str | None = None
+
 
 def _ensure_fernet_env() -> None:
     """Set the encryption env var and reload the fernet module."""
+    global _prior_encryption_key
+    _prior_encryption_key = os.environ.get("LLM_PROVIDER_ENCRYPTION_KEY")
     os.environ["LLM_PROVIDER_ENCRYPTION_KEY"] = _TEST_KEY
     mod_name = "sec_review_framework.secrets.fernet"
     if mod_name in sys.modules:
@@ -43,10 +50,19 @@ def _ensure_fernet_env() -> None:
 
 
 def _clear_fernet_env() -> None:
-    os.environ.pop("LLM_PROVIDER_ENCRYPTION_KEY", None)
+    global _prior_encryption_key
     mod_name = "sec_review_framework.secrets.fernet"
     if mod_name in sys.modules:
         del sys.modules[mod_name]
+    if _prior_encryption_key is None:
+        os.environ.pop("LLM_PROVIDER_ENCRYPTION_KEY", None)
+    else:
+        os.environ["LLM_PROVIDER_ENCRYPTION_KEY"] = _prior_encryption_key
+    _prior_encryption_key = None
+    # Re-import so the module singleton is rebuilt with the restored key,
+    # keeping the state consistent for any subsequent consumer in the same
+    # pytest invocation (mirrors the unit-test fixture pattern).
+    importlib.import_module(mod_name)
 
 
 # ---------------------------------------------------------------------------
@@ -435,41 +451,42 @@ def test_create_provider_display_name_max_allowed(client: TestClient):
 def test_db_persist_across_reinit(tmp_path):
     """Custom provider must survive Database teardown and re-init (suggestion #8)."""
     _ensure_fernet_env()
-    db_path = tmp_path / "persist_test.db"
+    try:
+        db_path = tmp_path / "persist_test.db"
 
-    db1 = Database(db_path)
-    _run_async(db1.init())
+        db1 = Database(db_path)
+        _run_async(db1.init())
 
-    from datetime import UTC, datetime
-    row = {
-        "id": "persist-id-001",
-        "name": "persist-provider",
-        "display_name": "Persist Provider",
-        "adapter": "openai_compat",
-        "model_id": "gpt-4",
-        "api_base": None,
-        "api_key_ciphertext": None,
-        "auth_type": "api_key",
-        "region": None,
-        "enabled": 1,
-        "last_probe_at": None,
-        "last_probe_status": None,
-        "last_probe_error": None,
-        "created_at": datetime.now(UTC).isoformat(),
-        "updated_at": datetime.now(UTC).isoformat(),
-    }
-    _run_async(db1.create_llm_provider(row))
-    # Simulate teardown by letting db1 go out of scope
-    del db1
+        from datetime import UTC, datetime
+        row = {
+            "id": "persist-id-001",
+            "name": "persist-provider",
+            "display_name": "Persist Provider",
+            "adapter": "openai_compat",
+            "model_id": "gpt-4",
+            "api_base": None,
+            "api_key_ciphertext": None,
+            "auth_type": "api_key",
+            "region": None,
+            "enabled": 1,
+            "last_probe_at": None,
+            "last_probe_status": None,
+            "last_probe_error": None,
+            "created_at": datetime.now(UTC).isoformat(),
+            "updated_at": datetime.now(UTC).isoformat(),
+        }
+        _run_async(db1.create_llm_provider(row))
+        # Simulate teardown by letting db1 go out of scope
+        del db1
 
-    # Re-init against same file
-    db2 = Database(db_path)
-    _run_async(db2.init())
-    rows = _run_async(db2.list_llm_providers())
-    names = [r["name"] for r in rows]
-    assert "persist-provider" in names, f"Expected persist-provider in {names}"
-
-    _clear_fernet_env()
+        # Re-init against same file
+        db2 = Database(db_path)
+        _run_async(db2.init())
+        rows = _run_async(db2.list_llm_providers())
+        names = [r["name"] for r in rows]
+        assert "persist-provider" in names, f"Expected persist-provider in {names}"
+    finally:
+        _clear_fernet_env()
 
 
 def test_full_crud_roundtrip(client: TestClient):

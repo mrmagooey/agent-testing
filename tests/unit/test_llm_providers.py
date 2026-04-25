@@ -178,6 +178,8 @@ def test_slug_rejects_leading_dash():
 async def db_with_key(tmp_path: Path):
     """Database initialised with Fernet key set in env."""
     key = _generate_fernet_key()
+    # Preserve whatever value conftest.py installed so we can restore it on teardown.
+    _original_key = os.environ.get("LLM_PROVIDER_ENCRYPTION_KEY")
     os.environ["LLM_PROVIDER_ENCRYPTION_KEY"] = key
 
     from sec_review_framework.db import Database
@@ -185,10 +187,17 @@ async def db_with_key(tmp_path: Path):
     await db.init()
     yield db, key
 
-    os.environ.pop("LLM_PROVIDER_ENCRYPTION_KEY", None)
+    # Restore the environment to the state we found it in.  If conftest set a
+    # test key before this fixture ran, we must put it back; otherwise the next
+    # test that triggers a fernet import will find an empty env and blow up.
     mod_name = "sec_review_framework.secrets.fernet"
     if mod_name in sys.modules:
         del sys.modules[mod_name]
+    if _original_key is not None:
+        os.environ["LLM_PROVIDER_ENCRYPTION_KEY"] = _original_key
+        importlib.import_module(mod_name)  # re-prime the module-level singleton
+    else:
+        os.environ.pop("LLM_PROVIDER_ENCRYPTION_KEY", None)
 
 
 async def test_db_llm_provider_crud(db_with_key):
