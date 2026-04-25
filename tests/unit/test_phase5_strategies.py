@@ -429,7 +429,15 @@ def _scripted_provider(findings: list[dict]) -> ScriptedLiteLLMProvider:
 
 
 class TestSmokeDispatch:
-    """Smoke tests: each Phase 5 parent strategy runs end-to-end without error."""
+    """Smoke tests: each Phase 5 parent strategy runs end-to-end without error.
+
+    Note: the scripted provider returns ``final_result`` on the first call, so
+    subagent dispatch is NOT actually exercised — the parent agent never calls
+    ``invoke_subagent``.  This is intentional for Phase 5's structural-only
+    scope: the tests verify that the strategy objects are correctly wired and
+    that ``run_strategy`` returns a :class:`StrategyOutput` without raising,
+    not that subagent dispatch produces the right outputs.
+    """
 
     def test_single_agent_with_verifier_smoke(self) -> None:
         """single_agent_with_verifier runs end-to-end and returns StrategyOutput."""
@@ -541,12 +549,18 @@ class TestVerifierWrappingSmoke:
         # directly rather than going through the LLM.
         return ScriptedLiteLLMProvider(responses=responses)
 
-    def test_verifier_confirmed_refuted_counts(self) -> None:
-        """When verifier confirms 2 findings and refutes 1, final output has 2 findings.
+    def test_verifier_wrapping_smoke_structural(self) -> None:
+        """Structural smoke test: single_agent_with_verifier runs end-to-end without error.
 
-        This test drives the parent with a scripted provider (returns 3 findings),
-        then intercepts invoke_subagent calls to inject controlled VerifierVerdict
-        responses.
+        This test drives the parent with a scripted provider that returns 3 findings
+        as the final_result on the first call.  The scripted provider does NOT invoke
+        the verifier subagent — subagent dispatch is not exercised here (see the
+        TestSmokeDispatch class docstring for why).
+
+        The assertion is that run_strategy completes and returns a StrategyOutput
+        containing exactly the 3 findings that the scripted provider emitted.
+        Filtering (3 candidates → 2 confirmed) is LLM-driven orchestration that
+        requires a live model and is out of scope for this unit test.
         """
         from sec_review_framework.strategies.runner import run_strategy
 
