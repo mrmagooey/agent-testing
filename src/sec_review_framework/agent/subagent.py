@@ -184,6 +184,58 @@ class SubagentDeps:
 # ---------------------------------------------------------------------------
 
 
+def _resolve_role(role: str, available_roles: set[str]) -> str | None:
+    """Resolve *role* to a fully-namespaced role ID in *available_roles*.
+
+    Accepts either the full namespaced ID (e.g. ``"builtin_v2.sqli_specialist"``)
+    or a bare suffix (e.g. ``"sqli_specialist"``).
+
+    Resolution order
+    ----------------
+    1. Exact match: if *role* is in *available_roles*, return it immediately.
+    2. Suffix match: find all ``r`` in *available_roles* where
+       ``r.endswith("." + role)`` or ``r == role``.  If exactly one match,
+       return it.  If multiple, raise :class:`~pydantic_ai.ModelRetry` with
+       an "Ambiguous role" message.
+    3. No match: return ``None``.
+
+    Parameters
+    ----------
+    role:
+        The role name as passed by the calling LLM (bare or namespaced).
+    available_roles:
+        The full set of available role IDs from
+        :attr:`SubagentDeps.available_roles`.
+
+    Returns
+    -------
+    str | None
+        The resolved (namespaced) role ID, or ``None`` if no match.
+
+    Raises
+    ------
+    ModelRetry
+        If the bare suffix matches more than one entry in *available_roles*.
+    """
+    # 1. Exact match
+    if role in available_roles:
+        return role
+
+    # 2. Suffix match
+    suffix = "." + role
+    matches = [r for r in available_roles if r.endswith(suffix) or r == role]
+
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise ModelRetry(
+            f"Ambiguous role {role!r}: matches multiple available roles: {sorted(matches)}"
+        )
+
+    # 3. No match
+    return None
+
+
 def _check_caps(ctx: RunContext[SubagentDeps], count: int) -> None:
     """Check depth, role, and invocation caps; raise :class:`ModelRetry` on violation.
 
@@ -349,8 +401,9 @@ def make_invoke_subagent_tool(
         """
         deps = ctx.deps
 
-        # Validate role
-        if role not in deps.available_roles:
+        # Resolve role — accepts bare suffix OR full namespaced ID
+        resolved_role = _resolve_role(role, deps.available_roles)
+        if resolved_role is None:
             raise ModelRetry(
                 f"Unknown subagent role {role!r}. "
                 f"Available roles: {sorted(deps.available_roles)}"
@@ -360,10 +413,11 @@ def make_invoke_subagent_tool(
         _check_caps(ctx, count=1)
         deps.invocations += 1
 
-        # Record this call for the dispatch validator in runner.py (Phase 3c)
-        deps.single_call_log.append((role, dict(input)))
+        # Record the *resolved* (namespaced) role so the dispatch validator's
+        # set-difference computation works regardless of how the parent named it.
+        deps.single_call_log.append((resolved_role, dict(input)))
 
-        strategy = deps.subagent_strategies[role]
+        strategy = deps.subagent_strategies[resolved_role]
         return await asyncio.to_thread(_run_child_sync, strategy, input, deps)
 
     return invoke_subagent
@@ -415,8 +469,9 @@ def make_invoke_subagent_batch_tool(
         """
         deps = ctx.deps
 
-        # Validate role
-        if role not in deps.available_roles:
+        # Resolve role — accepts bare suffix OR full namespaced ID
+        resolved_role = _resolve_role(role, deps.available_roles)
+        if resolved_role is None:
             raise ModelRetry(
                 f"Unknown subagent role {role!r}. "
                 f"Available roles: {sorted(deps.available_roles)}"
@@ -432,10 +487,11 @@ def make_invoke_subagent_batch_tool(
         _check_caps(ctx, count=len(inputs))
         deps.invocations += len(inputs)
 
-        # Record this call for the dispatch validator in runner.py
-        deps.batch_call_log.append((role, list(inputs)))
+        # Record the *resolved* (namespaced) role so the dispatch validator's
+        # set-difference computation works regardless of how the parent named it.
+        deps.batch_call_log.append((resolved_role, list(inputs)))
 
-        strategy = deps.subagent_strategies[role]
+        strategy = deps.subagent_strategies[resolved_role]
 
         # Fan-out in a ThreadPoolExecutor, mirroring common.py:267-273
         def _run_one(inp: dict[str, Any]) -> SubagentOutput:
