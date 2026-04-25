@@ -13,7 +13,7 @@ WORKDIR /app
 # System toolchain dependencies
 #
 # Base packages required by:
-#   - semgrep / tree-sitter C extensions (gcc, g++, make)
+#   - tree-sitter C extensions (gcc, g++, make)
 #   - clangd LSP server (clangd)
 #   - pyright + typescript-language-server (nodejs, npm)
 #   - gopls: installed from a pre-compiled release binary (no Go toolchain needed)
@@ -71,12 +71,16 @@ RUN curl -fsSL \
  && rm /tmp/rust-analyzer.gz
 
 # Install framework with worker extras against a stub source tree so this
-# heavy layer (semgrep + tree-sitter deps) is cached unless pyproject.toml changes.
+# heavy layer (tree-sitter deps) is cached unless pyproject.toml changes.
+#
+# NOTE: semgrep is NOT installed by this step.  The semgrep binary must be
+# supplied by a separate SAST runtime sidecar container (or a pre-baked image
+# layer) and made available on PATH before workers start.  This image does NOT
+# include semgrep — wire it externally.
 COPY pyproject.toml .
 RUN mkdir -p src/sec_review_framework \
  && touch src/sec_review_framework/__init__.py \
  && pip install --no-cache-dir ".[worker]" \
- && semgrep --version \
  && rm -rf src
 
 # Pre-download tree-sitter grammars for offline use at runtime.
@@ -99,9 +103,6 @@ except Exception as e:
     # Non-fatal during build — grammars will be downloaded on first worker use.
     print(f"WARNING: grammar pre-download failed: {e}")
 EOF
-
-# Download offline Semgrep rules (no cloud dependency at runtime)
-RUN semgrep --config p/owasp-top-ten --dry-run /dev/null 2>/dev/null || true
 
 # Copy real sources last — changes here only invalidate the fast no-deps reinstall.
 COPY src/ src/

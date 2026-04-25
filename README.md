@@ -70,6 +70,14 @@ uv sync --all-extras
 cd frontend && npm install
 ```
 
+> **Note — semgrep binary:** `uv sync` does **not** install `semgrep`.  The
+> `sast_first` strategy invokes `semgrep` as an external binary via subprocess.
+> If you intend to use the `sast_first` strategy, install the binary separately
+> (e.g. `pip install semgrep` in an isolated environment, or via your OS package
+> manager) and ensure it is on `PATH` before running workers.  In the K8s
+> deployment the binary is provided by the SAST runtime sidecar; see
+> `Dockerfile.worker` for details.
+
 ### Run the offline test suite
 
 ```bash
