@@ -127,6 +127,7 @@ def test_all_7_builtins_present_after_phase3a():
     """After Phase 3a, the registry has the original 5 plus at least the 2 Phase-3a v2 entries.
 
     Phase 3b adds 4 more (per_file, sast_first, file_reviewer, triage_agent).
+    Phase 3c adds 17 more (16 specialists + 1 parent per_vuln_class).
     This test uses subset-check so it does not need updating for each phase.
     """
     registry = load_default_registry()
@@ -141,6 +142,116 @@ def test_all_7_builtins_present_after_phase3a():
     }
     actual_ids = {s.id for s in registry.list_all()}
     assert expected_ids <= actual_ids
+
+
+def test_phase3c_specialists_all_present():
+    """Phase 3c: all 16 specialist subagents plus the parent are registered."""
+    from sec_review_framework.data.findings import VulnClass
+
+    registry = load_default_registry()
+    actual_ids = {s.id for s in registry.list_all()}
+
+    # Parent strategy
+    assert "builtin_v2.per_vuln_class" in actual_ids
+
+    # All 16 specialists
+    for vc in VulnClass:
+        specialist_id = f"builtin_v2.{vc.value}_specialist"
+        assert specialist_id in actual_ids, f"Missing specialist: {specialist_id}"
+
+
+def test_phase3c_specialist_count():
+    """Phase 3c: exactly 16 specialist subagents exist (one per VulnClass)."""
+    from sec_review_framework.data.findings import VulnClass
+
+    registry = load_default_registry()
+    specialist_ids = {
+        s.id for s in registry.list_all()
+        if s.id.startswith("builtin_v2.") and s.id.endswith("_specialist")
+    }
+    assert len(specialist_ids) == len(VulnClass), (
+        f"Expected {len(VulnClass)} specialists, got {len(specialist_ids)}: {sorted(specialist_ids)}"
+    )
+
+
+def test_phase3c_parent_has_16_subagents():
+    """builtin_v2.per_vuln_class must declare exactly 16 subagents."""
+    from sec_review_framework.data.findings import VulnClass
+
+    registry = load_default_registry()
+    parent = registry.get("builtin_v2.per_vuln_class")
+    assert len(parent.default.subagents) == len(VulnClass)
+
+
+def test_phase3c_parent_uses_new_runner():
+    """builtin_v2.per_vuln_class must have use_new_runner=True."""
+    registry = load_default_registry()
+    parent = registry.get("builtin_v2.per_vuln_class")
+    assert parent.use_new_runner is True
+
+
+def test_phase3c_parent_dispatch_fallback_programmatic():
+    """builtin_v2.per_vuln_class must use programmatic dispatch fallback."""
+    registry = load_default_registry()
+    parent = registry.get("builtin_v2.per_vuln_class")
+    assert parent.default.dispatch_fallback == "programmatic"
+
+
+def test_phase3c_specialists_have_correct_parent():
+    """All specialists must reference builtin_v2.per_vuln_class as parent."""
+    from sec_review_framework.data.findings import VulnClass
+
+    registry = load_default_registry()
+    for vc in VulnClass:
+        specialist_id = f"builtin_v2.{vc.value}_specialist"
+        specialist = registry.get(specialist_id)
+        assert specialist.parent_strategy_id == "builtin_v2.per_vuln_class", (
+            f"{specialist_id} has unexpected parent_strategy_id: {specialist.parent_strategy_id}"
+        )
+
+
+def test_phase3c_specialists_have_non_empty_system_prompts():
+    """All specialist subagents must have non-empty system prompts."""
+    from sec_review_framework.data.findings import VulnClass
+
+    registry = load_default_registry()
+    for vc in VulnClass:
+        specialist_id = f"builtin_v2.{vc.value}_specialist"
+        specialist = registry.get(specialist_id)
+        assert specialist.default.system_prompt, (
+            f"{specialist_id} has empty system_prompt"
+        )
+
+
+def test_phase3c_specialists_no_use_new_runner():
+    """Specialist subagents must NOT have use_new_runner=True (they are leaf agents)."""
+    from sec_review_framework.data.findings import VulnClass
+
+    registry = load_default_registry()
+    for vc in VulnClass:
+        specialist_id = f"builtin_v2.{vc.value}_specialist"
+        specialist = registry.get(specialist_id)
+        assert specialist.use_new_runner is False, (
+            f"{specialist_id} should not have use_new_runner=True"
+        )
+
+
+def test_phase3c_total_builtin_count():
+    """Registry must have exactly 5 legacy + 9 builtin_v2 = 22 total builtin entries.
+
+    5 legacy: single_agent, per_file, per_vuln_class, sast_first, diff_review
+    9 builtin_v2 (non-specialist): single_agent, diff_review, per_file,
+        sast_first, file_reviewer, triage_agent, per_vuln_class
+    16 builtin_v2 specialists (one per VulnClass)
+    Total: 5 + 7 + 16 = 28
+    """
+    registry = load_default_registry()
+    all_strategies = registry.list_all()
+    # All seeded strategies are builtin
+    assert len(all_strategies) == 28, (
+        f"Expected 28 builtin entries, got {len(all_strategies)}: "
+        + str(sorted(s.id for s in all_strategies))
+    )
 
 
 def test_all_builtins_have_is_builtin_true():
