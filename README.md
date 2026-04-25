@@ -376,6 +376,7 @@ strategy = UserStrategy(
     default=StrategyBundleDefault(
         system_prompt="You are a security triage coordinator.",
         user_prompt_template="Repository:\n{repo_summary}\n\nTriage, then verify each finding.",
+        profile_modifier="",  # appended to system prompt; usually empty
         model_id="openai/gpt-4o",
         tools=frozenset(["read_file", "grep"]),
         verification="none",

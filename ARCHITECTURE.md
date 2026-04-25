@@ -2663,7 +2663,7 @@ After `agent.run_sync()` completes, `_validate_dispatch()` checks whether all ex
 
 ### 7.5 Built-in Strategies
 
-Nine strategies are seeded by `seed_builtins()` in `strategy_registry.py`. All use `run_strategy` as their execution path.
+Nine top-level strategies are seeded by `seed_builtins()` in `strategy_registry.py` (plus their subagent strategies — see `strategy_registry.py:seed_builtins()` for the full set). All use `run_strategy` as their execution path.
 
 **Original five (reimplemented as parent-subagent strategies):**
 
@@ -2672,7 +2672,7 @@ Nine strategies are seeded by `seed_builtins()` in `strategy_registry.py`. All u
 | `builtin.single_agent` | `SINGLE_AGENT` | none | — |
 | `builtin.diff_review` | `DIFF_REVIEW` | none | — |
 | `builtin.per_file` | `PER_FILE` | `file_reviewer` | `invoke_subagent_batch` over source files |
-| `builtin.sast_first` | `SAST_FIRST` | `file_reviewer` | `invoke_subagent_batch` over SAST-flagged files |
+| `builtin.sast_first` | `SAST_FIRST` | `triage_agent` | `invoke_subagent_batch` over SAST-flagged files |
 | `builtin.per_vuln_class` | `PER_VULN_CLASS` | 16 specialist roles | `invoke_subagent_batch` with `dispatch_fallback="programmatic"` |
 
 **Four new capability strategies (Phase 5):**
@@ -2681,7 +2681,7 @@ Nine strategies are seeded by `seed_builtins()` in `strategy_registry.py`. All u
 |---|---|---|
 | `builtin.single_agent_with_verifier` | `SINGLE_AGENT_WITH_VERIFIER` | Single agent + inline verifier subagent over each candidate finding |
 | `builtin.classifier_dispatch` | `CLASSIFIER_DISPATCH` | Classifier routes files to specialist agents based on language/category |
-| `builtin.taint_pipeline` | `TAINT_PIPELINE` | Multi-stage: source_finder → sink_tracer → sanitization_checker → caller_checker |
+| `builtin.taint_pipeline` | `TAINT_PIPELINE` | Multi-stage: source_finder → sink_tracer → sanitization_checker |
 | `builtin.diff_blast_radius` | `DIFF_BLAST_RADIUS` | Diff review + blast_radius_finder subagent for taint propagation beyond changed lines |
 
 ### 7.6 Structured Outputs for Subagents
@@ -2699,7 +2699,7 @@ When `output_type_name` is set on a `StrategyBundleDefault`, the child `Agent` i
 
 ### 7.7 Deduplication
 
-`strategies/common.py` retains `deduplicate()`, which merges findings with the same `(file_path, vuln_class)` within 5 lines. The runner calls this after collecting all subagent outputs for fan-out strategies:
+`strategies/common.py` retains `deduplicate()`, which merges findings with the same `(file_path, vuln_class)` within 5 lines. Deduplication: `common.py:deduplicate()` is available as a utility but is not called automatically by the runner. Strategies that need post-processing dedup must invoke it themselves (none currently do).
 
 ```python
 def deduplicate(findings: list[Finding]) -> StrategyOutput:
@@ -2708,8 +2708,6 @@ def deduplicate(findings: list[Finding]) -> StrategyOutput:
     Returns StrategyOutput with pre/post counts and a log of what was merged.
     """
 ```
-
-Single-agent and diff-review strategies return `pre_dedup_count == post_dedup_count` with an empty `dedup_log`.
 
 ### 7.8 Semgrep Triage (`sast_first`)
 
@@ -4785,7 +4783,7 @@ HTTP POST /experiments → ExperimentCoordinator
                     → ToolRegistry.invoke(name, input, call_id)
                         → ToolCallAuditLog.record(...)
                 → FindingParser.parse(raw_output)
-                → deduplicate() → StrategyOutput
+                → StrategyOutput
             → [if verification_variant == WITH_VERIFICATION]
                 → Verifier.verify(candidates, target, model, tools)
                     → VerificationResult (verified / rejected / uncertain)
