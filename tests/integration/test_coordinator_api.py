@@ -684,19 +684,55 @@ def test_audit_unknown_tool_with_url_flagged(coordinator_client, tmp_path):
 # Background task lifecycle — must not leak across TestClient lifecycles
 # ---------------------------------------------------------------------------
 
-def test_startup_tracks_retention_task_in_default_env(coordinator_client):
-    """Regression: startup must register retention_cleanup_loop in
-    _background_tasks so the shutdown handler can cancel it. Pre-fix, the
-    task was un-tracked and accumulated across ~110 TestClient lifecycles
-    (each holding a closure over the test's tmp_path), OOM-killing pytest.
+def test_startup_skips_background_tasks_in_default_test_env(coordinator_client):
+    """When k8s_client is None and ENABLE_BACKGROUND_TASKS is unset (the
+    default for tests), startup must NOT register retention_cleanup_loop.
+    The probe loop, retention loop, and backfill task are wasted work in
+    a non-K8s test environment — gating them off is what makes the per-test
+    TestClient lifespan cheap.
     """
     coro_names = {t.get_coro().cr_code.co_name for t in coord_module._background_tasks}
-    assert "retention_cleanup_loop" in coro_names
+    assert "retention_cleanup_loop" not in coro_names
+
+
+def test_models_endpoint_works_with_gated_off_catalog(coordinator_client):
+    """When _enable_background is False (the default for tests), the catalog
+    is constructed but not started. /models must still respond cleanly —
+    consumers should treat the unstarted catalog as empty rather than crash."""
+    client, *_ = coordinator_client
+    resp = client.get("/models")
+    assert resp.status_code == 200
+    body = resp.json()
+    # /models returns a list[dict] (grouped-by-provider shape). With an
+    # unstarted catalog it should be an empty list, not a 500 or a non-list.
+    assert isinstance(body, list)
+
+
+async def test_startup_tracks_retention_task_when_background_enabled(tmp_path, monkeypatch):
+    """Positive case: with ENABLE_BACKGROUND_TASKS=1, the retention loop is
+    registered and cancelled cleanly on shutdown.
+    """
+    monkeypatch.setenv("ENABLE_BACKGROUND_TASKS", "1")
+
+    db = Database(tmp_path / "test.db")
+    await db.init()
+
+    c = _make_coordinator(tmp_path, db)
+    with patch.object(coord_module, "coordinator", c):
+        with patch.object(c, "reconcile", return_value=None):
+            with TestClient(app, raise_server_exceptions=True) as client:
+                coro_names = {
+                    t.get_coro().cr_code.co_name for t in coord_module._background_tasks
+                }
+                assert "retention_cleanup_loop" in coro_names
+                assert client.get("/health").status_code == 200
+    assert coord_module._background_tasks == set()
 
 
 async def test_shutdown_cancels_background_tasks_when_gated_on(tmp_path, monkeypatch):
-    """When the reconcile loop is gated on, TestClient teardown must cancel
-    both it and the retention loop."""
+    """When both background tasks and the reconcile loop are gated on,
+    TestClient teardown must cancel both."""
+    monkeypatch.setenv("ENABLE_BACKGROUND_TASKS", "1")
     monkeypatch.setenv("ENABLE_RECONCILE_LOOP", "1")
 
     db = Database(tmp_path / "test.db")

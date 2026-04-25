@@ -3044,7 +3044,22 @@ async def lifespan(app: FastAPI):
     # Seed builtin strategies into the DB if they aren't already present.
     await _seed_builtin_strategies(coordinator.db)
 
+    # When there is no real Kubernetes client (i.e. all tests by default), the
+    # probe loop, retention loop, custom-provider injection, and backfill task
+    # are wasted work — none of them produce useful results without a live
+    # scheduler and live providers.  Skip them unless the caller explicitly
+    # opts in via ENABLE_BACKGROUND_TASKS, mirroring the ENABLE_RECONCILE_LOOP
+    # gate used for the reconcile loop below.
+    _enable_background = (coordinator.k8s_client is not None) or (
+        os.environ.get("ENABLE_BACKGROUND_TASKS", "").strip().lower()
+        in ("1", "true", "yes")
+    )
+
     # --- ProviderCatalog ---
+    # Always construct the catalog object so coordinator.catalog is set and
+    # downstream consumers can call catalog.snapshot() safely.  Only call
+    # catalog.start() — which kicks off the initial probe and spawns the
+    # background refresh loop — when background tasks are enabled.
     _probe_enabled_env = os.environ.get("PROVIDER_PROBE_ENABLED", "true").strip().lower()
     _probe_enabled = _probe_enabled_env != "false"
     _ttl_seconds = int(os.environ.get("PROVIDER_PROBE_TTL_SECONDS", "600"))
@@ -3056,54 +3071,63 @@ async def lifespan(app: FastAPI):
         probe_enabled=_probe_enabled,
         max_stale_seconds=_max_stale_seconds,
     )
-    await catalog.start()
     coordinator.catalog = catalog
-    coordinator.cost_calculator._pricing_view = CatalogPricingView(catalog)
 
-    # Load enabled custom providers into the catalog alongside built-ins.
-    try:
-        from sec_review_framework.llm_providers import _inject_custom_into_catalog
-        custom_rows = await coordinator.db.list_llm_providers()
-        for _row in custom_rows:
-            if _row.get("enabled", 1):
-                _inject_custom_into_catalog(_row, catalog)
-        if custom_rows:
-            logger.info("Loaded %d custom provider(s) into catalog", len(custom_rows))
-    except Exception as _exc:
-        logger.warning("Failed to load custom providers into catalog: %s", _exc)
+    # When _enable_background is False, the catalog is constructed but never
+    # started, so it has no probe snapshots. We intentionally leave
+    # cost_calculator._pricing_view as None in that case — CostCalculator
+    # guards on `if self._pricing_view is not None` and falls back to the
+    # static pricing dict, which is the desired behavior for tests.
+    if _enable_background:
+        await catalog.start()
+        coordinator.cost_calculator._pricing_view = CatalogPricingView(catalog)
 
-    _background_tasks.add(asyncio.create_task(
-        retention_cleanup_loop(coordinator.storage_root, retention_days=30)
-    ))
+        # Load enabled custom providers into the catalog alongside built-ins.
+        try:
+            from sec_review_framework.llm_providers import _inject_custom_into_catalog
+            custom_rows = await coordinator.db.list_llm_providers()
+            for _row in custom_rows:
+                if _row.get("enabled", 1):
+                    _inject_custom_into_catalog(_row, catalog)
+            if custom_rows:
+                logger.info("Loaded %d custom provider(s) into catalog", len(custom_rows))
+        except Exception as _exc:
+            logger.warning("Failed to load custom providers into catalog: %s", _exc)
+
+        _background_tasks.add(asyncio.create_task(
+            retention_cleanup_loop(coordinator.storage_root, retention_days=30)
+        ))
+
     # Periodic reconcile loop is only needed when there's an active scheduler
     # (K8s cluster) or when explicitly enabled for integration tests.
     _enable_loop = os.environ.get("ENABLE_RECONCILE_LOOP", "").strip().lower()
     if K8S_AVAILABLE or _enable_loop in ("1", "true", "yes"):
         _background_tasks.add(asyncio.create_task(coordinator._reconcile_loop()))
 
-    # Backfill findings index if the table is empty but experiments exist.
-    # Runs asynchronously to not block startup.
-    async def _maybe_backfill() -> None:
-        try:
-            finding_count = await coordinator.db.count_all_findings()
-            if finding_count == 0:
-                experiments = await coordinator.db.list_experiments()
-                if experiments:
-                    logger.info(
-                        "findings table empty but experiments exist — running backfill"
-                    )
-                    n = await coordinator.backfill_findings_index()
-                    logger.info("backfill_findings_index indexed %d runs", n)
-        except Exception as exc:
-            logger.warning("backfill check failed: %s", exc)
+    if _enable_background:
+        # Backfill findings index if the table is empty but experiments exist.
+        # Runs asynchronously to not block startup.
+        async def _maybe_backfill() -> None:
+            try:
+                finding_count = await coordinator.db.count_all_findings()
+                if finding_count == 0:
+                    experiments = await coordinator.db.list_experiments()
+                    if experiments:
+                        logger.info(
+                            "findings table empty but experiments exist — running backfill"
+                        )
+                        n = await coordinator.backfill_findings_index()
+                        logger.info("backfill_findings_index indexed %d runs", n)
+            except Exception as exc:
+                logger.warning("backfill check failed: %s", exc)
 
-    # _maybe_backfill is a one-shot task: it completes on its own and must NOT
-    # be cancelled by the shutdown handler (that could interrupt a partial DB
-    # write).  Track it in _ephemeral_tasks so the GC doesn't collect it, and
-    # remove it automatically when it finishes.
-    _t = asyncio.create_task(_maybe_backfill())
-    _ephemeral_tasks.add(_t)
-    _t.add_done_callback(_ephemeral_tasks.discard)
+        # _maybe_backfill is a one-shot task: it completes on its own and must NOT
+        # be cancelled by the shutdown handler (that could interrupt a partial DB
+        # write).  Track it in _ephemeral_tasks so the GC doesn't collect it, and
+        # remove it automatically when it finishes.
+        _t = asyncio.create_task(_maybe_backfill())
+        _ephemeral_tasks.add(_t)
+        _t.add_done_callback(_ephemeral_tasks.discard)
 
     yield
 
