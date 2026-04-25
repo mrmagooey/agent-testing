@@ -300,7 +300,7 @@ def _build_user_prompt(
       or from *context*.
     - ``{file_path}`` — per-subagent placeholder; filled from *context* only.
     - ``{file_content}`` — per-subagent placeholder; filled from *context* only.
-    - ``{sast_summary}`` — per-subagent placeholder; filled from *context* only.
+    - ``{sast_findings}`` — per-subagent placeholder; filled from *context* only.
     - ``{vuln_class}`` — per-subagent placeholder; filled from *context* only.
 
     Any placeholder not present in the built-in mapping or *context* is left
@@ -317,7 +317,7 @@ def _build_user_prompt(
     context:
         Optional extra key→value pairs that override or supplement the values
         derived from *target*.  Useful for per-subagent placeholders like
-        ``file_path``, ``file_content``, ``sast_summary``, ``vuln_class``.
+        ``file_path``, ``file_content``, ``sast_findings``, ``vuln_class``.
     """
     from sec_review_framework.strategies.common import FINDING_OUTPUT_FORMAT
 
@@ -357,7 +357,7 @@ def _build_user_prompt(
         # Per-subagent placeholders — empty by default; callers pass via context
         "file_path": "",
         "file_content": "",
-        "sast_summary": "",
+        "sast_findings": "",
         "vuln_class": "",
     }
 

@@ -451,13 +451,13 @@ class TestBuildUserPrompt:
         assert "app/views.py" not in prompt
 
     def test_context_fills_per_subagent_placeholders(self) -> None:
-        """Per-subagent placeholders like file_path and sast_summary come from context."""
-        template = "File: {file_path}\nSAST: {sast_summary}"
+        """Per-subagent placeholders like file_path and sast_findings come from context."""
+        template = "File: {file_path}\nSAST: {sast_findings}"
         target = FakeTarget()
         prompt = _build_user_prompt(
             template,
             target,
-            context={"file_path": "app/views.py", "sast_summary": "SQL injection"},
+            context={"file_path": "app/views.py", "sast_findings": "SQL injection"},
         )
         assert "app/views.py" in prompt
         assert "SQL injection" in prompt

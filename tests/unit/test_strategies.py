@@ -178,7 +178,7 @@ def _make_sast_first_strategy() -> UserStrategy:
         default=StrategyBundleDefault(
             system_prompt="Triage SAST findings.",
             user_prompt_template=(
-                "Triage {file_path}:\n{sast_summary}\n{file_content}\n\n{finding_output_format}"
+                "Triage {file_path}:\n{sast_findings}\n{file_content}\n\n{finding_output_format}"
             ),
             profile_modifier="",
             model_id="fake",
