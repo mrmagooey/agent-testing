@@ -33,6 +33,7 @@ import posixpath
 import shutil
 import uuid
 import zipfile
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 
@@ -628,8 +629,20 @@ async def async_apply_bundle(
     zip_path: Path,
     *,
     conflict_policy: str = "reject",
+    materialize: Callable[[str], Awaitable[None]] | None = None,
 ) -> dict:
-    """Async bundle importer.  Safe to await from within async contexts."""
+    """Async bundle importer.  Safe to await from within async contexts.
+
+    Parameters
+    ----------
+    materialize:
+        Optional callable ``async (name: str) -> None`` that clones/rebuilds
+        a dataset repo onto disk and stamps ``materialized_at``.  When
+        supplied, called for each imported dataset row whose on-disk repo is
+        absent.  Typically ``coordinator.materialize_dataset``.  When None
+        (default), materialization is skipped and ``datasets_rehydrated``
+        will be empty.
+    """
     if conflict_policy not in ("reject", "rename", "merge"):
         raise ValueError(
             f"Invalid conflict_policy {conflict_policy!r}. "
@@ -647,6 +660,7 @@ async def async_apply_bundle(
     renamed_from: str | None = None
     warnings: list[str] = []
     datasets_missing: list[str] = []
+    datasets_rehydrated: list[str] = []
 
     target_experiment_id = orig_experiment_id
 
@@ -708,6 +722,11 @@ async def async_apply_bundle(
     dataset_labels_imported = 0
 
     if bundle_dataset_rows:
+        # Clear materialized_at from imported rows: the destination hasn't
+        # materialized them yet; materialize_dataset will set it on success.
+        bundle_dataset_rows = [
+            {**r, "materialized_at": None} for r in bundle_dataset_rows
+        ]
         # Use the same conflict_policy for datasets as for experiments.
         try:
             final_names = await db.import_datasets(
@@ -744,12 +763,30 @@ async def async_apply_bundle(
             final_names = []
             datasets_imported = 0
 
-        # TODO(Phase 3): call materialize_dataset(name) here for each dataset
-        # whose on-disk repo is absent. Phase 3 (Agent D) will wire this.
-        # for name in final_names:
-        #     datasets_dir = storage_root / "datasets" / name
-        #     if not datasets_dir.exists():
-        #         await coordinator.materialize_dataset(name)
+        # Phase 3: call materialize_dataset for each dataset whose repo is absent.
+        if materialize is not None:
+            for name in final_names:
+                repo_dir = storage_root / "datasets" / name / "repo"
+                if not repo_dir.exists():
+                    try:
+                        await materialize(name)
+                        datasets_rehydrated.append(name)
+                    except Exception as exc:
+                        # Detect templates_version mismatch (409 from HTTPException
+                        # or any exception whose detail/message contains the phrase)
+                        exc_str = str(exc)
+                        if "templates_version mismatch" in exc_str or (
+                            hasattr(exc, "status_code") and exc.status_code == 409
+                            and "templates_version" in exc_str
+                        ):
+                            warnings.append(
+                                f"templates_version mismatch for derived dataset {name}; "
+                                "left unmaterialized"
+                            )
+                        else:
+                            warnings.append(
+                                f"Failed to rehydrate dataset {name!r}: {exc}"
+                            )
 
     if bundle_label_rows:
         try:
@@ -794,7 +831,7 @@ async def async_apply_bundle(
         "runs_imported": len(run_rows),
         "runs_skipped": 0,
         "datasets_imported": datasets_imported,
-        "datasets_rehydrated": [],       # populated by Phase 3 once materialize is wired
+        "datasets_rehydrated": datasets_rehydrated,
         "datasets_missing": datasets_missing,
         "dataset_labels_imported": dataset_labels_imported,
         "warnings": warnings,
@@ -864,10 +901,15 @@ def apply_bundle(
     zip_path: Path,
     *,
     conflict_policy: str = "reject",
+    materialize: Callable[[str], Awaitable[None]] | None = None,
 ) -> dict:
     """Sync bundle importer.  Must not be called from within a running event loop."""
     import asyncio
 
     return asyncio.run(
-        async_apply_bundle(db, storage_root, zip_path, conflict_policy=conflict_policy)
+        async_apply_bundle(
+            db, storage_root, zip_path,
+            conflict_policy=conflict_policy,
+            materialize=materialize,
+        )
     )

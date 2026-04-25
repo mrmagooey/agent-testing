@@ -228,17 +228,33 @@ class TestInjectPreviewReturnsDiff:
 
 
 class TestInjectAppendsLabel:
-    """POST /datasets/{name}/inject appends a new label to labels.json on disk."""
+    """POST /datasets/{name}/inject persists a new label to the DB."""
 
     def test_inject_appends_label(
-        self, test_client: TestClient, storage_root: Path
+        self,
+        test_client: TestClient,
+        storage_root: Path,
+        coordinator_instance: ExperimentCoordinator,
     ) -> None:
-        labels_file = storage_root / "datasets" / DATASET_NAME / "labels.json"
+        # Phase 2B: inject creates a derived dataset named
+        # f"{base_name}_injected_{template_id}" and stores labels in DB.
+        # The base dataset row must exist in the DB (FK constraint).
+        _run_async(
+            coordinator_instance.db.create_dataset({
+                "name": DATASET_NAME,
+                "kind": "git",
+                "origin_url": "file:///nonexistent",  # only used for FK; repo already on disk
+                "origin_commit": "0000000000000000000000000000000000000000",
+                "created_at": datetime.now(UTC).isoformat(),
+            })
+        )
 
-        # Snapshot the existing label count before injection
-        before_labels = json.loads(labels_file.read_text())
-        assert isinstance(before_labels, list)
-        count_before = len(before_labels)
+        derived_name = f"{DATASET_NAME}_injected_{TEMPLATE_ID}"
+
+        # Snapshot label count in DB before injection (derived dataset not yet created)
+        count_before = len(
+            _run_async(coordinator_instance.db.list_dataset_labels(derived_name))
+        )
 
         payload = {
             "template_id": TEMPLATE_ID,
@@ -258,15 +274,16 @@ class TestInjectAppendsLabel:
         assert "label_id" in data, f"Missing 'label_id' in response: {data}"
         assert data["label_id"], "label_id must be non-empty"
 
-        # labels.json now has exactly one more entry
-        after_labels = json.loads(labels_file.read_text())
-        assert isinstance(after_labels, list)
+        # DB now has exactly one more label for the derived dataset
+        after_labels = _run_async(
+            coordinator_instance.db.list_dataset_labels(derived_name)
+        )
         count_after = len(after_labels)
         assert count_after == count_before + 1, (
-            f"Expected {count_before + 1} labels after inject, got {count_after}"
+            f"Expected {count_before + 1} labels in DB after inject, got {count_after}"
         )
 
-        # The new entry references the injected file
+        # The new DB entry references the injected file
         new_label = after_labels[-1]
         assert new_label.get("file_path") == "app.py", (
             f"New label file_path should be 'app.py', got {new_label.get('file_path')!r}"
@@ -277,8 +294,8 @@ class TestInjectAppendsLabel:
             f"New label vuln_class should be 'sqli', got {new_label.get('vuln_class')!r}"
         )
 
-        # The label_id in the response matches the record on disk
-        label_ids_on_disk = {lbl.get("id") for lbl in after_labels}
-        assert data["label_id"] in label_ids_on_disk, (
-            f"Returned label_id {data['label_id']!r} not found in labels.json on disk"
+        # The label_id in the response matches the record in the DB
+        label_ids_in_db = {lbl.get("id") for lbl in after_labels}
+        assert data["label_id"] in label_ids_in_db, (
+            f"Returned label_id {data['label_id']!r} not found in DB labels"
         )
