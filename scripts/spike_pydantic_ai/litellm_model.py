@@ -221,33 +221,17 @@ class LiteLLMModel(Model):
                         result.append(Message(role="user", content=content))
 
             elif isinstance(msg, ModelResponse):
-                # Build an assistant message with optional tool_calls in the content
+                # Build a plain assistant message.  The framework's Message has
+                # no tool_calls field; the provider re-reads tool calls from its
+                # own history on replay.  Tool call details live in the following
+                # tool-return messages so we emit text content only here.
+                # TODO Phase 1: if the framework Message gains a tool_calls field,
+                # populate it from ToolCallPart entries in msg.parts.
                 text_content = ""
-                tool_call_dicts: list[dict[str, Any]] = []
-
                 for part in msg.parts:
                     if isinstance(part, TextPart):
                         text_content = part.content
-                    elif isinstance(part, ToolCallPart):
-                        # Encode tool calls as a JSON string appended to text
-                        # (LiteLLMProvider's conversation_log format)
-                        args = part.args_as_dict()
-                        tool_call_dicts.append(
-                            {
-                                "id": part.tool_call_id,
-                                "type": "function",
-                                "function": {
-                                    "name": part.tool_name,
-                                    "arguments": json.dumps(args),
-                                },
-                            }
-                        )
 
-                # For assistant messages with tool calls we need role="assistant"
-                # The framework's Message has no tool_calls field; the provider
-                # re-reads tool_calls from its own history on replay.
-                # We emit a plain assistant message with text content only;
-                # tool call details live in the following tool-return messages.
                 result.append(Message(role="assistant", content=text_content))
 
         return result

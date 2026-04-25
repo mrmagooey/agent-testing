@@ -8,6 +8,72 @@
 
 ---
 
+## UNMET EXIT CRITERION: Live-provider verification
+
+> **COORDINATOR DECISION REQUIRED** before Phase 1 can be authorized.
+
+Exit criterion 2 ("Tool calling via LiteLLM through Anthropic-direct,
+Bedrock-Claude, Vertex-Claude") was **not met**.  No Claude API credentials
+are present in this environment, so all Phase 0 testing was performed against
+`ScriptedLiteLLMProvider` (mocked responses only).
+
+### Commands a reviewer with credentials would run to close the gap
+
+**Anthropic-direct:**
+```
+ANTHROPIC_API_KEY=<key> uv run python scripts/spike_pydantic_ai/demo.py
+```
+(The demo already has a live-call path in `demo_live_if_available()` that
+activates when `ANTHROPIC_API_KEY` is set.)
+
+**Bedrock-Claude:**
+```
+AWS_ACCESS_KEY_ID=<id> AWS_SECRET_ACCESS_KEY=<secret> AWS_DEFAULT_REGION=us-east-1 \
+  uv run python - <<'EOF'
+import asyncio
+from sec_review_framework.models.litellm_provider import LiteLLMProvider
+from litellm_model import LiteLLMModel
+from pydantic_ai import Agent
+import sys, os
+sys.path.insert(0, "scripts/spike_pydantic_ai")
+provider = LiteLLMProvider(model_name="bedrock/anthropic.claude-3-haiku-20240307-v1:0")
+model = LiteLLMModel(provider)
+agent = Agent(model, system_prompt="You are a terse assistant.")
+result = asyncio.run(agent.run("Say 'hello spike' and nothing else."))
+print(result.output)
+EOF
+```
+
+**Vertex-Claude:**
+```
+GOOGLE_APPLICATION_CREDENTIALS=<path-to-sa-json> VERTEXAI_PROJECT=<project> VERTEXAI_LOCATION=us-east5 \
+  uv run python - <<'EOF'
+import asyncio
+from sec_review_framework.models.litellm_provider import LiteLLMProvider
+from litellm_model import LiteLLMModel
+from pydantic_ai import Agent
+import sys
+sys.path.insert(0, "scripts/spike_pydantic_ai")
+provider = LiteLLMProvider(model_name="vertex_ai/claude-3-haiku@20240307")
+model = LiteLLMModel(provider)
+agent = Agent(model, system_prompt="You are a terse assistant.")
+result = asyncio.run(agent.run("Say 'hello spike' and nothing else."))
+print(result.output)
+EOF
+```
+
+### Decision point
+
+Choose one of:
+
+- **Proceed to Phase 1 with mock-only verification.** Accept that live-provider
+  behavior is unconfirmed; add live-provider smoke tests to the Phase 1
+  acceptance criteria.
+- **Pause Phase 0** until a reviewer with API credentials runs the commands
+  above and confirms tool-call round-trips work end-to-end.
+
+---
+
 ## Summary
 
 All four Phase 0 exit criteria validated against `ScriptedLiteLLMProvider` (a
@@ -165,15 +231,29 @@ LiteLLM's OpenAI-compatible API.
    call.  Phase 1 should wrap the call in `asyncio.to_thread()`.
 
 7. **Dependency conflict (BLOCKER for Phase 1 production deployment)**:
-   `pydantic-ai>=1.87` requires `opentelemetry-api>=1.28`, but the `worker`
-   extra's `semgrep<=1.136` requires `opentelemetry-api>=1.25,<1.26`.  These
-   are incompatible.  Resolution options:
-   - Update `semgrep` in the `worker` extra to `>=1.137` (requires testing that
-     semgrep 1.137+ still works for the framework's scan strategies).
-   - Use `pydantic-ai-slim` without MCP extras (reduces the otel requirement
-     but `pydantic-ai-slim` itself still requires otel>=1.28).
-   - Pin pydantic-ai to a version that requires otel<1.26 (currently no such
-     version exists — 1.87 is the only available version).
+   Installing `pydantic-ai-slim>=1.87` alongside the `worker` extra is blocked
+   by two independent version conflicts surfaced by the uv resolver:
+
+   **Axis 1 — opentelemetry-api:**
+   `pydantic-ai-slim>=1.87` requires `opentelemetry-api>=1.28`.
+   `semgrep>=1.100` (the lower bound in the `worker` extra) ships with an
+   upper bound on otel: semgrep 1.100–1.145 requires
+   `opentelemetry-api>=1.25,<1.26`.  These ranges do not overlap.
+
+   **Axis 2 — mcp:**
+   `pydantic-ai-slim>=1.87` requires `mcp>=1.25.0`.
+   semgrep 1.100–1.145 requires `mcp==1.16.0`; semgrep >=1.146 requires
+   `mcp==1.23.3`.  Neither satisfies `mcp>=1.25.0`.
+
+   Simply bumping semgrep in `pyproject.toml` does **not** resolve the
+   conflict: as of the spike date no released semgrep version pins
+   `mcp>=1.25.0`.
+
+   **Recommended resolution:** install `pydantic-ai` in a **separate venv**
+   that does not include the `worker` extra.  The agent runner that uses
+   pydantic-ai never needs semgrep; semgrep runs in a different worker
+   context.  This clean separation eliminates both conflicts without requiring
+   any upstream version bumps.
 
    For the spike, `pydantic-ai` is installed directly via
    `uv pip install "pydantic-ai>=1.87,<2.0"` bypassing the lockfile.  This

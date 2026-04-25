@@ -32,12 +32,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 
-from sec_review_framework.data.findings import Finding, Severity, VulnClass
-from sec_review_framework.models.base import Message, ModelResponse as FrameworkModelResponse, ToolDefinition
-from sec_review_framework.models.litellm_provider import LiteLLMProvider
-
 from litellm_model import LiteLLMModel
-
 from pydantic_ai import Agent
 from pydantic_ai.messages import (
     ModelRequest,
@@ -48,8 +43,11 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 from pydantic_ai.models import ModelRequestParameters
-from pydantic_ai.usage import RequestUsage
 
+from sec_review_framework.data.findings import Finding, Severity, VulnClass
+from sec_review_framework.models.base import Message, ToolDefinition
+from sec_review_framework.models.base import ModelResponse as FrameworkModelResponse
+from sec_review_framework.models.litellm_provider import LiteLLMProvider
 
 # ---------------------------------------------------------------------------
 # Shared fixture: scripted LiteLLMProvider
@@ -718,7 +716,12 @@ async def test_token_usage_accumulates_across_turns() -> None:
     """MOCK: Multi-turn token usage sums across all model calls."""
     provider = ScriptedLiteLLMProvider(
         responses=[
-            {"content": "", "tool_calls": [{"name": "t", "id": "i1", "input": {}}], "input_tokens": 100, "output_tokens": 50},
+            {
+                "content": "",
+                "tool_calls": [{"name": "t", "id": "i1", "input": {}}],
+                "input_tokens": 100,
+                "output_tokens": 50,
+            },
             {"content": "done", "tool_calls": [], "input_tokens": 200, "output_tokens": 60},
         ]
     )
@@ -743,7 +746,12 @@ async def test_token_usage_provider_log_populated() -> None:
     """MOCK: Provider token_log captures each individual model call."""
     provider = ScriptedLiteLLMProvider(
         responses=[
-            {"content": "", "tool_calls": [{"name": "t", "id": "i1", "input": {}}], "input_tokens": 10, "output_tokens": 5},
+            {
+                "content": "",
+                "tool_calls": [{"name": "t", "id": "i1", "input": {}}],
+                "input_tokens": 10,
+                "output_tokens": 5,
+            },
             {"content": "done", "tool_calls": [], "input_tokens": 20, "output_tokens": 8},
         ]
     )

@@ -31,15 +31,12 @@ from typing import Any
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 
+from litellm_model import LiteLLMModel
+from pydantic_ai import Agent
+
 from sec_review_framework.data.findings import Finding, Severity, VulnClass
 from sec_review_framework.models.base import Message, ModelResponse, ToolDefinition
 from sec_review_framework.models.litellm_provider import LiteLLMProvider
-
-from litellm_model import LiteLLMModel
-
-from pydantic_ai import Agent
-from pydantic_ai.exceptions import UnexpectedModelBehavior
-
 
 # ---------------------------------------------------------------------------
 # Fake provider for offline / CI testing
@@ -170,38 +167,8 @@ async def demo_scenario_2_structured_output() -> None:
 
     # pydantic-ai uses "tool" output mode by default for complex types;
     # the model must call the output tool with the structured data.
-    # The TestModel does this automatically; for our adapter we need to provide
-    # a response that calls the output tool.
-
-    # To make this work with our scripted provider, we need to know the output
-    # tool name.  pydantic-ai names it "final_result" for list outputs.
-    # We'll use a capture-and-replay approach: first run with TestModel to capture
-    # the expected tool name, then replay with our provider.
-
-    from pydantic_ai.models.test import TestModel
-
-    capture_agent: Agent[None, list[Finding]] = Agent(
-        TestModel(custom_output_args=[finding_data]),
-        output_type=list[Finding],
-        system_prompt="Extract security findings from code.",
-    )
-    capture_result = await capture_agent.run("Analyse this code.")
-    print(f"  TestModel result: {len(capture_result.output)} finding(s)")
-
-    # Now run with our LiteLLMModel + scripted provider that mimics the
-    # same tool-call pattern as TestModel.
-    # We need the output tool name — introspect from the TestModel run.
-    all_msgs = capture_result.all_messages()
-    output_tool_name = None
-    from pydantic_ai.messages import ModelResponse as PAIModelResponse, ToolCallPart as PAIToolCallPart
-    for msg in all_msgs:
-        if isinstance(msg, PAIModelResponse):
-            for part in msg.parts:
-                if isinstance(part, PAIToolCallPart):
-                    output_tool_name = part.tool_name
-                    break
-
-    print(f"  Output tool name: {output_tool_name!r}")
+    # The documented default output-tool name is "final_result" (see pydantic-ai
+    # docs: Agent output tools).  The test suite already hardcodes this name.
 
     # pydantic-ai wraps list output_type in {"response": [...]} when using
     # the "tool" output mode — the model must call the output tool with this
@@ -212,7 +179,7 @@ async def demo_scenario_2_structured_output() -> None:
                 "content": "",
                 "tool_calls": [
                     {
-                        "name": output_tool_name or "final_result",
+                        "name": "final_result",
                         "id": "call_sr_001",
                         "input": {"response": [finding_data]},
                     }
@@ -266,22 +233,7 @@ async def demo_scenario_3_agent_as_tool() -> None:
         "experiment_id": "spike_exp_002",
     }
 
-    # Determine output tool name for list[Finding]
-    from pydantic_ai.models.test import TestModel
-    capture_agent: Agent[None, list[Finding]] = Agent(
-        TestModel(custom_output_args=[finding_data]),
-        output_type=list[Finding],
-    )
-    capture_result = await capture_agent.run("dummy")
-    from pydantic_ai.messages import ModelResponse as PAIModelResponse, ToolCallPart as PAIToolCallPart
-    output_tool_name = "final_result"
-    for msg in capture_result.all_messages():
-        if isinstance(msg, PAIModelResponse):
-            for part in msg.parts:
-                if isinstance(part, PAIToolCallPart):
-                    output_tool_name = part.tool_name
-                    break
-
+    # The documented default output-tool name is "final_result".
     # Build child agent with scripted provider
     # pydantic-ai wraps list output_type in {"response": [...]}
     child_provider = ScriptedLiteLLMProvider(
@@ -290,7 +242,7 @@ async def demo_scenario_3_agent_as_tool() -> None:
                 "content": "",
                 "tool_calls": [
                     {
-                        "name": output_tool_name,
+                        "name": "final_result",
                         "id": "call_child_001",
                         "input": {"response": [finding_data]},
                     }
