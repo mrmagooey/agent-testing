@@ -103,12 +103,12 @@
 │  │                                                                       │  │
 │  │  ExperimentWorker._run_single(run_config)                            │  │
 │  │    → ModelProviderFactory.create()    → ModelProvider                 │  │
-│  │    → StrategyFactory.create()         → ScanStrategy                 │  │
+│  │    → StrategyRegistry.get()           → UserStrategy                 │  │
 │  │    → ToolRegistryFactory.create()     → ToolRegistry                 │  │
 │  │    → ProfileRegistry.get()            → ReviewProfile                │  │
 │  │    → LabelStore.load()                → list[GroundTruthLabel]       │  │
-│  │    → ScanStrategy.run(target, model, tools, config)                  │  │
-│  │        → run_agentic_loop / run_subagents                            │  │
+│  │    → run_strategy(strategy, target, model, tools)                    │  │
+│  │        → pydantic-ai Agent (LiteLLMModel + subagent dispatch)        │  │
 │  │    → [if verification] Verifier.verify(candidates, target, model)    │  │
 │  │    → Evaluator.evaluate(findings, labels)                            │  │
 │  │    → CostCalculator.compute(model_id, tokens)                        │  │
@@ -303,34 +303,53 @@ There is a single concrete provider: `LiteLLMProvider` in `models/litellm_provid
 
 ### 2.2 Strategy
 
+All strategies are `UserStrategy` definitions stored in the `StrategyRegistry`. At run time the worker calls the single entry-point:
+
 ```python
-from abc import ABC, abstractmethod
+from sec_review_framework.strategies.runner import run_strategy
 
-class ScanStrategy(ABC):
-    """
-    A strategy receives a target codebase and a tool registry,
-    and produces a flat list of findings.
-
-    Strategies are stateless — all context comes in via arguments.
-    The runner instantiates a fresh strategy per experiment run.
-    """
-
-    @abstractmethod
-    def name(self) -> str:
-        ...
-
-    @abstractmethod
-    def run(
-        self,
-        target: "TargetCodebase",
-        model: ModelProvider,
-        tools: "ToolRegistry",
-        config: dict,
-    ) -> "StrategyOutput":
-        ...
+output: StrategyOutput = run_strategy(
+    strategy,   # UserStrategy
+    target,     # TargetCodebase
+    model,      # ModelProvider — wrapped by LiteLLMModel for pydantic-ai
+    tools,      # ToolRegistry — tools are adapted to pydantic-ai callables
+)
 ```
 
-The critical constraint: strategies do not receive the ground truth labels. They operate as a real scanner would — against the source code only.
+`run_strategy` builds a pydantic-ai `Agent` from `strategy.default`, registers tools from `ToolRegistry` via `make_tool_callables()`, injects `invoke_subagent` / `invoke_subagent_batch` when `strategy.default.subagents` is non-empty, and returns a `StrategyOutput` (findings + dedup metadata). The `output_type` presented to pydantic-ai is always `list[Finding]` for the top-level agent.
+
+`UserStrategy` carries all the parameters a strategy needs:
+
+```python
+class UserStrategy(BaseModel):
+    id: str
+    name: str
+    parent_strategy_id: str | None        # non-None for subagent roles
+    orchestration_shape: OrchestrationShape  # back-compat tag; no longer dispatched on
+    default: StrategyBundleDefault
+    overrides: list[OverrideRule] = []
+    created_at: datetime
+    is_builtin: bool = False
+
+class StrategyBundleDefault(BaseModel):
+    system_prompt: str
+    user_prompt_template: str
+    model_id: str
+    tools: frozenset[str]
+    verification: str
+    max_turns: int
+    tool_extensions: frozenset[str]
+    subagents: list[str] = []           # strategy IDs the parent may dispatch to
+    max_subagent_depth: int = 3
+    max_subagent_invocations: int = 100
+    max_subagent_batch_size: int = 32
+    dispatch_fallback: Literal["reprompt", "programmatic", "none"] = "reprompt"
+    output_type_name: str | None = None  # structured output type for child agents
+```
+
+The critical constraint: strategies do not receive ground truth labels. They operate as a real scanner would — against the source code only.
+
+`OrchestrationShape` is retained as an enum for backward-compatible deserialization of historical `BundleSnapshot`/`ExperimentRun` rows. New code does not branch on this value; `runner.py` treats all `UserStrategy` objects uniformly.
 
 ### 2.3 ToolRegistry
 
@@ -568,15 +587,18 @@ agent-testing-framework/
 │       │       ├── litellm_probe.py
 │       │       └── openrouter_probe.py
 │       │
-│       ├── strategies/           # ScanStrategy implementations
+│       ├── agent/                # pydantic-ai execution layer (requires "agent" extra)
 │       │   ├── __init__.py
-│       │   ├── base.py           # ScanStrategy ABC, StrategyOutput
-│       │   ├── common.py         # run_agentic_loop, FindingParser, dedup utils
-│       │   ├── single_agent.py
-│       │   ├── per_file.py
-│       │   ├── per_vuln_class.py
-│       │   ├── sast_first.py
-│       │   └── diff_review.py
+│       │   ├── litellm_model.py  # LiteLLMModel — pydantic-ai model adapter over LiteLLM
+│       │   ├── subagent.py       # SubagentDeps, make_invoke_subagent_tool/_batch_tool
+│       │   ├── tool_adapter.py   # make_tool_callables() — adapts ToolRegistry → pydantic-ai tools
+│       │   └── output_types.py   # structured output Pydantic models for child agents
+│       │
+│       ├── strategies/           # Unified runner + strategy registry
+│       │   ├── __init__.py
+│       │   ├── runner.py         # run_strategy() — single entry-point for all strategies
+│       │   ├── common.py         # run_agentic_loop (used by verifier), dedup utils
+│       │   └── strategy_registry.py  # StrategyRegistry, seed_builtins(), UserStrategy CRUD
 │       │
 │       ├── verification/         # Verification pass
 │       │   ├── __init__.py
@@ -1702,16 +1724,15 @@ class ExperimentWorker:
         target = self._load_target(run.dataset_name, datasets_dir)
         labels = LabelStore(datasets_dir).load(run.dataset_name, run.dataset_version)
         model = ModelProviderFactory().create(run.model_id, run.provider_kwargs)
-        strategy = StrategyFactory().create(run.strategy)
+        strategy = StrategyRegistry().get(run.strategy_id)  # UserStrategy from DB/registry
         tools = ToolRegistryFactory().create(run.tool_variant, target)
         profile = ProfileRegistry().get(run.review_profile)
 
-        config = {**run.strategy_config, "review_profile": profile, "parallel": run.parallel}
-
         start = time.monotonic()
         try:
-            # Phase 1: Strategy produces candidate findings
-            strategy_output = strategy.run(target, model, tools, config)
+            # Phase 1: Strategy produces candidate findings (via unified runner)
+            from sec_review_framework.strategies.runner import run_strategy
+            strategy_output = run_strategy(strategy, target, model, tools)
             candidates = strategy_output.findings
 
             # Phase 2: Optional verification pass
@@ -2582,80 +2603,103 @@ class DiffDatasetGenerator:
 
 ## 7. Strategy Implementations
 
-All strategies share the same agentic loop pattern: build a prompt, call the model, handle tool calls, loop until done, parse findings. The review profile's `system_prompt_modifier` is appended to every strategy's system prompt.
+### 7.1 Unified Runner
 
-### 7.1 Shared Agentic Loop
+All strategies run through a single entry-point in `strategies/runner.py`:
 
 ```python
-def run_agentic_loop(
+def run_strategy(
+    strategy: UserStrategy,
+    target: TargetCodebase,
     model: ModelProvider,
     tools: ToolRegistry,
-    system_prompt: str,
-    initial_user_message: str,
-    max_turns: int = 50,
-) -> str:
-    """
-    Runs a standard tool-use loop until the model returns a non-tool response.
-    Returns the final text response.
-    """
-    messages = [Message(role="user", content=initial_user_message)]
-    tool_defs = tools.get_tool_definitions()
-
-    for _ in range(max_turns):
-        response = model.complete(messages, tools=tool_defs, system_prompt=system_prompt)
-        if not response.tool_calls:
-            return response.content
-
-        messages.append(Message(role="assistant", content=response.content))
-        for call in response.tool_calls:
-            result = tools.invoke(call["name"], call["input"], call["id"])
-            messages.append(Message(role="tool", content=result, tool_call_id=call["id"]))
-
-    raise RuntimeError(f"Exceeded max_turns={max_turns} in agentic loop")
+    *,
+    deps_factory: Callable[[], SubagentDeps] | None = None,
+    expected_dispatch: list[dict[str, Any]] | None = None,
+    dispatch_match_key: str = "file_path",
+) -> StrategyOutput:
 ```
 
-When `tool_variant=WITHOUT_TOOLS`, `tools.get_tool_definitions()` returns an empty list — the model never receives tool definitions.
+The runner:
+1. Wraps `model` in `LiteLLMModel` (the pydantic-ai adapter).
+2. Adapts `tools` to pydantic-ai callables via `make_tool_callables()`.
+3. Builds a pydantic-ai `Agent` with `output_type=list[Finding]`.
+4. If `strategy.default.subagents` is non-empty, injects `invoke_subagent` and `invoke_subagent_batch` as additional tools.
+5. Calls `agent.run_sync()` with the rendered user prompt and a `SubagentDeps` instance.
+6. After completion, runs `_validate_dispatch()` — if expected inputs were not dispatched, a re-prompt is issued (bounded to 1 attempt).
+7. Returns a `StrategyOutput` (findings + dedup metadata).
 
-### 7.2 Review Profile Injection
+The legacy `ScanStrategy` ABC, `_SHAPE_TO_STRATEGY` dispatch dict, and `FindingParser` class have been deleted (Phase 4). There is no code path that bypasses `run_strategy`.
 
-All strategies inject the review profile into their system prompt:
+### 7.2 pydantic-ai Execution Layer
 
-```python
-def build_system_prompt(base_prompt: str, config: dict) -> str:
-    profile: ReviewProfile = config["review_profile"]
-    if profile.system_prompt_modifier:
-        return f"{base_prompt}\n\n{profile.system_prompt_modifier}"
-    return base_prompt
-```
+The `agent/` package is the pydantic-ai execution layer. It requires the `agent` extra (see `pyproject.toml`):
 
-### 7.3 Finding Parser
+- `agent/litellm_model.py` — `LiteLLMModel` adapts any `LiteLLMProvider`-compatible backend to the pydantic-ai `Model` interface. LiteLLM remains the transport for all providers; pydantic-ai orchestrates the agent loop on top.
+- `agent/tool_adapter.py` — `make_tool_callables()` converts a `ToolRegistry` into the list of `Tool` objects that pydantic-ai injects into `Agent`.
+- `agent/subagent.py` — `SubagentDeps` tracks invocation counts and enforces the three caps (`max_subagent_depth`, `max_subagent_invocations`, `max_subagent_batch_size`). `make_invoke_subagent_tool()` and `make_invoke_subagent_batch_tool()` produce the tool callables the parent agent receives.
+- `agent/output_types.py` — Pydantic models used as structured output types for subagents when `output_type_name` is set on `StrategyBundleDefault`.
 
-```python
-FINDING_OUTPUT_FORMAT = """
-At the end of your analysis, output your findings as a JSON array in a ```json block.
-Each finding must be a JSON object with these fields:
-{
-  "file_path": "relative/path/to/file.py",
-  "line_start": 42,
-  "line_end": 47,
-  "vuln_class": "sqli",
-  "cwe_ids": ["CWE-89"],
-  "severity": "high",
-  "title": "SQL Injection in user login endpoint",
-  "description": "...",
-  "recommendation": "...",
-  "confidence": 0.9
-}
-Include all genuine findings. Do not include false alarms you are uncertain about.
-"""
+### 7.3 Subagent Dispatch Primitives
 
-class FindingParser:
-    def parse(self, llm_output: str, experiment_id: str, produced_by: str) -> list[Finding]:
-        """Extract JSON block from llm_output and validate into Finding objects."""
-        ...
-```
+When a strategy's `default.subagents` list is non-empty, the runner injects two tools into the parent agent:
 
-### 7.4 Deduplication with Tracking
+**`invoke_subagent(role, input)`** — Dispatches a single subagent call. `role` is one of the strategy IDs listed in `subagents`. Returns the subagent's output as a string (or the structured type if `output_type_name` is set).
+
+**`invoke_subagent_batch(role, inputs)`** — Dispatches a list of inputs in a single tool call; the runtime fans out in parallel (one thread per input, bounded by `max_subagent_batch_size`). Returns a list of outputs. This is the preferred primitive for fan-outs (per-file, per-vuln-class).
+
+Both tools are bounded by `SubagentDeps`:
+- `max_subagent_depth` — maximum recursive nesting depth (default 3).
+- `max_subagent_invocations` — total invocations across the run (default 100).
+- `max_subagent_batch_size` — maximum inputs per `invoke_subagent_batch` call (default 32).
+
+### 7.4 Dispatch Validator and Fallback
+
+After `agent.run_sync()` completes, `_validate_dispatch()` checks whether all expected subagent inputs were dispatched:
+
+- **`dispatch_fallback="reprompt"`** (default): If inputs are missing, the runner sends a continuation message listing the missed roles and runs the agent again (one additional turn).
+- **`dispatch_fallback="programmatic"`**: Skips the re-prompt entirely; directly invokes any missed subagents via `_run_child_sync`. Used by `per_vuln_class` to guarantee all 16 specialist agents run even under supervisor variance.
+- **`dispatch_fallback="none"`**: Missing dispatches are silently dropped.
+
+### 7.5 Built-in Strategies
+
+Nine strategies are seeded by `seed_builtins()` in `strategy_registry.py`. All use `run_strategy` as their execution path.
+
+**Original five (reimplemented as parent-subagent strategies):**
+
+| ID | Shape | Subagents | Fan-out primitive |
+|---|---|---|---|
+| `builtin.single_agent` | `SINGLE_AGENT` | none | — |
+| `builtin.diff_review` | `DIFF_REVIEW` | none | — |
+| `builtin.per_file` | `PER_FILE` | `file_reviewer` | `invoke_subagent_batch` over source files |
+| `builtin.sast_first` | `SAST_FIRST` | `file_reviewer` | `invoke_subagent_batch` over SAST-flagged files |
+| `builtin.per_vuln_class` | `PER_VULN_CLASS` | 16 specialist roles | `invoke_subagent_batch` with `dispatch_fallback="programmatic"` |
+
+**Four new capability strategies (Phase 5):**
+
+| ID | Shape | Description |
+|---|---|---|
+| `builtin.single_agent_with_verifier` | `SINGLE_AGENT_WITH_VERIFIER` | Single agent + inline verifier subagent over each candidate finding |
+| `builtin.classifier_dispatch` | `CLASSIFIER_DISPATCH` | Classifier routes files to specialist agents based on language/category |
+| `builtin.taint_pipeline` | `TAINT_PIPELINE` | Multi-stage: source_finder → sink_tracer → sanitization_checker → caller_checker |
+| `builtin.diff_blast_radius` | `DIFF_BLAST_RADIUS` | Diff review + blast_radius_finder subagent for taint propagation beyond changed lines |
+
+### 7.6 Structured Outputs for Subagents
+
+When `output_type_name` is set on a `StrategyBundleDefault`, the child `Agent` is constructed with `output_type=<resolved type>` so pydantic-ai validates and coerces the LLM's JSON response into the declared Pydantic model. Valid names:
+
+| `output_type_name` | Pydantic type | Used by |
+|---|---|---|
+| `"finding_list"` | `list[Finding]` | most specialist agents |
+| `"verifier_verdict"` | `VerifierVerdict` | `single_agent_with_verifier` verifier subagent |
+| `"source_list"` | `list[Source]` | `taint_pipeline` source_finder |
+| `"taint_path_list"` | `list[TaintPath]` | `taint_pipeline` sink_tracer |
+| `"sanitization_verdict"` | `SanitizationVerdict` | `taint_pipeline` sanitization_checker |
+| `"classifier_judgement_list"` | `list[ClassifierJudgement]` | `classifier_dispatch` classifier |
+
+### 7.7 Deduplication
+
+`strategies/common.py` retains `deduplicate()`, which merges findings with the same `(file_path, vuln_class)` within 5 lines. The runner calls this after collecting all subagent outputs for fan-out strategies:
 
 ```python
 def deduplicate(findings: list[Finding]) -> StrategyOutput:
@@ -2663,322 +2707,17 @@ def deduplicate(findings: list[Finding]) -> StrategyOutput:
     Deduplicates findings: same file_path + vuln_class within 5 lines → keep highest confidence.
     Returns StrategyOutput with pre/post counts and a log of what was merged.
     """
-    pre_count = len(findings)
-    dedup_log: list[DedupEntry] = []
-    kept: list[Finding] = []
-
-    # Group by (file_path, vuln_class), merge overlapping line ranges
-    ...
-
-    return StrategyOutput(
-        findings=kept,
-        pre_dedup_count=pre_count,
-        post_dedup_count=len(kept),
-        dedup_log=dedup_log,
-    )
 ```
 
-### 7.5 Parallel Subagent Execution
+Single-agent and diff-review strategies return `pre_dedup_count == post_dedup_count` with an empty `dedup_log`.
 
-Strategies with multiple subagents (PerFile, PerVulnClass) support a `parallel` config flag:
+### 7.8 Semgrep Triage (`sast_first`)
 
-```python
-import concurrent.futures
+Semgrep runs as a subprocess before the LLM phase (it is not a LiteLLM-backed step). The SAST binary is not installed in the pydantic-ai venv — it runs via `SemgrepTool.run_full_scan()` which shells out to the `semgrep` binary on PATH. The `tool_variant` dimension controls only whether the LLM file-reviewer subagent has additional tool access for cross-file context. If a dataset has no `diff_spec.yaml`, the runner skips `diff_review` for that dataset and logs a warning.
 
-def run_subagents(
-    tasks: list[dict],              # [{system_prompt, user_message, max_turns}]
-    model: ModelProvider,
-    tools: ToolRegistry,
-    parallel: bool,
-    max_workers: int = 4,
-) -> list[str]:
-    """
-    Runs multiple agentic loops either sequentially or in parallel.
-    Each task gets its own tool registry clone (for independent audit logs).
-    """
-    if not parallel:
-        return [
-            run_agentic_loop(model, tools, t["system_prompt"], t["user_message"], t["max_turns"])
-            for t in tasks
-        ]
+### 7.9 `OrchestrationShape` (Back-compat Tag)
 
-    def _run_one(task):
-        tools_clone = tools.clone()  # independent audit log per subagent
-        return run_agentic_loop(model, tools_clone, task["system_prompt"],
-                                task["user_message"], task["max_turns"])
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
-        return list(pool.map(_run_one, tasks))
-```
-
-When `parallel=True`, each subagent gets a cloned `ToolRegistry` so audit logs don't interleave. The parent merges audit logs after all subagents complete. Rate limiting is handled by the `ModelProvider` implementation (retry with backoff).
-
-### 7.6 Strategy 1: SingleAgent
-
-One agent scans the full repo. Has access to the full repo via `RepoAccessTool` and navigates it autonomously.
-
-```python
-class SingleAgentStrategy(ScanStrategy):
-    def name(self) -> str:
-        return "single_agent"
-
-    def run(self, target, model, tools, config) -> StrategyOutput:
-        system_prompt = build_system_prompt(self._base_system_prompt(), config)
-        repo_summary = self._build_repo_summary(target)
-        user_message = f"""
-You are a security code reviewer. Perform a comprehensive security audit
-of the following codebase.
-
-Repository structure:
-{repo_summary}
-
-Use your tools to read any files you need. Cover all vulnerability classes.
-{FINDING_OUTPUT_FORMAT}
-"""
-        raw_output = run_agentic_loop(
-            model, tools, system_prompt, user_message,
-            max_turns=config.get("max_turns", 80)
-        )
-        findings = FindingParser().parse(raw_output, experiment_id=..., produced_by="single_agent")
-        # No dedup for single agent — one pass, no overlap
-        return StrategyOutput(
-            findings=findings,
-            pre_dedup_count=len(findings),
-            post_dedup_count=len(findings),
-            dedup_log=[],
-        )
-```
-
-### 7.7 Strategy 2: PerFileSubagents
-
-Subagents assigned per source file. Supports parallel execution.
-
-```python
-class PerFileStrategy(ScanStrategy):
-    def name(self) -> str:
-        return "per_file"
-
-    def run(self, target, model, tools, config) -> StrategyOutput:
-        source_files = target.list_source_files()
-        system_prompt = build_system_prompt(self._base_system_prompt(), config)
-
-        tasks = []
-        for file_path in source_files:
-            file_content = target.read_file(file_path)
-            tasks.append({
-                "system_prompt": system_prompt,
-                "user_message": f"""
-Perform a security audit of the following file.
-You may use tools to read related files if context is needed.
-
-File: {file_path}
-```
-{file_content}
-```
-{FINDING_OUTPUT_FORMAT}
-""",
-                "max_turns": config.get("max_turns_per_file", 20),
-            })
-
-        outputs = run_subagents(tasks, model, tools, parallel=config.get("parallel", False))
-        all_findings = []
-        for file_path, raw_output in zip(source_files, outputs):
-            findings = FindingParser().parse(
-                raw_output, experiment_id=..., produced_by=f"per_file:{file_path}"
-            )
-            all_findings.extend(findings)
-
-        return deduplicate(all_findings)
-```
-
-### 7.8 Strategy 3: PerVulnClassSpecialists
-
-Subagents specialized by vulnerability class, each scanning the full repo. Supports parallel execution.
-
-```python
-VULN_CLASS_SYSTEM_PROMPTS: dict[VulnClass, str] = {
-    VulnClass.SQLI: "You are a SQL injection specialist...",
-    VulnClass.CRYPTO_MISUSE: "You are a cryptography specialist...",
-    # ... one per VulnClass
-}
-
-class PerVulnClassStrategy(ScanStrategy):
-    def name(self) -> str:
-        return "per_vuln_class"
-
-    def run(self, target, model, tools, config) -> StrategyOutput:
-        active_classes = config.get("vuln_classes", list(VulnClass))
-        repo_summary = self._build_repo_summary(target)
-
-        tasks = []
-        for vuln_class in active_classes:
-            base_prompt = VULN_CLASS_SYSTEM_PROMPTS[vuln_class]
-            system_prompt = build_system_prompt(base_prompt, config)
-            tasks.append({
-                "system_prompt": system_prompt,
-                "user_message": f"""
-You are scanning this repository for {vuln_class} vulnerabilities only.
-Ignore all other vulnerability types.
-
-Repository structure:
-{repo_summary}
-
-Use your tools to read any files that might contain {vuln_class} issues.
-{FINDING_OUTPUT_FORMAT}
-""",
-                "max_turns": config.get("max_turns_per_class", 40),
-            })
-
-        outputs = run_subagents(tasks, model, tools, parallel=config.get("parallel", False))
-        all_findings = []
-        for vuln_class, raw_output in zip(active_classes, outputs):
-            findings = FindingParser().parse(
-                raw_output, experiment_id=..., produced_by=f"specialist:{vuln_class}"
-            )
-            all_findings.extend(findings)
-
-        return deduplicate(all_findings)
-```
-
-### 7.9 Strategy 4: SASTFirstTriage
-
-Semgrep runs first to triage, then LLM deep-dives on flagged areas. Supports parallel execution for the LLM phase.
-
-```python
-class SASTFirstStrategy(ScanStrategy):
-    def name(self) -> str:
-        return "sast_first"
-
-    def run(self, target, model, tools, config) -> StrategyOutput:
-        # Phase 1: Run Semgrep unconditionally
-        semgrep_tool = SemgrepTool(target.repo_path)
-        sast_results = semgrep_tool.run_full_scan()
-
-        if not sast_results:
-            return StrategyOutput(
-                findings=[], pre_dedup_count=0, post_dedup_count=0, dedup_log=[]
-            )
-
-        by_file: dict[str, list[SASTMatch]] = defaultdict(list)
-        for match in sast_results:
-            by_file[match.file_path].append(match)
-
-        system_prompt = build_system_prompt(self._base_system_prompt(), config)
-        tasks = []
-        file_paths = []
-        for file_path, matches in by_file.items():
-            file_content = target.read_file(file_path)
-            sast_summary = self._format_sast_matches(matches)
-            tasks.append({
-                "system_prompt": system_prompt,
-                "user_message": f"""
-Semgrep flagged the following issues in {file_path}.
-Confirm, reject, or escalate each. Also look for issues Semgrep missed.
-
-SAST findings:
-{sast_summary}
-
-File content:
-```
-{file_content}
-```
-{FINDING_OUTPUT_FORMAT}
-""",
-                "max_turns": config.get("max_turns_per_file", 25),
-            })
-            file_paths.append(file_path)
-
-        outputs = run_subagents(tasks, model, tools, parallel=config.get("parallel", False))
-        all_findings = []
-        for file_path, raw_output in zip(file_paths, outputs):
-            findings = FindingParser().parse(
-                raw_output, experiment_id=..., produced_by=f"sast_first:{file_path}"
-            )
-            all_findings.extend(findings)
-
-        # No dedup — each file processed once
-        return StrategyOutput(
-            findings=all_findings,
-            pre_dedup_count=len(all_findings),
-            post_dedup_count=len(all_findings),
-            dedup_log=[],
-        )
-```
-
-**Important**: Semgrep always runs in Phase 1 (it is the triage mechanism). The `tool_variant` dimension controls whether the LLM in Phase 2 has additional tool access for cross-file context.
-
-### 7.10 Strategy 5: DiffReview
-
-Reviews a diff (simulating PR-time review) rather than the full codebase.
-
-```python
-class DiffReviewStrategy(ScanStrategy):
-    """
-    Simulates PR-time review. Requires a diff_spec.yaml in the dataset
-    that specifies base_ref and head_ref.
-
-    The agent receives:
-    - The unified diff between base and head
-    - Full file content for each changed file (for context)
-    - Access to the full repo via tools (if tool_variant = WITH_TOOLS)
-
-    Findings are expected to focus on the changed code. The evaluator can
-    use the introduced_in_diff label field to measure whether the model
-    correctly distinguishes new vs pre-existing issues.
-    """
-
-    def name(self) -> str:
-        return "diff_review"
-
-    def run(self, target, model, tools, config) -> StrategyOutput:
-        diff_spec = target.load_diff_spec()  # raises if no diff_spec.yaml
-        diff_text = target.get_diff(diff_spec.base_ref, diff_spec.head_ref)
-        changed_files = target.get_changed_files(diff_spec.base_ref, diff_spec.head_ref)
-
-        system_prompt = build_system_prompt(self._base_system_prompt(), config)
-
-        # Build context: diff + full content of changed files
-        file_context = ""
-        for fp in changed_files:
-            content = target.read_file(fp)
-            file_context += f"\n--- {fp} (full file) ---\n{content}\n"
-
-        user_message = f"""
-You are reviewing a code change (pull request). Focus your security analysis
-on the changed code, but consider the full file context for understanding.
-
-Flag issues in three categories:
-- Bugs introduced by this change
-- Pre-existing bugs in the touched files that should be addressed
-- Bugs in unchanged code that interact with the changes
-
-Unified diff:
-```diff
-{diff_text}
-```
-
-Full content of changed files:
-{file_context}
-
-Use your tools to read any other files needed for context.
-{FINDING_OUTPUT_FORMAT}
-"""
-        raw_output = run_agentic_loop(
-            model, tools, system_prompt, user_message,
-            max_turns=config.get("max_turns", 60)
-        )
-        findings = FindingParser().parse(
-            raw_output, experiment_id=..., produced_by="diff_review"
-        )
-        return StrategyOutput(
-            findings=findings,
-            pre_dedup_count=len(findings),
-            post_dedup_count=len(findings),
-            dedup_log=[],
-        )
-```
-
-If a dataset has no `diff_spec.yaml`, the runner skips `DIFF_REVIEW` for that dataset and logs a warning.
+`OrchestrationShape` is an enum carried by every `UserStrategy` for backward-compatible deserialization of historical `BundleSnapshot`/`ExperimentRun` rows. New code must not branch on this value. The runner ignores it — all strategies are executed identically through `run_strategy`.
 
 ---
 
