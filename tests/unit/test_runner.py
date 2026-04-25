@@ -506,8 +506,9 @@ class TestWorkerDispatch:
             from sec_review_framework.strategies.runner import run_strategy as rs
 
             rs(strategy, FakeTarget(), ScriptedLiteLLMProvider([]), ToolRegistry())
-            # mock_run is patched at module level; rs is already imported
-            # so just verify _should_use_new_runner returns True
+            # The `from ... import run_strategy` inside the `if` branch is re-executed
+            # on each call, so patching the module path makes the imported name resolve
+            # to the mock.
             assert mock_run.call_count == 1
 
     def test_legacy_path_taken_when_flag_false(self) -> None:

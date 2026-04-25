@@ -52,6 +52,7 @@ callers do not need to import pydantic-ai just to catch errors.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from collections.abc import Callable
 from typing import TYPE_CHECKING
@@ -303,8 +304,11 @@ def _build_default_deps(
                 subagent_strategies[role] = registry.get(role)
             except KeyError:
                 pass  # Missing roles handled at runtime via ModelRetry
-    except Exception:
-        pass  # Registry unavailable — deps still valid, just empty strategies
+    except Exception as e:
+        logging.warning(
+            "Failed to load strategy registry; subagent dispatch will treat all roles as unknown: %s",
+            e,
+        )
 
     return SubagentDeps(
         depth=0,
