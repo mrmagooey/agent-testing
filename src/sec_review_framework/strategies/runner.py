@@ -1,6 +1,6 @@
 """Unified parent-agent runner for pydantic-ai–backed strategies.
 
-This module is the **Phase 2/3b** implementation of the unified runner described
+This module is the **Phase 4** implementation of the unified runner described
 in ``plan_subagents_pydantic_ai.md`` § 7.  It provides a single entry-point,
 :func:`run_strategy`, that builds a pydantic-ai :class:`~pydantic_ai.Agent`
 from a :class:`~sec_review_framework.data.strategy_bundle.UserStrategy` and
@@ -10,23 +10,10 @@ Contract
 --------
 - Requires the ``agent`` extra (pydantic-ai).  Workers that run without the
   ``agent`` extra must NOT import this module at top-level.  The import is
-  deferred inside the feature-flag branch in :mod:`~sec_review_framework.worker`.
-- All existing :class:`~sec_review_framework.strategies.base.ScanStrategy`
-  subclasses are untouched.  Strategies that do NOT set ``use_new_runner=True``
-  continue to go through the legacy ``_SHAPE_TO_STRATEGY`` dispatch in
-  ``worker.py``.  Phase 3 migrates the five built-in shapes; Phase 4 deletes
-  the old code paths.
-- ``output_type`` is always ``list[Finding]`` in Phase 2/3b.  Richer per-strategy
-  schemas (e.g. ``ReviewSummary``) are deferred to Phase 3.
-
-Feature-flag mechanism
-----------------------
-:class:`~sec_review_framework.data.strategy_bundle.UserStrategy` carries a
-``use_new_runner: bool = False`` field with ``exclude=True`` so it is not
-persisted to the DB and does not affect the content-hash ID.  The worker
-reads this flag at runtime; if ``True`` it calls :func:`run_strategy`
-(importing this module lazily); if ``False`` it falls through to the legacy
-dispatch.
+  deferred lazily inside :mod:`~sec_review_framework.worker`.
+- This is the ONLY dispatch path since Phase 4; the legacy ``ScanStrategy``
+  subclasses and ``_SHAPE_TO_STRATEGY`` dispatch have been deleted.
+- ``output_type`` is ``list[Finding]``.
 
 Subagent injection
 ------------------
@@ -125,8 +112,7 @@ def run_strategy(
     ----------
     strategy:
         The :class:`~sec_review_framework.data.strategy_bundle.UserStrategy`
-        to execute.  Must have ``use_new_runner=True`` (the worker checks this
-        before calling; the runner itself does not enforce it).
+        to execute.
     target:
         The target codebase.  Passed to ``strategy.default.user_prompt_template``
         via ``target.get_file_tree()`` (with fallback to ``list_source_files()``).
@@ -166,11 +152,8 @@ def run_strategy(
 
     Notes
     -----
-    - Existing strategies still use their ``ScanStrategy.run()`` implementation
-      until Phase 3 migrates them.  Do NOT call this function for strategies
-      whose ``use_new_runner`` flag is ``False``.
-    - ``output_type=list[Finding]`` is hard-coded in Phase 2.  Richer schemas
-      come in Phase 3.
+    - This is the only dispatch path since Phase 4.
+    - ``output_type=list[Finding]`` is used for all strategies.
     """
     bundle = strategy.default
 

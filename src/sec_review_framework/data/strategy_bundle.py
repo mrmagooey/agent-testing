@@ -24,6 +24,14 @@ from sec_review_framework.data.findings import VulnClass
 
 
 class OrchestrationShape(str, Enum):
+    """Enum tag carried by every UserStrategy.
+
+    Deprecated (Phase 4): new code should not branch on this value; runner.py
+    treats all UserStrategies uniformly via run_strategy(). Enum members are
+    kept for backward-compatible deserialization of historical BundleSnapshot /
+    ExperimentRun rows — do not remove them.
+    """
+
     SINGLE_AGENT = "single_agent"
     PER_FILE = "per_file"
     PER_VULN_CLASS = "per_vuln_class"
@@ -123,12 +131,6 @@ class UserStrategy(BaseModel):
     overrides: list[OverrideRule] = []
     created_at: datetime
     is_builtin: bool = False
-
-    # Phase-2 temporary toggle: opt this strategy into the new pydantic-ai
-    # runner (``run_strategy()`` in ``strategies/runner.py``).  This field is
-    # NOT persisted to the DB (``exclude=True``) and does NOT affect the
-    # content-hash ID.  Phase 4 removes it once all strategies migrate.
-    use_new_runner: bool = Field(default=False, exclude=True)
 
     @model_validator(mode="after")
     def _validate_overrides(self) -> "UserStrategy":
