@@ -1,5 +1,7 @@
 """Experiment worker — entry point for K8s Job pods."""
 
+from __future__ import annotations
+
 import argparse
 import json
 import os
@@ -9,30 +11,27 @@ import tempfile
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
+if TYPE_CHECKING:
+    from sec_review_framework.data.strategy_bundle import UserStrategy
+
+from sec_review_framework.cost.calculator import CostCalculator
 from sec_review_framework.data.experiment import (
     BundleSnapshot,
     ExperimentRun,
     RunResult,
     RunStatus,
-    StrategyName,
     ToolExtension,
     VerificationVariant,
 )
 from sec_review_framework.data.findings import StrategyOutput
-from sec_review_framework.models.litellm_provider import LiteLLMProvider
-from sec_review_framework.tools.registry import ToolRegistryFactory
-from sec_review_framework.cost.calculator import CostCalculator
 from sec_review_framework.evaluation.evaluator import FileLevelEvaluator
 from sec_review_framework.ground_truth.models import TargetCodebase
-from sec_review_framework.verification.verifier import LLMVerifier
+from sec_review_framework.models.litellm_provider import LiteLLMProvider
 from sec_review_framework.reporting.markdown import MarkdownReportGenerator
-from sec_review_framework.strategies.single_agent import SingleAgentStrategy
-from sec_review_framework.strategies.per_file import PerFileStrategy
-from sec_review_framework.strategies.per_vuln_class import PerVulnClassStrategy
-from sec_review_framework.strategies.sast_first import SASTFirstStrategy
-from sec_review_framework.strategies.diff_review import DiffReviewStrategy
-from sec_review_framework.data.strategy_bundle import OrchestrationShape
+from sec_review_framework.tools.registry import ToolRegistryFactory
+from sec_review_framework.verification.verifier import LLMVerifier
 
 
 class ModelProviderFactory:
@@ -58,7 +57,7 @@ def get_enabled_extensions() -> frozenset[ToolExtension]:
 
 def check_tool_extension_superset(
     run_id: str,
-    strategy: "UserStrategy",  # type: ignore[name-defined]
+    strategy: UserStrategy,
     enabled: frozenset[ToolExtension],
 ) -> None:
     """Raise RuntimeError if the strategy requires extensions not enabled on this pod.
@@ -103,48 +102,6 @@ def check_tool_extension_superset(
         )
 
 
-_SHAPE_TO_STRATEGY = {
-    OrchestrationShape.SINGLE_AGENT: SingleAgentStrategy,
-    OrchestrationShape.PER_FILE: PerFileStrategy,
-    OrchestrationShape.PER_VULN_CLASS: PerVulnClassStrategy,
-    OrchestrationShape.SAST_FIRST: SASTFirstStrategy,
-    OrchestrationShape.DIFF_REVIEW: DiffReviewStrategy,
-}
-
-
-def _should_use_new_runner(user_strategy: "UserStrategy") -> bool:  # type: ignore[name-defined]
-    """Return True when *user_strategy* should use the pydantic-ai runner.
-
-    Phase-2 temporary gate: reads the ``use_new_runner`` flag on the strategy.
-    This field is ``exclude=True`` so it is never persisted; callers set it
-    at construction time to opt in.  Phase 4 removes this function and makes
-    ``run_strategy()`` the only path.
-
-    The import of ``runner.py`` must happen inside the caller's if-branch, not
-    here, so workers without the ``agent`` extra can still import ``worker.py``.
-    """
-    return getattr(user_strategy, "use_new_runner", False)
-
-
-class StrategyFactory:
-    """Legacy factory kept for backwards-compatibility with tests that patch it.
-
-    New code should use :func:`_dispatch_strategy` or the orchestration-shape
-    dispatch map directly.
-    """
-
-    def create(self, strategy_name: StrategyName):
-        mapping = {
-            StrategyName.SINGLE_AGENT: SingleAgentStrategy,
-            StrategyName.PER_FILE: PerFileStrategy,
-            StrategyName.PER_VULN_CLASS: PerVulnClassStrategy,
-            StrategyName.SAST_FIRST: SASTFirstStrategy,
-            StrategyName.DIFF_REVIEW: DiffReviewStrategy,
-        }
-        cls = mapping.get(strategy_name)
-        if cls is None:
-            raise ValueError(f"Unknown strategy: {strategy_name}")
-        return cls()
 
 
 def _load_user_strategy(strategy_id: str, bundle_json: str = ""):
@@ -278,23 +235,13 @@ class ExperimentWorker:
             )
 
             # ------------------------------------------------------------------
-            # Dispatch to the concrete strategy implementation
+            # Dispatch to the strategy runner (pydantic-ai)
             # ------------------------------------------------------------------
-            if _should_use_new_runner(user_strategy):
-                # Lazy import so workers without the "agent" extra can still
-                # import worker.py cleanly.  The agent extra is MUTUALLY
-                # EXCLUSIVE with the worker extra (semgrep/otel conflicts).
-                from sec_review_framework.strategies.runner import run_strategy
-                strategy_output = run_strategy(user_strategy, target, model, tools)
-            else:
-                shape = user_strategy.orchestration_shape
-                strategy_cls = _SHAPE_TO_STRATEGY.get(shape)
-                if strategy_cls is None:
-                    raise ValueError(
-                        f"No strategy implementation for orchestration_shape={shape!r}"
-                    )
-                strategy_impl = strategy_cls()
-                strategy_output = strategy_impl.run(target, model, tools, user_strategy)
+            # Lazy import so workers without the "agent" extra can still
+            # import worker.py cleanly.  The agent extra is MUTUALLY
+            # EXCLUSIVE with the worker extra (semgrep/otel conflicts).
+            from sec_review_framework.strategies.runner import run_strategy
+            strategy_output = run_strategy(user_strategy, target, model, tools)
             candidates = strategy_output.findings
 
             verification_variant = VerificationVariant(user_strategy.default.verification)
@@ -347,12 +294,13 @@ class ExperimentWorker:
         if user_strategy is not None:
             bundle_snapshot = BundleSnapshot.capture(user_strategy)
         else:
+            from datetime import datetime as _dt
+
             from sec_review_framework.data.strategy_bundle import (
                 OrchestrationShape,
                 StrategyBundleDefault,
                 UserStrategy,
             )
-            from datetime import datetime as _dt
             _stub_strategy = UserStrategy(
                 id=run.strategy_id,
                 name="<load failed>",
