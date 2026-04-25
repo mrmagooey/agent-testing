@@ -40,7 +40,7 @@ worker = [
 agent = [
     # pydantic-ai is used by agent-mode harnesses (coordinator-side).
     # mcp>=1.25 is compatible with both worker and agent extras.
-    "pydantic-ai>=0.3",
+    "pydantic-ai>=1.87,<2.0",
     "mcp>=1.25",
 ]
 dev = [
