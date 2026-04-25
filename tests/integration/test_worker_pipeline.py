@@ -246,12 +246,14 @@ def test_worker_failed_strategy_captured(datasets_dir, tmp_path):
     def _fake_create_model(self, model_id, model_config):  # noqa: ANN001
         return fake
 
-    # Patch the SingleAgentStrategy.run to raise an error
+    # Patch run_strategy to raise an error
     output_dir = tmp_path / "output" / run.id
 
     with patch.object(ModelProviderFactory, "create", _fake_create_model):
-        from sec_review_framework.strategies.single_agent import SingleAgentStrategy
-        with patch.object(SingleAgentStrategy, "run", side_effect=RuntimeError("Strategy deliberately failed")):
+        with patch(
+            "sec_review_framework.strategies.runner.run_strategy",
+            side_effect=RuntimeError("Strategy deliberately failed"),
+        ):
             worker = ExperimentWorker()
             worker.run(run, output_dir, datasets_dir)
 
@@ -281,11 +283,10 @@ def test_worker_creates_output_dir(base_run, datasets_dir, tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_worker_dispatches_builtin_single_agent(datasets_dir, tmp_path):
-    """Worker with builtin.single_agent strategy_id constructs SingleAgentStrategy."""
-    from unittest.mock import patch, MagicMock
-    from sec_review_framework.worker import ModelProviderFactory, _SHAPE_TO_STRATEGY
-    from sec_review_framework.data.strategy_bundle import OrchestrationShape
-    from sec_review_framework.strategies.single_agent import SingleAgentStrategy
+    """Worker with builtin.single_agent strategy_id calls run_strategy."""
+    from unittest.mock import patch
+    from sec_review_framework.worker import ModelProviderFactory
+    from sec_review_framework.data.findings import StrategyOutput
 
     run = ExperimentRun(
         id="test-dispatch_builtin.single_agent",
@@ -306,22 +307,21 @@ def test_worker_dispatches_builtin_single_agent(datasets_dir, tmp_path):
     )
 
     dispatched = []
+    _empty_output = StrategyOutput(findings=[], pre_dedup_count=0, post_dedup_count=0, dedup_log=[])
 
-    original_run = SingleAgentStrategy.run
-
-    def spy_run(self, *args, **kwargs):
-        dispatched.append(type(self).__name__)
-        return original_run(self, *args, **kwargs)
+    def spy_run_strategy(strategy, target, model, tools):
+        dispatched.append(strategy.id)
+        return _empty_output
 
     output_dir = tmp_path / "output" / run.id
 
     with patch.object(ModelProviderFactory, "create", lambda self, mid, mkw: fake):
-        with patch.object(SingleAgentStrategy, "run", spy_run):
+        with patch("sec_review_framework.strategies.runner.run_strategy", spy_run_strategy):
             worker = ExperimentWorker()
             worker.run(run, output_dir, datasets_dir)
 
-    assert dispatched == ["SingleAgentStrategy"], (
-        f"Expected SingleAgentStrategy to be dispatched, got {dispatched}"
+    assert dispatched == ["builtin.single_agent"], (
+        f"Expected builtin.single_agent to be dispatched via run_strategy, got {dispatched}"
     )
 
 

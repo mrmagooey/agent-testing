@@ -5,8 +5,9 @@ Tests cover:
 - Builds an Agent with tools + inject tools when subagents=[<id>].
 - Returns a StrategyOutput with non-None findings.
 - Translates UnexpectedModelBehavior to RunnerError.
-- _should_use_new_runner() gate in worker.py.
-- Feature-flag dispatch: use_new_runner=True routes to run_strategy(); False routes legacy.
+
+Note: _should_use_new_runner() and use_new_runner feature-flag tests were
+removed in Phase 4 — run_strategy() is now the only dispatch path.
 
 Skipped cleanly when the ``agent`` extra (pydantic-ai) is not installed.
 """
@@ -40,7 +41,6 @@ from sec_review_framework.strategies.runner import (  # noqa: E402
     run_strategy,
 )
 from sec_review_framework.tools.registry import ToolRegistry  # noqa: E402
-from sec_review_framework.worker import _should_use_new_runner  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -98,7 +98,6 @@ def _make_finding_data(**overrides: Any) -> dict[str, Any]:
 
 def _make_strategy(
     *,
-    use_new_runner: bool = True,
     subagents: list[str] | None = None,
     strategy_id: str = "unit.test",
 ) -> UserStrategy:
@@ -122,7 +121,6 @@ def _make_strategy(
         overrides=[],
         created_at=datetime(2026, 1, 1),
         is_builtin=False,
-        use_new_runner=use_new_runner,
     )
 
 
@@ -527,75 +525,3 @@ class TestBuildUserPrompt:
         assert "app/views.py" in prompt
 
 
-# ---------------------------------------------------------------------------
-# Tests: feature flag — _should_use_new_runner
-# ---------------------------------------------------------------------------
-
-
-class TestFeatureFlag:
-    """Tests for the _should_use_new_runner worker gate."""
-
-    def test_returns_true_when_flag_set(self) -> None:
-        strategy = _make_strategy(use_new_runner=True)
-        assert _should_use_new_runner(strategy) is True
-
-    def test_returns_false_by_default(self) -> None:
-        strategy = _make_strategy(use_new_runner=False)
-        assert _should_use_new_runner(strategy) is False
-
-    def test_returns_false_for_legacy_strategy_without_field(self) -> None:
-        """Strategies that pre-date use_new_runner must return False via getattr."""
-
-        class LegacyStrategyStub:
-            """Stub without use_new_runner attribute (simulates pre-Phase 2 object)."""
-            pass
-
-        stub = LegacyStrategyStub()
-        assert _should_use_new_runner(stub) is False  # type: ignore[arg-type]
-
-    def test_flag_not_in_serialised_json(self) -> None:
-        """use_new_runner must not appear in model_dump_json (exclude=True)."""
-        strategy = _make_strategy(use_new_runner=True)
-        serialised = strategy.model_dump_json()
-        assert "use_new_runner" not in serialised
-
-    def test_flag_not_in_model_dump(self) -> None:
-        strategy = _make_strategy(use_new_runner=True)
-        d = strategy.model_dump()
-        assert "use_new_runner" not in d
-
-
-# ---------------------------------------------------------------------------
-# Tests: feature-flag dispatch in worker
-# ---------------------------------------------------------------------------
-
-
-class TestWorkerDispatch:
-    """Verify worker dispatch routes correctly based on use_new_runner flag."""
-
-    def test_new_runner_path_called_when_flag_true(self) -> None:
-        """When use_new_runner=True, worker calls run_strategy()."""
-        strategy = _make_strategy(use_new_runner=True)
-        fake_output = StrategyOutput(
-            findings=[], pre_dedup_count=0, post_dedup_count=0, dedup_log=[]
-        )
-
-        with mock.patch(
-            "sec_review_framework.strategies.runner.run_strategy",
-            return_value=fake_output,
-        ) as mock_run:
-            # Import the lazy-import path — simulate the worker dispatch
-            # We directly test _should_use_new_runner + the lazy import branch logic
-            assert _should_use_new_runner(strategy) is True
-            from sec_review_framework.strategies.runner import run_strategy as rs
-
-            rs(strategy, FakeTarget(), ScriptedLiteLLMProvider([]), ToolRegistry())
-            # The `from ... import run_strategy` inside the `if` branch is re-executed
-            # on each call, so patching the module path makes the imported name resolve
-            # to the mock.
-            assert mock_run.call_count == 1
-
-    def test_legacy_path_taken_when_flag_false(self) -> None:
-        """When use_new_runner=False, _should_use_new_runner returns False."""
-        strategy = _make_strategy(use_new_runner=False)
-        assert _should_use_new_runner(strategy) is False

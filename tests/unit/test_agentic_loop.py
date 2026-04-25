@@ -1,4 +1,9 @@
-"""Tests for run_agentic_loop, run_subagents, and build_system_prompt (common.py)."""
+"""Tests for run_agentic_loop and build_system_prompt (common.py).
+
+Note: run_subagents was removed in Phase 4. run_agentic_loop is kept for
+verification/verifier.py which runs a synchronous verification pass outside
+the pydantic-ai runner context.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +13,6 @@ from sec_review_framework.models.base import ModelResponse
 from sec_review_framework.strategies.common import (
     build_system_prompt,
     run_agentic_loop,
-    run_subagents,
 )
 from sec_review_framework.tools.registry import Tool, ToolDefinition, ToolRegistry
 from tests.conftest import FakeModelProvider
@@ -193,74 +197,3 @@ def test_build_system_prompt_no_profile_key_returns_base_unchanged():
     assert result == "base only"
 
 
-# ---------------------------------------------------------------------------
-# run_subagents tests
-# ---------------------------------------------------------------------------
-
-
-def _make_tasks(n: int = 2) -> list[dict]:
-    return [{"key": None, "user_message": f"msg-{i}"} for i in range(n)]
-
-
-def _make_bundle_strategy(system_prompt: str = "sys", max_turns: int = 5):
-    from datetime import datetime
-
-    from sec_review_framework.data.strategy_bundle import (
-        OrchestrationShape,
-        StrategyBundleDefault,
-        UserStrategy,
-    )
-
-    return UserStrategy(
-        id="test.single",
-        name="Test",
-        parent_strategy_id=None,
-        orchestration_shape=OrchestrationShape.SINGLE_AGENT,
-        default=StrategyBundleDefault(
-            system_prompt=system_prompt,
-            user_prompt_template="{repo_summary}{finding_output_format}",
-            profile_modifier="",
-            model_id="fake",
-            tools=frozenset(),
-            verification="none",
-            max_turns=max_turns,
-            tool_extensions=frozenset(),
-        ),
-        overrides=[],
-        created_at=datetime(2026, 1, 1),
-    )
-
-
-def test_run_subagents_sequential_calls_in_order():
-    """parallel=False executes tasks sequentially; results match task order."""
-    responses = [
-        ModelResponse(content=f"output-{i}", tool_calls=[], input_tokens=5,
-                      output_tokens=5, model_id="fake", raw={})
-        for i in range(3)
-    ]
-    model = FakeModelProvider(responses)
-    registry = _make_registry()
-
-    strategy = _make_bundle_strategy()
-    results = run_subagents(_make_tasks(3), model, registry, parallel=False, strategy=strategy)
-    assert results == ["output-0", "output-1", "output-2"]
-
-
-def test_run_subagents_parallel_clones_tools_fresh_audit_log():
-    """parallel=True clones the tool registry per subagent (fresh audit logs)."""
-    responses = [
-        ModelResponse(content="result", tool_calls=[], input_tokens=5,
-                      output_tokens=5, model_id="fake", raw={})
-        for _ in range(2)
-    ]
-    model = FakeModelProvider(responses)
-
-    echo = EchoTool(name="echo")
-    registry = _make_registry(echo)
-
-    strategy = _make_bundle_strategy()
-    # Run two parallel tasks; they should complete without sharing audit log state.
-    results = run_subagents(_make_tasks(2), model, registry, parallel=True, max_workers=2, strategy=strategy)
-    assert len(results) == 2
-    # Original registry audit log should be untouched (clones were used).
-    assert len(registry.audit_log.entries) == 0

@@ -117,7 +117,6 @@ def _make_strategy(
         overrides=[],
         created_at=datetime(2026, 1, 1),
         is_builtin=False,
-        use_new_runner=True,
     )
 
 
