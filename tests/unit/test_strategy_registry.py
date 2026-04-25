@@ -156,7 +156,11 @@ def test_top_level_builtins_have_no_parent():
     DO carry a parent_strategy_id; those are excluded from this check.
     """
     registry = load_default_registry()
-    subagent_ids = {"builtin_v2.file_reviewer", "builtin_v2.triage_agent"}
+    # Dynamically derive the set of subagent IDs (those with a parent_strategy_id)
+    # This ensures the test survives future additions (Phase 3c, etc.)
+    subagent_ids = {
+        s.id for s in registry.list_all() if s.parent_strategy_id is not None
+    }
     for strategy in registry.list_all():
         if strategy.id not in subagent_ids:
             assert strategy.parent_strategy_id is None, (
