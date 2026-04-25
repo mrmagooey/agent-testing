@@ -11,9 +11,7 @@ from pathlib import Path
 
 from sec_review_framework.data.strategy_bundle import (
     OrchestrationShape,
-    OverrideRule,
     StrategyBundleDefault,
-    StrategyBundleOverride,
     UserStrategy,
 )
 
@@ -78,10 +76,20 @@ def _read(path: Path) -> str:
 
 
 def seed_builtins(registry: StrategyRegistry) -> None:
-    """Construct the 5 builtin UserStrategy objects and register them."""
+    """Construct the 5 builtin UserStrategy objects and register them.
+
+    All five strategies use the pydantic-ai runner (runner.py). The legacy
+    ScanStrategy subclasses were removed in Phase 4.
+
+    ID migration (Phase 4): ``builtin.<shape>`` IDs now refer to the v2
+    (pydantic-ai) implementations. Legacy ScanStrategy-based implementations
+    have been deleted. Any existing DB rows referencing ``builtin.<shape>``
+    will resolve to the new implementations — this is intentional, as parity
+    tests confirmed equivalence.
+    """
 
     # ------------------------------------------------------------------
-    # builtin.single_agent
+    # builtin.single_agent — pydantic-ai runner (Phase 3)
     # ------------------------------------------------------------------
     registry.register(
         UserStrategy(
@@ -106,100 +114,7 @@ def seed_builtins(registry: StrategyRegistry) -> None:
     )
 
     # ------------------------------------------------------------------
-    # builtin.per_file
-    # ------------------------------------------------------------------
-    registry.register(
-        UserStrategy(
-            id="builtin.per_file",
-            name="Per File (builtin)",
-            parent_strategy_id=None,
-            orchestration_shape=OrchestrationShape.PER_FILE,
-            default=StrategyBundleDefault(
-                system_prompt=_read(_SYSTEM_DIR / "per_file.txt"),
-                user_prompt_template=_read(_USER_DIR / "per_file.txt"),
-                profile_modifier="",
-                model_id=_DEFAULT_MODEL_ID,
-                tools=_DEFAULT_TOOLS,
-                verification=_DEFAULT_VERIFICATION,
-                max_turns=20,
-                tool_extensions=_DEFAULT_TOOL_EXTENSIONS,
-            ),
-            overrides=[],
-            created_at=_CREATED_AT,
-            is_builtin=True,
-        )
-    )
-
-    # ------------------------------------------------------------------
-    # builtin.per_vuln_class
-    #
-    # No top-level system/per_vuln_class.txt exists; each subagent's
-    # system_prompt comes from system/per_vuln_class/{vuln_class}.txt.
-    # The default system_prompt is left empty (the per-class overrides
-    # carry the actual prompts).
-    # ------------------------------------------------------------------
-    pvc_dir = _SYSTEM_DIR / "per_vuln_class"
-    pvc_overrides: list[OverrideRule] = []
-    for txt_file in sorted(pvc_dir.glob("*.txt")):
-        vuln_class_name = txt_file.stem  # e.g. "sqli", "xss"
-        pvc_overrides.append(
-            OverrideRule(
-                key=vuln_class_name,
-                override=StrategyBundleOverride(
-                    system_prompt=txt_file.read_text(encoding="utf-8").strip(),
-                ),
-            )
-        )
-
-    registry.register(
-        UserStrategy(
-            id="builtin.per_vuln_class",
-            name="Per Vuln Class (builtin)",
-            parent_strategy_id=None,
-            orchestration_shape=OrchestrationShape.PER_VULN_CLASS,
-            default=StrategyBundleDefault(
-                system_prompt="",
-                user_prompt_template=_read(_USER_DIR / "per_vuln_class.txt"),
-                profile_modifier="",
-                model_id=_DEFAULT_MODEL_ID,
-                tools=_DEFAULT_TOOLS,
-                verification=_DEFAULT_VERIFICATION,
-                max_turns=40,
-                tool_extensions=_DEFAULT_TOOL_EXTENSIONS,
-            ),
-            overrides=pvc_overrides,
-            created_at=_CREATED_AT,
-            is_builtin=True,
-        )
-    )
-
-    # ------------------------------------------------------------------
-    # builtin.sast_first
-    # ------------------------------------------------------------------
-    registry.register(
-        UserStrategy(
-            id="builtin.sast_first",
-            name="SAST First (builtin)",
-            parent_strategy_id=None,
-            orchestration_shape=OrchestrationShape.SAST_FIRST,
-            default=StrategyBundleDefault(
-                system_prompt=_read(_SYSTEM_DIR / "sast_first.txt"),
-                user_prompt_template=_read(_USER_DIR / "sast_first.txt"),
-                profile_modifier="",
-                model_id=_DEFAULT_MODEL_ID,
-                tools=_DEFAULT_TOOLS,
-                verification=_DEFAULT_VERIFICATION,
-                max_turns=25,
-                tool_extensions=_DEFAULT_TOOL_EXTENSIONS,
-            ),
-            overrides=[],
-            created_at=_CREATED_AT,
-            is_builtin=True,
-        )
-    )
-
-    # ------------------------------------------------------------------
-    # builtin.diff_review
+    # builtin.diff_review — pydantic-ai runner (Phase 3)
     # ------------------------------------------------------------------
     registry.register(
         UserStrategy(
@@ -223,67 +138,14 @@ def seed_builtins(registry: StrategyRegistry) -> None:
         )
     )
 
-
     # ------------------------------------------------------------------
-    # builtin_v2.single_agent — parent-agent runner (Phase 3)
-    # ------------------------------------------------------------------
-    registry.register(
-        UserStrategy(
-            id="builtin_v2.single_agent",
-            name="Single Agent v2 (builtin)",
-            parent_strategy_id=None,
-            orchestration_shape=OrchestrationShape.SINGLE_AGENT,
-            default=StrategyBundleDefault(
-                system_prompt=_read(_SYSTEM_DIR / "single_agent.txt"),
-                user_prompt_template=_read(_USER_DIR / "single_agent.txt"),
-                profile_modifier="",
-                model_id=_DEFAULT_MODEL_ID,
-                tools=_DEFAULT_TOOLS,
-                verification=_DEFAULT_VERIFICATION,
-                max_turns=80,
-                tool_extensions=_DEFAULT_TOOL_EXTENSIONS,
-            ),
-            overrides=[],
-            created_at=_CREATED_AT,
-            is_builtin=True,
-            use_new_runner=True,
-        )
-    )
-
-    # ------------------------------------------------------------------
-    # builtin_v2.diff_review — parent-agent runner (Phase 3)
+    # builtin.file_reviewer — subagent invoked by builtin.per_file
     # ------------------------------------------------------------------
     registry.register(
         UserStrategy(
-            id="builtin_v2.diff_review",
-            name="Diff Review v2 (builtin)",
-            parent_strategy_id=None,
-            orchestration_shape=OrchestrationShape.DIFF_REVIEW,
-            default=StrategyBundleDefault(
-                system_prompt=_read(_SYSTEM_DIR / "diff_review.txt"),
-                user_prompt_template=_read(_USER_DIR / "diff_review.txt"),
-                profile_modifier="",
-                model_id=_DEFAULT_MODEL_ID,
-                tools=_DEFAULT_TOOLS,
-                verification=_DEFAULT_VERIFICATION,
-                max_turns=60,
-                tool_extensions=_DEFAULT_TOOL_EXTENSIONS,
-            ),
-            overrides=[],
-            created_at=_CREATED_AT,
-            is_builtin=True,
-            use_new_runner=True,
-        )
-    )
-
-    # ------------------------------------------------------------------
-    # builtin_v2.file_reviewer — subagent invoked by builtin_v2.per_file
-    # ------------------------------------------------------------------
-    registry.register(
-        UserStrategy(
-            id="builtin_v2.file_reviewer",
+            id="builtin.file_reviewer",
             name="File Reviewer subagent (builtin)",
-            parent_strategy_id="builtin_v2.per_file",
+            parent_strategy_id="builtin.per_file",
             orchestration_shape=OrchestrationShape.SINGLE_AGENT,
             default=StrategyBundleDefault(
                 system_prompt=_read(_SYSTEM_DIR / "file_reviewer.txt"),
@@ -303,42 +165,41 @@ def seed_builtins(registry: StrategyRegistry) -> None:
     )
 
     # ------------------------------------------------------------------
-    # builtin_v2.per_file — parent-agent runner (Phase 3b)
+    # builtin.per_file — pydantic-ai runner (Phase 3b)
     # ------------------------------------------------------------------
     registry.register(
         UserStrategy(
-            id="builtin_v2.per_file",
-            name="Per File v2 (builtin)",
+            id="builtin.per_file",
+            name="Per File (builtin)",
             parent_strategy_id=None,
             orchestration_shape=OrchestrationShape.PER_FILE,
             default=StrategyBundleDefault(
-                system_prompt=_read(_SYSTEM_DIR / "per_file_v2.txt"),
-                user_prompt_template=_read(_USER_DIR / "per_file_v2.txt"),
+                system_prompt=_read(_SYSTEM_DIR / "per_file.txt"),
+                user_prompt_template=_read(_USER_DIR / "per_file.txt"),
                 profile_modifier="",
                 model_id=_DEFAULT_MODEL_ID,
                 tools=_DEFAULT_TOOLS,
                 verification=_DEFAULT_VERIFICATION,
                 max_turns=20,
                 tool_extensions=_DEFAULT_TOOL_EXTENSIONS,
-                subagents=["builtin_v2.file_reviewer"],
+                subagents=["builtin.file_reviewer"],
             ),
             overrides=[],
             created_at=_CREATED_AT,
             is_builtin=True,
-            use_new_runner=True,
         )
     )
 
     # ------------------------------------------------------------------
-    # builtin_v2.*_specialist — 16 specialist subagents for per_vuln_class
+    # builtin.*_specialist — 16 specialist subagents for per_vuln_class
     #
     # One per VulnClass enum value.  Each specialist:
     #   - uses the existing per-class system prompt from
     #     prompts/system/per_vuln_class/{vuln_class}.txt
     #   - uses a shared user prompt template from
     #     prompts/user/per_vuln_class/specialist.txt
-    #   - has parent_strategy_id="builtin_v2.per_vuln_class"
-    #   - has no use_new_runner flag (dispatched via _run_child_sync)
+    #   - has parent_strategy_id="builtin.per_vuln_class"
+    #   - dispatched via _run_child_sync, not worker.py
     # ------------------------------------------------------------------
     from sec_review_framework.data.findings import VulnClass  # local import to avoid circular
 
@@ -347,13 +208,13 @@ def seed_builtins(registry: StrategyRegistry) -> None:
     )
 
     for _vc in VulnClass:
-        _specialist_id = f"builtin_v2.{_vc.value}_specialist"
+        _specialist_id = f"builtin.{_vc.value}_specialist"
         _system_prompt = _read(_SYSTEM_DIR / "per_vuln_class" / f"{_vc.value}.txt")
         registry.register(
             UserStrategy(
                 id=_specialist_id,
                 name=f"{_vc.value.replace('_', ' ').title()} Specialist subagent (builtin)",
-                parent_strategy_id="builtin_v2.per_vuln_class",
+                parent_strategy_id="builtin.per_vuln_class",
                 orchestration_shape=OrchestrationShape.SINGLE_AGENT,
                 default=StrategyBundleDefault(
                     system_prompt=_system_prompt,
@@ -373,7 +234,7 @@ def seed_builtins(registry: StrategyRegistry) -> None:
         )
 
     # ------------------------------------------------------------------
-    # builtin_v2.per_vuln_class — parent-agent runner (Phase 3c)
+    # builtin.per_vuln_class — pydantic-ai runner (Phase 3c)
     #
     # Dispatches all 16 specialists via invoke_subagent (one call per role).
     # dispatch_fallback="programmatic" ensures missing specialists are invoked
@@ -381,17 +242,17 @@ def seed_builtins(registry: StrategyRegistry) -> None:
     # lifeline for benchmarking.
     # ------------------------------------------------------------------
     _pvc_specialist_ids = [
-        f"builtin_v2.{vc.value}_specialist" for vc in VulnClass
+        f"builtin.{vc.value}_specialist" for vc in VulnClass
     ]
     registry.register(
         UserStrategy(
-            id="builtin_v2.per_vuln_class",
-            name="Per Vuln Class v2 (builtin)",
+            id="builtin.per_vuln_class",
+            name="Per Vuln Class (builtin)",
             parent_strategy_id=None,
             orchestration_shape=OrchestrationShape.PER_VULN_CLASS,
             default=StrategyBundleDefault(
-                system_prompt=_read(_SYSTEM_DIR / "per_vuln_class_v2.txt"),
-                user_prompt_template=_read(_USER_DIR / "per_vuln_class_v2.txt"),
+                system_prompt=_read(_SYSTEM_DIR / "per_vuln_class.txt"),
+                user_prompt_template=_read(_USER_DIR / "per_vuln_class.txt"),
                 profile_modifier="",
                 model_id=_DEFAULT_MODEL_ID,
                 tools=_DEFAULT_TOOLS,
@@ -404,18 +265,17 @@ def seed_builtins(registry: StrategyRegistry) -> None:
             overrides=[],
             created_at=_CREATED_AT,
             is_builtin=True,
-            use_new_runner=True,
         )
     )
 
     # ------------------------------------------------------------------
-    # builtin_v2.triage_agent — subagent invoked by builtin_v2.sast_first
+    # builtin.triage_agent — subagent invoked by builtin.sast_first
     # ------------------------------------------------------------------
     registry.register(
         UserStrategy(
-            id="builtin_v2.triage_agent",
+            id="builtin.triage_agent",
             name="Triage Agent subagent (builtin)",
-            parent_strategy_id="builtin_v2.sast_first",
+            parent_strategy_id="builtin.sast_first",
             orchestration_shape=OrchestrationShape.SINGLE_AGENT,
             default=StrategyBundleDefault(
                 system_prompt=_read(_SYSTEM_DIR / "triage_agent.txt"),
@@ -435,35 +295,34 @@ def seed_builtins(registry: StrategyRegistry) -> None:
     )
 
     # ------------------------------------------------------------------
-    # builtin_v2.sast_first — parent-agent runner (Phase 3b)
+    # builtin.sast_first — pydantic-ai runner (Phase 3b)
     # ------------------------------------------------------------------
     registry.register(
         UserStrategy(
-            id="builtin_v2.sast_first",
-            name="SAST First v2 (builtin)",
+            id="builtin.sast_first",
+            name="SAST First (builtin)",
             parent_strategy_id=None,
             orchestration_shape=OrchestrationShape.SAST_FIRST,
             default=StrategyBundleDefault(
-                system_prompt=_read(_SYSTEM_DIR / "sast_first_v2.txt"),
-                user_prompt_template=_read(_USER_DIR / "sast_first_v2.txt"),
+                system_prompt=_read(_SYSTEM_DIR / "sast_first.txt"),
+                user_prompt_template=_read(_USER_DIR / "sast_first.txt"),
                 profile_modifier="",
                 model_id=_DEFAULT_MODEL_ID,
                 tools=_DEFAULT_TOOLS,
                 verification=_DEFAULT_VERIFICATION,
                 max_turns=25,
                 tool_extensions=_DEFAULT_TOOL_EXTENSIONS,
-                subagents=["builtin_v2.triage_agent"],
+                subagents=["builtin.triage_agent"],
             ),
             overrides=[],
             created_at=_CREATED_AT,
             is_builtin=True,
-            use_new_runner=True,
         )
     )
 
 
 def load_default_registry() -> StrategyRegistry:
-    """Return a new StrategyRegistry seeded with the 5 builtin strategies."""
+    """Return a new StrategyRegistry seeded with the builtin strategies."""
     registry = StrategyRegistry()
     seed_builtins(registry)
     return registry
