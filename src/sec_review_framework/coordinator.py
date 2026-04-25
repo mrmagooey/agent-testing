@@ -1728,28 +1728,58 @@ class ExperimentCoordinator:
     async def list_datasets(self) -> list[dict]:
         return await self.db.list_datasets()
 
+    async def rematerialize_dataset(self, name: str) -> dict:
+        """Re-materialize a dataset and return its updated materialized_at timestamp.
+
+        Propagates HTTPException (404 / 409) raised by materialize_dataset.
+        Wraps unexpected exceptions as HTTP 502.
+        """
+        try:
+            await self.materialize_dataset(name)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Dataset rehydration failed: {exc}",
+            ) from exc
+        row = await self.db.get_dataset(name)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"unknown dataset {name}")
+        return {"materialized_at": row["materialized_at"]}
+
     async def materialize_dataset(self, name: str) -> None:
-        """Clone (or re-materialize) a dataset onto disk and stamp materialized_at."""
+        """Clone (or re-materialize) a dataset onto disk and stamp materialized_at.
+
+        For ``kind='git'``: clones the repo if absent; skips if the repo
+        directory already exists (idempotent for recursive base-dataset calls
+        during derived dataset materialization).
+        For ``kind='derived'``: materializes the base if absent, checks
+        templates_version, then replays the injection recipe.
+        """
         row = await self.db.get_dataset(name)
         if row is None:
             raise HTTPException(status_code=404, detail=f"unknown dataset {name}")
         target_repo_dir = self.storage_root / "datasets" / name / "repo"
         if row["kind"] == "git":
-            target_repo_dir.parent.mkdir(parents=True, exist_ok=True)
-            subprocess.run(
-                ["git", "clone", "--depth=10", row["origin_url"], str(target_repo_dir)],
-                check=True,
-                capture_output=True,
-            )
-            if row.get("origin_commit"):
+            if not target_repo_dir.exists():
+                target_repo_dir.parent.mkdir(parents=True, exist_ok=True)
                 subprocess.run(
-                    ["git", "checkout", row["origin_commit"]],
-                    cwd=target_repo_dir,
+                    ["git", "clone", "--depth=10", row["origin_url"], str(target_repo_dir)],
                     check=True,
                     capture_output=True,
                 )
+                if row.get("origin_commit"):
+                    subprocess.run(
+                        ["git", "checkout", row["origin_commit"]],
+                        cwd=target_repo_dir,
+                        check=True,
+                        capture_output=True,
+                    )
         elif row["kind"] == "derived":
-            await self.materialize_dataset(row["base_dataset"])
+            base_repo_dir_check = self.storage_root / "datasets" / row["base_dataset"] / "repo"
+            if not base_repo_dir_check.exists():
+                await self.materialize_dataset(row["base_dataset"])
             recipe = json.loads(row["recipe_json"])
             if recipe.get("templates_version") != self.templates_version:
                 raise HTTPException(
@@ -2425,6 +2455,7 @@ class ExperimentCoordinator:
                     self.storage_root,
                     tmp_path,
                     conflict_policy=conflict_policy,
+                    materialize=self.materialize_dataset,
                 )
             except BundleConflictError as exc:
                 raise HTTPException(status_code=409, detail=str(exc))
@@ -3534,6 +3565,18 @@ async def inject_vuln(dataset_name: str, req: dict) -> dict:
     """Inject a vulnerability from a template into a dataset."""
     label = await coordinator.inject_vuln(dataset_name, req)
     return {"label_id": label.id, "file_path": label.file_path}
+
+
+@app.post("/datasets/{dataset_name}/rematerialize")
+async def rematerialize_dataset(dataset_name: str) -> dict:
+    """Re-clone or rebuild a dataset repo and refresh materialized_at.
+
+    Returns ``{"materialized_at": <iso-ts>}`` on success.
+    404 if the dataset row does not exist.
+    409 if a derived dataset's templates_version does not match the target.
+    502 on clone / network failure.
+    """
+    return await coordinator.rematerialize_dataset(dataset_name)
 
 
 @app.get("/datasets/{dataset_name}/labels")
