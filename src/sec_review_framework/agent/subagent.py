@@ -135,6 +135,10 @@ class SubagentDeps:
     available_roles: set[str] = field(default_factory=set)
     subagent_strategies: dict[str, UserStrategy] = field(default_factory=dict)
     tool_registry: ToolRegistry = field(default_factory=ToolRegistry)
+    # Audit log of invoke_subagent_batch calls: list of (role, inputs) tuples.
+    # Populated by the invoke_subagent_batch tool; read by the dispatch validator
+    # in runner.py after agent.run_sync() returns.
+    batch_call_log: list[tuple[str, list[dict[str, Any]]]] = field(default_factory=list)
 
     def child_deps(self) -> SubagentDeps:
         """Return a new :class:`SubagentDeps` for a child invocation.
@@ -165,6 +169,8 @@ class SubagentDeps:
             available_roles=set(self.available_roles),
             subagent_strategies=dict(self.subagent_strategies),
             tool_registry=self.tool_registry.clone(),
+            # Child gets its own call log; parent's batch_call_log is not shared.
+            batch_call_log=[],
         )
 
 
@@ -258,8 +264,22 @@ def _run_child_sync(
         tools=tool_callables,
     )
 
-    # Convert input_data to a user message string
-    user_message = json.dumps(input_data) if isinstance(input_data, dict) else str(input_data)
+    # Format the child's user_prompt_template with the input_data dict.
+    # Unknown placeholders are left as-is (via a defaultdict-style fallback).
+    user_prompt_template = bundle.user_prompt_template
+    if user_prompt_template and isinstance(input_data, dict):
+        from sec_review_framework.strategies.common import FINDING_OUTPUT_FORMAT
+
+        class _Missing(dict):
+            def __missing__(self, key: str) -> str:
+                return "{" + key + "}"
+
+        ctx_map = _Missing(finding_output_format=FINDING_OUTPUT_FORMAT)
+        ctx_map.update(input_data)
+        user_message = user_prompt_template.format_map(ctx_map)
+    else:
+        # Fallback: JSON-encode the input dict
+        user_message = json.dumps(input_data) if isinstance(input_data, dict) else str(input_data)
 
     # Run synchronously — this is called from a ThreadPoolExecutor worker thread
     result = asyncio.run(child_agent.run(user_message, deps=child_deps))
@@ -403,6 +423,9 @@ def make_invoke_subagent_batch_tool(
         # Total invocation cap
         _check_caps(ctx, count=len(inputs))
         deps.invocations += len(inputs)
+
+        # Record this call for the dispatch validator in runner.py
+        deps.batch_call_log.append((role, list(inputs)))
 
         strategy = deps.subagent_strategies[role]
 
