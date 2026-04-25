@@ -2342,12 +2342,18 @@ class ExperimentCoordinator:
         self,
         experiment_id: str,
         *,
-        include_datasets: bool = False,
+        dataset_mode: str = "descriptor",
     ) -> Path:
         """Build a .secrev.zip bundle and return its path.
 
         Delegates to ``bundle.async_write_bundle``.  The zip is written to
         ``storage_root/outputs/<id>/<id>.secrev.zip``.
+
+        Parameters
+        ----------
+        dataset_mode:
+            "descriptor" (default) — embed datasets.json + dataset_labels.json.
+            "reference"            — record names only in the manifest.
         """
         from sec_review_framework.bundle import async_write_bundle
 
@@ -2359,7 +2365,7 @@ class ExperimentCoordinator:
             self.db,
             self.storage_root,
             experiment_id,
-            include_datasets=include_datasets,
+            dataset_mode=dataset_mode,
             out_path=out_path,
         )
 
@@ -3288,16 +3294,29 @@ async def download_reports(experiment_id: str) -> FileResponse:
 @app.get("/experiments/{experiment_id}/export")
 async def export_experiment_bundle(
     experiment_id: str,
-    include_datasets: bool = False,
+    dataset_mode: str = "descriptor",
 ) -> FileResponse:
     """Export a portable .secrev.zip bundle for the given experiment.
 
-    The bundle includes DB rows, all run artifacts, and optionally
-    dataset repos/labels when ``include_datasets=true``.
+    The bundle includes DB rows, all run artifacts, and dataset metadata
+    depending on ``dataset_mode``:
+
+    - ``descriptor`` (default) — embed ``datasets.json`` + ``dataset_labels.json``
+    - ``reference`` — record dataset names only in the manifest
+
+    Passing ``dataset_mode=embedded`` returns 422.
     """
+    if dataset_mode not in ("reference", "descriptor"):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Invalid dataset_mode {dataset_mode!r}. "
+                "Must be one of: 'reference', 'descriptor'."
+            ),
+        )
     try:
         zip_path = await coordinator.export_experiment_bundle(
-            experiment_id, include_datasets=include_datasets
+            experiment_id, dataset_mode=dataset_mode
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
@@ -3323,7 +3342,8 @@ async def import_experiment_bundle(
 
     Returns:
       {experiment_id, renamed_from, runs_imported, runs_skipped,
-       datasets_missing, warnings, findings_indexed}
+       datasets_imported, datasets_rehydrated, datasets_missing,
+       dataset_labels_imported, warnings, findings_indexed}
 
     Gated by the ``IMPORT_ENABLED`` env var (default: true).
     """
