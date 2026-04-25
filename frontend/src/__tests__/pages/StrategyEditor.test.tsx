@@ -2,20 +2,22 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import StrategyEditor from '../../pages/StrategyEditor'
-import type { UserStrategy } from '../../api/client'
+import type { UserStrategy, StrategySummary } from '../../api/client'
 
 vi.mock('../../api/client', () => ({
   getStrategy: vi.fn(),
   createStrategy: vi.fn(),
   validateStrategy: vi.fn(),
   listToolExtensions: vi.fn(),
+  listStrategiesFull: vi.fn(),
 }))
 
-import { getStrategy, createStrategy, validateStrategy, listToolExtensions } from '../../api/client'
+import { getStrategy, createStrategy, validateStrategy, listToolExtensions, listStrategiesFull } from '../../api/client'
 const mockGetStrategy = vi.mocked(getStrategy)
 const mockCreateStrategy = vi.mocked(createStrategy)
 const mockValidateStrategy = vi.mocked(validateStrategy)
 const mockListToolExtensions = vi.mocked(listToolExtensions)
+const mockListStrategiesFull = vi.mocked(listStrategiesFull)
 
 function makeParentStrategy(overrides: Partial<UserStrategy> = {}): UserStrategy {
   return {
@@ -34,6 +36,12 @@ function makeParentStrategy(overrides: Partial<UserStrategy> = {}): UserStrategy
       verification: 'none',
       max_turns: 10,
       tool_extensions: [],
+      subagents: [],
+      max_subagent_depth: 3,
+      max_subagent_invocations: 100,
+      max_subagent_batch_size: 32,
+      dispatch_fallback: 'reprompt',
+      output_type_name: null,
     },
     overrides: [],
     ...overrides,
@@ -62,6 +70,25 @@ function renderForkEditor(id = 'builtin.single_agent') {
   )
 }
 
+function makeSampleRegistryStrategies(): StrategySummary[] {
+  return [
+    {
+      id: 'builtin.single_agent',
+      name: 'Single Agent',
+      orchestration_shape: 'single_agent',
+      is_builtin: true,
+      parent_strategy_id: null,
+    },
+    {
+      id: 'builtin.verifier',
+      name: 'Verifier',
+      orchestration_shape: 'single_agent',
+      is_builtin: true,
+      parent_strategy_id: null,
+    },
+  ]
+}
+
 describe('StrategyEditor — new strategy', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -69,6 +96,7 @@ describe('StrategyEditor — new strategy', () => {
       { key: 'tree_sitter', label: 'Tree-sitter', available: true },
       { key: 'lsp', label: 'LSP', available: true },
     ])
+    mockListStrategiesFull.mockResolvedValue(makeSampleRegistryStrategies())
     mockValidateStrategy.mockResolvedValue({ valid: true, errors: [] })
     mockCreateStrategy.mockResolvedValue({
       ...makeParentStrategy(),
@@ -301,6 +329,7 @@ describe('StrategyEditor — fork mode', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockListToolExtensions.mockResolvedValue([])
+    mockListStrategiesFull.mockResolvedValue([])
     mockValidateStrategy.mockResolvedValue({ valid: true, errors: [] })
   })
 
@@ -372,5 +401,181 @@ describe('StrategyEditor — fork mode', () => {
     await waitFor(() => {
       expect(screen.getByText(/Strategy not found/)).toBeVisible()
     })
+  })
+})
+
+// ─── Phase 6 tests ────────────────────────────────────────────────────────────
+
+describe('StrategyEditor — Phase 6 new fields', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockListToolExtensions.mockResolvedValue([])
+    mockListStrategiesFull.mockResolvedValue(makeSampleRegistryStrategies())
+    mockValidateStrategy.mockResolvedValue({ valid: true, errors: [] })
+    mockCreateStrategy.mockResolvedValue({
+      ...makeParentStrategy(),
+      id: 'user.test-abc123',
+      name: 'Test Strategy',
+      is_builtin: false,
+    })
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('renders subagents list from registry', async () => {
+    renderNewEditor()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('subagents-list')).toBeVisible()
+    })
+
+    // Both registry strategies should appear as checkboxes
+    expect(screen.getByTestId('subagent-checkbox-builtin.single_agent')).toBeInTheDocument()
+    expect(screen.getByTestId('subagent-checkbox-builtin.verifier')).toBeInTheDocument()
+  })
+
+  it('renders dispatch_fallback dropdown with default "reprompt"', async () => {
+    renderNewEditor()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('dispatch-fallback-select')).toBeVisible()
+    })
+
+    const select = screen.getByTestId('dispatch-fallback-select') as HTMLSelectElement
+    expect(select.value).toBe('reprompt')
+  })
+
+  it('renders output_type_name dropdown defaulting to empty (none)', async () => {
+    renderNewEditor()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('output-type-name-select')).toBeVisible()
+    })
+
+    const select = screen.getByTestId('output-type-name-select') as HTMLSelectElement
+    expect(select.value).toBe('')
+  })
+
+  it('renders subagent caps fields with default values', async () => {
+    renderNewEditor()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('max-subagent-depth-input')).toBeVisible()
+    })
+
+    expect((screen.getByTestId('max-subagent-depth-input') as HTMLInputElement).value).toBe('3')
+    expect((screen.getByTestId('max-subagent-invocations-input') as HTMLInputElement).value).toBe('100')
+    expect((screen.getByTestId('max-subagent-batch-size-input') as HTMLInputElement).value).toBe('32')
+  })
+
+  it('submitting with subagents includes new fields in payload', async () => {
+    renderNewEditor()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('name-input')).toBeVisible()
+    })
+
+    // Set name
+    fireEvent.change(screen.getByTestId('name-input'), { target: { value: 'Subagent Strategy' } })
+
+    // Select builtin.verifier as subagent
+    await waitFor(() => {
+      expect(screen.getByTestId('subagent-checkbox-builtin.verifier')).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByTestId('subagent-checkbox-builtin.verifier'))
+
+    // Set dispatch_fallback to 'none'
+    fireEvent.change(screen.getByTestId('dispatch-fallback-select'), { target: { value: 'none' } })
+
+    // Set output_type_name
+    fireEvent.change(screen.getByTestId('output-type-name-select'), { target: { value: 'finding_list' } })
+
+    fireEvent.click(screen.getByTestId('save-btn'))
+
+    await waitFor(() => {
+      expect(mockCreateStrategy).toHaveBeenCalled()
+    })
+
+    const callArg = mockCreateStrategy.mock.calls[0][0]
+    expect(callArg.default.subagents).toEqual(['builtin.verifier'])
+    expect(callArg.default.dispatch_fallback).toBe('none')
+    expect(callArg.default.output_type_name).toBe('finding_list')
+    expect(callArg.default.max_subagent_depth).toBeGreaterThan(0)
+    expect(callArg.default.max_subagent_invocations).toBeGreaterThan(0)
+    expect(callArg.default.max_subagent_batch_size).toBeGreaterThan(0)
+  })
+
+  it('selecting subagents shows caps-required hint message', async () => {
+    renderNewEditor()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('subagents-list')).toBeVisible()
+    })
+
+    // No hint before selection
+    expect(screen.queryByText(/caps fields below are required/)).toBeNull()
+
+    // Select a subagent
+    fireEvent.click(screen.getByTestId('subagent-checkbox-builtin.verifier'))
+
+    await waitFor(() => {
+      expect(screen.getByText(/caps fields below are required/)).toBeVisible()
+    })
+  })
+
+  it('no caps validation error when no subagents selected even with zero caps', async () => {
+    renderNewEditor()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('name-input')).toBeVisible()
+    })
+
+    fireEvent.change(screen.getByTestId('name-input'), { target: { value: 'No Subagents Strategy' } })
+
+    // Don't select any subagents; set depth to 0 (no error expected)
+    fireEvent.change(screen.getByTestId('max-subagent-depth-input'), { target: { value: '0' } })
+
+    fireEvent.click(screen.getByTestId('save-btn'))
+
+    await waitFor(() => {
+      expect(mockCreateStrategy).toHaveBeenCalled()
+    })
+
+    // No caps error shown
+    expect(screen.queryByText(/max_subagent_depth must be a positive integer/)).toBeNull()
+  })
+
+  it('dispatch_fallback options are reprompt, programmatic, none', async () => {
+    renderNewEditor()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('dispatch-fallback-select')).toBeVisible()
+    })
+
+    const select = screen.getByTestId('dispatch-fallback-select')
+    const options = Array.from(select.querySelectorAll('option')).map((o) => o.value)
+    expect(options).toContain('reprompt')
+    expect(options).toContain('programmatic')
+    expect(options).toContain('none')
+  })
+
+  it('output_type_name options include finding_list and verifier_verdict', async () => {
+    renderNewEditor()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('output-type-name-select')).toBeVisible()
+    })
+
+    const select = screen.getByTestId('output-type-name-select')
+    const options = Array.from(select.querySelectorAll('option')).map((o) => o.value)
+    expect(options).toContain('')
+    expect(options).toContain('finding_list')
+    expect(options).toContain('verifier_verdict')
+    expect(options).toContain('source_list')
+    expect(options).toContain('taint_path_list')
+    expect(options).toContain('sanitization_verdict')
+    expect(options).toContain('classifier_judgement_list')
   })
 })
