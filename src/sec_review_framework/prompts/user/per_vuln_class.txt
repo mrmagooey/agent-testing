@@ -1,8 +1,27 @@
-You are scanning this repository for {vuln_class} vulnerabilities only.
-Ignore all other vulnerability types.
+Scan the following repository for security vulnerabilities using all 16 specialist subagents.
 
 Repository structure:
 {repo_summary}
 
-Use your tools to read any files that might contain {vuln_class} issues.
+Dispatch each specialist subagent in turn using `invoke_subagent`:
+  - role: `sqli_specialist`,          input: {{"vuln_class": "sqli"}}
+  - role: `xss_specialist`,           input: {{"vuln_class": "xss"}}
+  - role: `ssrf_specialist`,          input: {{"vuln_class": "ssrf"}}
+  - role: `rce_specialist`,           input: {{"vuln_class": "rce"}}
+  - role: `idor_specialist`,          input: {{"vuln_class": "idor"}}
+  - role: `auth_bypass_specialist`,   input: {{"vuln_class": "auth_bypass"}}
+  - role: `crypto_misuse_specialist`, input: {{"vuln_class": "crypto_misuse"}}
+  - role: `hardcoded_secret_specialist`, input: {{"vuln_class": "hardcoded_secret"}}
+  - role: `path_traversal_specialist`,   input: {{"vuln_class": "path_traversal"}}
+  - role: `supply_chain_specialist`,     input: {{"vuln_class": "supply_chain"}}
+  - role: `memory_safety_specialist`,    input: {{"vuln_class": "memory_safety"}}
+  - role: `logic_bug_specialist`,        input: {{"vuln_class": "logic_bug"}}
+  - role: `deserialization_specialist`,  input: {{"vuln_class": "deserialization"}}
+  - role: `xxe_specialist`,              input: {{"vuln_class": "xxe"}}
+  - role: `open_redirect_specialist`,    input: {{"vuln_class": "open_redirect"}}
+  - role: `other_specialist`,            input: {{"vuln_class": "other"}}
+
+After all 16 specialists have returned results, collect every finding from
+every SubagentOutput and return the combined list as your final answer.
+
 {finding_output_format}
