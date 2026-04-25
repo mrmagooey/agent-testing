@@ -54,6 +54,24 @@ function makeMockXHR(): MockXHR {
   return xhr
 }
 
+// ─── Summary factory ─────────────────────────────────────────────────────────
+
+function makeSummary(overrides: Partial<ImportSummary> = {}): ImportSummary {
+  return {
+    experiment_id: 'exp-test',
+    renamed_from: null,
+    runs_imported: 1,
+    runs_skipped: 0,
+    datasets_imported: 0,
+    datasets_rehydrated: [],
+    datasets_missing: [],
+    dataset_labels_imported: 0,
+    warnings: [],
+    findings_indexed: 0,
+    ...overrides,
+  }
+}
+
 // ─── Render helper ───────────────────────────────────────────────────────────
 
 function renderPage() {
@@ -130,15 +148,11 @@ describe('ExperimentImport — upload progress', () => {
     const mockXhr = makeMockXHR()
     mockXhr.status = 200
 
-    const successSummary: ImportSummary = {
+    const successSummary: ImportSummary = makeSummary({
       experiment_id: 'exp-imported-1',
-      renamed_from: null,
       runs_imported: 5,
-      runs_skipped: 0,
-      datasets_missing: [],
-      warnings: [],
       findings_indexed: 42,
-    }
+    })
     mockXhr.responseText = JSON.stringify(successSummary)
 
     vi.spyOn(globalThis, 'XMLHttpRequest').mockImplementation(() => {
@@ -176,15 +190,12 @@ describe('ExperimentImport — success path', () => {
   it('renders summary card with experiment_id link and counts', async () => {
     const mockXhr = makeMockXHR()
     mockXhr.status = 200
-    const summary: ImportSummary = {
+    const summary: ImportSummary = makeSummary({
       experiment_id: 'exp-abc-123',
-      renamed_from: null,
       runs_imported: 7,
       runs_skipped: 2,
-      datasets_missing: [],
-      warnings: [],
       findings_indexed: 88,
-    }
+    })
     mockXhr.responseText = JSON.stringify(summary)
     let capturedXhr: MockXHR | null = null
 
@@ -222,15 +233,12 @@ describe('ExperimentImport — success path', () => {
   it('shows renamed_from notice when present', async () => {
     const mockXhr = makeMockXHR()
     mockXhr.status = 200
-    const summary: ImportSummary = {
+    const summary: ImportSummary = makeSummary({
       experiment_id: 'exp-abc-renamed',
       renamed_from: 'exp-original',
       runs_imported: 3,
-      runs_skipped: 0,
-      datasets_missing: [],
-      warnings: [],
       findings_indexed: 10,
-    }
+    })
     mockXhr.responseText = JSON.stringify(summary)
     let capturedXhr: MockXHR | null = null
 
@@ -257,18 +265,15 @@ describe('ExperimentImport — success path', () => {
     })
   })
 
-  it('renders dataset-missing chips when datasets_missing is non-empty', async () => {
+  it('renders dataset-missing chips (amber) when datasets_missing is non-empty', async () => {
     const mockXhr = makeMockXHR()
     mockXhr.status = 200
-    const summary: ImportSummary = {
+    const summary: ImportSummary = makeSummary({
       experiment_id: 'exp-missing-ds',
-      renamed_from: null,
       runs_imported: 2,
-      runs_skipped: 0,
       datasets_missing: ['cve-2024-001', 'cve-2024-002'],
-      warnings: [],
       findings_indexed: 5,
-    }
+    })
     mockXhr.responseText = JSON.stringify(summary)
     let capturedXhr: MockXHR | null = null
 
@@ -290,8 +295,90 @@ describe('ExperimentImport — success path', () => {
     })
 
     await waitFor(() => {
-      expect(screen.getByText('cve-2024-001')).toBeInTheDocument()
-      expect(screen.getByText('cve-2024-002')).toBeInTheDocument()
+      expect(screen.getByText(/cve-2024-001/)).toBeInTheDocument()
+      expect(screen.getByText(/cve-2024-002/)).toBeInTheDocument()
+    })
+
+    // Chips should be amber-colored (not available label)
+    const chips = screen.getAllByTestId('chip-missing')
+    expect(chips).toHaveLength(2)
+    expect(chips[0]).toHaveClass('bg-amber-100')
+  })
+
+  it('renders rehydrated chips (green) when datasets_rehydrated is non-empty', async () => {
+    const mockXhr = makeMockXHR()
+    mockXhr.status = 200
+    const summary: ImportSummary = makeSummary({
+      experiment_id: 'exp-rehydrated-ds',
+      runs_imported: 3,
+      datasets_rehydrated: ['cve-2023-1234', 'cve-2023-5678'],
+      findings_indexed: 10,
+    })
+    mockXhr.responseText = JSON.stringify(summary)
+    let capturedXhr: MockXHR | null = null
+
+    vi.spyOn(globalThis, 'XMLHttpRequest').mockImplementation(() => {
+      capturedXhr = mockXhr
+      return mockXhr as unknown as XMLHttpRequest
+    })
+
+    renderPage()
+
+    const dropzone = screen.getByRole('button', { name: /drop zone/i })
+    fireEvent.drop(dropzone, {
+      dataTransfer: { files: [new File(['data'], 'test.secrev.zip', { type: 'application/zip' })] },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /upload/i }))
+
+    await act(async () => {
+      capturedXhr!._triggerLoad()
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText(/cve-2023-1234/)).toBeInTheDocument()
+      expect(screen.getByText(/cve-2023-5678/)).toBeInTheDocument()
+    })
+
+    const chips = screen.getAllByTestId('chip-rehydrated')
+    expect(chips).toHaveLength(2)
+    expect(chips[0]).toHaveClass('bg-green-100')
+  })
+
+  it('renders datasets_imported and dataset_labels_imported counts', async () => {
+    const mockXhr = makeMockXHR()
+    mockXhr.status = 200
+    const summary: ImportSummary = makeSummary({
+      experiment_id: 'exp-counts',
+      runs_imported: 1,
+      datasets_imported: 3,
+      dataset_labels_imported: 42,
+      findings_indexed: 5,
+    })
+    mockXhr.responseText = JSON.stringify(summary)
+    let capturedXhr: MockXHR | null = null
+
+    vi.spyOn(globalThis, 'XMLHttpRequest').mockImplementation(() => {
+      capturedXhr = mockXhr
+      return mockXhr as unknown as XMLHttpRequest
+    })
+
+    renderPage()
+
+    const dropzone = screen.getByRole('button', { name: /drop zone/i })
+    fireEvent.drop(dropzone, {
+      dataTransfer: { files: [new File(['data'], 'test.secrev.zip', { type: 'application/zip' })] },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /upload/i }))
+
+    await act(async () => {
+      capturedXhr!._triggerLoad()
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText(/datasets imported/i)).toBeInTheDocument()
+      expect(screen.getByText('3')).toBeInTheDocument()
+      expect(screen.getByText(/dataset labels imported/i)).toBeInTheDocument()
+      expect(screen.getByText('42')).toBeInTheDocument()
     })
   })
 })

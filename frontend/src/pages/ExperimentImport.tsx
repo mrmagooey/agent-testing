@@ -213,18 +213,55 @@ export default function ExperimentImport() {
             </div>
           </div>
 
+          {(summary.datasets_imported > 0 || summary.dataset_labels_imported > 0) && (
+            <div className="space-y-1 text-sm text-gray-700 dark:text-gray-300">
+              {summary.datasets_imported > 0 && (
+                <div>
+                  <span className="font-medium">Datasets imported: </span>
+                  {summary.datasets_imported}
+                </div>
+              )}
+              {summary.dataset_labels_imported > 0 && (
+                <div>
+                  <span className="font-medium">Dataset labels imported: </span>
+                  {summary.dataset_labels_imported}
+                </div>
+              )}
+            </div>
+          )}
+
+          {summary.datasets_rehydrated && summary.datasets_rehydrated.length > 0 && (
+            <div className="space-y-1">
+              <p className="text-xs font-semibold text-green-700 dark:text-green-400 uppercase tracking-wide">
+                Rehydrated datasets
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {summary.datasets_rehydrated.map((ds) => (
+                  <span
+                    key={ds}
+                    className="px-2 py-0.5 rounded-full bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 text-xs font-mono"
+                    data-testid="chip-rehydrated"
+                  >
+                    Rehydrated: {ds}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
           {summary.datasets_missing.length > 0 && (
             <div className="space-y-1">
               <p className="text-xs font-semibold text-amber-700 dark:text-amber-400 uppercase tracking-wide">
-                Missing datasets
+                Datasets not available
               </p>
               <div className="flex flex-wrap gap-2">
                 {summary.datasets_missing.map((ds) => (
                   <span
                     key={ds}
                     className="px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900 text-amber-800 dark:text-amber-200 text-xs font-mono"
+                    data-testid="chip-missing"
                   >
-                    {ds}
+                    Not available: {ds}
                   </span>
                 ))}
               </div>

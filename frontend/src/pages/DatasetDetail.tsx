@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, Link } from 'react-router-dom'
 import {
   getFileTree,
   getLabels,
@@ -7,9 +7,13 @@ import {
   listTemplates,
   previewInjection,
   injectVuln,
+  getDataset,
+  rematerializeDataset,
+  ApiError,
   type Label,
   type FileTree as FileTreeData,
   type InjectionTemplate,
+  type DatasetRow,
 } from '../api/client'
 import Breadcrumbs from '../components/Breadcrumbs'
 import FileTree from '../components/FileTree'
@@ -19,6 +23,328 @@ import DiffViewer from '../components/DiffViewer'
 
 type InjectStep = 1 | 2 | 3 | 4 | 5
 
+// ─── Date formatting ──────────────────────────────────────────────────────────
+
+function formatDate(iso: string): string {
+  try {
+    return new Date(iso).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+    })
+  } catch {
+    return iso
+  }
+}
+
+// ─── Copy button ──────────────────────────────────────────────────────────────
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false)
+  const handleCopy = async () => {
+    await navigator.clipboard.writeText(text)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1500)
+  }
+  return (
+    <button
+      onClick={handleCopy}
+      title="Copy to clipboard"
+      className="ml-1 text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors"
+      data-testid="copy-button"
+    >
+      {copied ? '✓' : '⎘'}
+    </button>
+  )
+}
+
+// ─── Recipe summary ───────────────────────────────────────────────────────────
+
+interface RecipeApp {
+  template_id?: string
+  target_file?: string
+  seed?: string | number
+}
+
+interface RecipeData {
+  templates_version?: string
+  applications?: RecipeApp[]
+}
+
+function RecipeSummary({ recipeJson }: { recipeJson: string }) {
+  let recipe: RecipeData = {}
+  try {
+    recipe = JSON.parse(recipeJson) as RecipeData
+  } catch {
+    return <p className="text-xs text-red-500">Invalid recipe JSON</p>
+  }
+  const apps = recipe.applications ?? []
+  return (
+    <div className="space-y-1">
+      {recipe.templates_version && (
+        <p className="text-xs text-gray-500 dark:text-gray-400">
+          Templates version:{' '}
+          <span className="font-mono text-gray-800 dark:text-gray-200">{recipe.templates_version}</span>
+        </p>
+      )}
+      <p className="text-xs text-gray-500 dark:text-gray-400">
+        Applications: <span className="font-mono text-gray-800 dark:text-gray-200">{apps.length}</span>
+      </p>
+      {apps.length > 0 && (
+        <details className="mt-1">
+          <summary className="text-xs text-amber-600 dark:text-amber-400 cursor-pointer hover:underline">
+            Show applications
+          </summary>
+          <div className="mt-2 max-h-48 overflow-y-auto rounded border border-gray-200 dark:border-gray-700 text-xs font-mono divide-y divide-gray-100 dark:divide-gray-700">
+            {apps.map((app, idx) => (
+              <div key={idx} className="px-3 py-1.5 flex flex-col gap-0.5">
+                <span className="text-amber-700 dark:text-amber-400">{app.template_id ?? '—'}</span>
+                <span className="text-gray-500 dark:text-gray-400">{app.target_file ?? '—'}</span>
+                {app.seed !== undefined && (
+                  <span className="text-gray-400 dark:text-gray-500">seed: {app.seed}</span>
+                )}
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+    </div>
+  )
+}
+
+// ─── Origin card ──────────────────────────────────────────────────────────────
+
+function OriginCard({
+  dataset,
+  onMaterialized,
+}: {
+  dataset: DatasetRow
+  onMaterialized: (at: string) => void
+}) {
+  const [materializing, setMaterializing] = useState(false)
+  const [materializeError, setMaterializeError] = useState<string | null>(null)
+  const [localMaterializedAt, setLocalMaterializedAt] = useState(dataset.materialized_at)
+
+  const handleMaterialize = async () => {
+    setMaterializing(true)
+    setMaterializeError(null)
+    try {
+      const result = await rematerializeDataset(dataset.name)
+      setLocalMaterializedAt(result.materialized_at)
+      onMaterialized(result.materialized_at)
+    } catch (err) {
+      if (err instanceof ApiError) {
+        setMaterializeError(err.message)
+      } else {
+        setMaterializeError('Materialization failed. Please try again.')
+      }
+    } finally {
+      setMaterializing(false)
+    }
+  }
+
+  return (
+    <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 space-y-4">
+      <h2 className="font-semibold text-sm">
+        {dataset.kind === 'git' ? 'Git origin' : 'Derived from'}
+      </h2>
+
+      {dataset.kind === 'git' ? (
+        <div className="space-y-2 text-sm">
+          {dataset.origin_url && (
+            <div className="flex items-center gap-2">
+              <span className="text-gray-500 dark:text-gray-400 w-28 shrink-0">URL</span>
+              {/^https?:\/\//.test(dataset.origin_url) ? (
+                <a
+                  href={dataset.origin_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-mono text-amber-600 dark:text-amber-400 hover:underline break-all"
+                >
+                  {dataset.origin_url}
+                </a>
+              ) : (
+                <span className="font-mono text-gray-800 dark:text-gray-200 break-all">
+                  {dataset.origin_url}
+                </span>
+              )}
+            </div>
+          )}
+          {dataset.origin_commit && (
+            <div className="flex items-center gap-2">
+              <span className="text-gray-500 dark:text-gray-400 w-28 shrink-0">Commit</span>
+              <span className="font-mono text-gray-800 dark:text-gray-200">
+                {dataset.origin_commit.slice(0, 12)}
+                <CopyButton text={dataset.origin_commit} />
+              </span>
+            </div>
+          )}
+          {dataset.origin_ref && (
+            <div className="flex items-center gap-2">
+              <span className="text-gray-500 dark:text-gray-400 w-28 shrink-0">Ref</span>
+              <span className="text-xs text-gray-500 dark:text-gray-400 font-mono">{dataset.origin_ref}</span>
+            </div>
+          )}
+          {dataset.cve_id && (
+            <div className="flex items-center gap-2">
+              <span className="text-gray-500 dark:text-gray-400 w-28 shrink-0">CVE</span>
+              <Link
+                to={`/cve-discovery?id=${encodeURIComponent(dataset.cve_id)}`}
+                className="px-2 py-0.5 rounded-full bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200 text-xs font-mono hover:bg-red-200 dark:hover:bg-red-800 transition-colors"
+              >
+                {dataset.cve_id}
+              </Link>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="space-y-2 text-sm">
+          {dataset.base_dataset && (
+            <div className="flex items-center gap-2">
+              <span className="text-gray-500 dark:text-gray-400 w-28 shrink-0">Base dataset</span>
+              <Link
+                to={`/datasets/${encodeURIComponent(dataset.base_dataset)}`}
+                className="font-mono text-amber-600 dark:text-amber-400 hover:underline"
+              >
+                {dataset.base_dataset}
+              </Link>
+            </div>
+          )}
+          {dataset.recipe_json && (
+            <div>
+              <p className="text-gray-500 dark:text-gray-400 mb-1">Recipe</p>
+              <RecipeSummary recipeJson={dataset.recipe_json} />
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Timestamps */}
+      <div className="border-t border-gray-100 dark:border-gray-700 pt-3 space-y-1 text-xs text-gray-500 dark:text-gray-400">
+        <div className="flex gap-2">
+          <span className="w-28 shrink-0">Created</span>
+          <span>{formatDate(dataset.created_at)}</span>
+        </div>
+        <div className="flex gap-2">
+          <span className="w-28 shrink-0">Materialized</span>
+          <span>{localMaterializedAt ? formatDate(localMaterializedAt) : '—'}</span>
+        </div>
+      </div>
+
+      {/* Materialization banner */}
+      {localMaterializedAt === null && (
+        <div className="rounded-lg border border-yellow-300 dark:border-yellow-700 bg-yellow-50 dark:bg-yellow-950/30 px-4 py-3 space-y-2">
+          <p className="text-sm text-yellow-800 dark:text-yellow-200">
+            This dataset is not currently materialized on this deployment.
+          </p>
+          <button
+            onClick={handleMaterialize}
+            disabled={materializing}
+            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-yellow-600 hover:bg-yellow-700 text-white text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            data-testid="materialize-btn"
+          >
+            {materializing && (
+              <svg className="animate-spin h-3 w-3" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+              </svg>
+            )}
+            {materializing ? 'Materializing…' : 'Materialize now'}
+          </button>
+          {materializeError && (
+            <p
+              role="alert"
+              className="text-xs text-red-700 dark:text-red-300"
+              data-testid="materialize-error"
+            >
+              {materializeError}
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Labels filter bar ────────────────────────────────────────────────────────
+
+interface LabelFilters {
+  cwe: string
+  severity: string
+  source: string
+}
+
+function LabelsFilterBar({
+  filters,
+  onChange,
+}: {
+  filters: LabelFilters
+  onChange: (f: LabelFilters) => void
+}) {
+  return (
+    <div className="flex flex-wrap gap-3 mb-4">
+      <div className="flex items-center gap-1.5">
+        <label htmlFor="filter-cwe" className="text-xs font-medium text-gray-500 dark:text-gray-400">
+          CWE
+        </label>
+        <input
+          id="filter-cwe"
+          type="text"
+          placeholder="e.g. CWE-89"
+          value={filters.cwe}
+          onChange={(e) => onChange({ ...filters, cwe: e.target.value })}
+          className="text-xs rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-2 py-1 w-28"
+          data-testid="filter-cwe"
+        />
+      </div>
+      <div className="flex items-center gap-1.5">
+        <label htmlFor="filter-severity" className="text-xs font-medium text-gray-500 dark:text-gray-400">
+          Severity
+        </label>
+        <select
+          id="filter-severity"
+          value={filters.severity}
+          onChange={(e) => onChange({ ...filters, severity: e.target.value })}
+          className="text-xs rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-2 py-1"
+          data-testid="filter-severity"
+        >
+          <option value="">All</option>
+          <option value="critical">Critical</option>
+          <option value="high">High</option>
+          <option value="medium">Medium</option>
+          <option value="low">Low</option>
+          <option value="info">Info</option>
+        </select>
+      </div>
+      <div className="flex items-center gap-1.5">
+        <label htmlFor="filter-source" className="text-xs font-medium text-gray-500 dark:text-gray-400">
+          Source
+        </label>
+        <input
+          id="filter-source"
+          type="text"
+          placeholder="e.g. manual"
+          value={filters.source}
+          onChange={(e) => onChange({ ...filters, source: e.target.value })}
+          className="text-xs rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-2 py-1 w-28"
+          data-testid="filter-source"
+        />
+      </div>
+      {(filters.cwe || filters.severity || filters.source) && (
+        <button
+          onClick={() => onChange({ cwe: '', severity: '', source: '' })}
+          className="text-xs text-amber-600 dark:text-amber-400 hover:underline"
+          data-testid="filter-clear"
+        >
+          Clear filters
+        </button>
+      )}
+    </div>
+  )
+}
+
+// ─── Main page ────────────────────────────────────────────────────────────────
+
 export default function DatasetDetail() {
   const { name: datasetName } = useParams<{ name: string }>()
   const [tree, setTree] = useState<FileTreeData>({})
@@ -27,6 +353,10 @@ export default function DatasetDetail() {
   const [fileContent, setFileContent] = useState<{ content: string; language: string } | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [datasetRow, setDatasetRow] = useState<DatasetRow | null>(null)
+
+  // Labels filter state
+  const [labelFilters, setLabelFilters] = useState<LabelFilters>({ cwe: '', severity: '', source: '' })
 
   // Injection workflow
   const [injectStep, setInjectStep] = useState<InjectStep | null>(null)
@@ -38,16 +368,33 @@ export default function DatasetDetail() {
   const [injecting, setInjecting] = useState(false)
   const [injectSuccess, setInjectSuccess] = useState<string | null>(null)
 
+  // Initial load: tree + dataset row
   useEffect(() => {
     if (!datasetName) return
-    Promise.all([getFileTree(datasetName), getLabels(datasetName)])
-      .then(([t, l]) => {
+    Promise.all([
+      getFileTree(datasetName),
+      getDataset(datasetName).catch(() => null),
+    ])
+      .then(([t, ds]) => {
         setTree(t)
-        setLabels(l)
+        setDatasetRow(ds)
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false))
   }, [datasetName])
+
+  // Load labels whenever datasetName or filter state changes
+  useEffect(() => {
+    if (!datasetName) return
+    getLabels(datasetName, {
+      cwe: labelFilters.cwe || undefined,
+      severity: labelFilters.severity || undefined,
+      source: labelFilters.source || undefined,
+    })
+      .then(setLabels)
+      .catch(() => null)
+  }, [datasetName, labelFilters])
+
 
   useEffect(() => {
     if (!selectedFile || !datasetName) return
@@ -126,6 +473,10 @@ export default function DatasetDetail() {
     setInjectFile(null)
   }
 
+  const handleLabelFiltersChange = (f: LabelFilters) => {
+    setLabelFilters(f)
+  }
+
   if (loading) {
     return <div className="flex items-center justify-center h-64 text-gray-400">Loading dataset...</div>
   }
@@ -155,6 +506,14 @@ export default function DatasetDetail() {
         File tree, ground-truth labels, and code viewer for a single dataset.
         Inject synthetic vulnerabilities from templates to extend coverage beyond what the source already contains.
       </PageDescription>
+
+      {/* Origin card */}
+      {datasetRow && (
+        <OriginCard
+          dataset={datasetRow}
+          onMaterialized={(at) => setDatasetRow((prev) => prev ? { ...prev, materialized_at: at } : prev)}
+        />
+      )}
 
       {/* Two-panel layout */}
       <div className="grid lg:grid-cols-3 gap-4">
@@ -195,6 +554,9 @@ export default function DatasetDetail() {
       {/* Labels table */}
       <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
         <h2 className="font-semibold mb-4">Labels ({labels.length})</h2>
+
+        <LabelsFilterBar filters={labelFilters} onChange={handleLabelFiltersChange} />
+
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="text-gray-500 dark:text-gray-400">
@@ -212,6 +574,7 @@ export default function DatasetDetail() {
                 <tr
                   key={l.label_id}
                   onClick={() => setSelectedFile(l.file_path)}
+                  title={l.description}
                   className="cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
                 >
                   <td className="py-2 font-mono text-xs text-amber-600 dark:text-amber-400 max-w-xs truncate">

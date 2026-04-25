@@ -482,8 +482,45 @@ export function injectVuln(
   })
 }
 
-export function getLabels(datasetName: string): Promise<Label[]> {
-  return apiFetch<Label[]>(`/datasets/${encodeURIComponent(datasetName)}/labels`)
+export function getLabels(
+  datasetName: string,
+  filters?: { cwe?: string; severity?: string; source?: string },
+): Promise<Label[]> {
+  const qs = new URLSearchParams()
+  if (filters?.cwe) qs.set('cwe', filters.cwe)
+  if (filters?.severity) qs.set('severity', filters.severity)
+  if (filters?.source) qs.set('source', filters.source)
+  const query = qs.toString()
+  return apiFetch<Label[]>(
+    `/datasets/${encodeURIComponent(datasetName)}/labels${query ? `?${query}` : ''}`,
+  )
+}
+
+// ─── Dataset Detail & Rematerialization ───────────────────────────────────
+
+export interface DatasetRow {
+  name: string
+  kind: 'git' | 'derived'
+  origin_url: string | null
+  origin_commit: string | null
+  origin_ref: string | null
+  cve_id: string | null
+  base_dataset: string | null
+  recipe_json: string | null
+  metadata: Record<string, unknown>
+  created_at: string
+  materialized_at: string | null
+}
+
+export function getDataset(name: string): Promise<DatasetRow> {
+  return apiFetch<DatasetRow>(`/datasets/${encodeURIComponent(name)}`)
+}
+
+export function rematerializeDataset(name: string): Promise<{ materialized_at: string }> {
+  return apiFetch<{ materialized_at: string }>(
+    `/datasets/${encodeURIComponent(name)}/rematerialize`,
+    { method: 'POST' },
+  )
 }
 
 export function getFileTree(datasetName: string): Promise<FileTree> {
@@ -689,14 +726,17 @@ export interface ImportSummary {
   renamed_from: string | null
   runs_imported: number
   runs_skipped: number
+  datasets_imported: number
+  datasets_rehydrated: string[]
   datasets_missing: string[]
+  dataset_labels_imported: number
   warnings: string[]
   findings_indexed: number
 }
 
 /** Returns the export bundle download URL (no fetch — open in browser directly) */
-export function exportBundleUrl(experimentId: string, includeDatasets: boolean): string {
-  return `${BASE_URL}/experiments/${experimentId}/export?include_datasets=${includeDatasets}`
+export function exportBundleUrl(experimentId: string, datasetMode: 'reference' | 'descriptor' = 'descriptor'): string {
+  return `${BASE_URL}/experiments/${experimentId}/export?dataset_mode=${datasetMode}`
 }
 
 /**

@@ -6,8 +6,9 @@ import ExportMenu from '../../components/ExportMenu'
 
 vi.mock('../../api/client', () => ({
   downloadReports: vi.fn((experimentId: string) => `/api/experiments/${experimentId}/results/download`),
-  exportBundleUrl: vi.fn((experimentId: string, includeDatasets: boolean) =>
-    `/api/experiments/${experimentId}/export?include_datasets=${includeDatasets}`,
+  exportBundleUrl: vi.fn(
+    (experimentId: string, datasetMode: 'reference' | 'descriptor' = 'descriptor') =>
+      `/api/experiments/${experimentId}/export?dataset_mode=${datasetMode}`,
   ),
 }))
 
@@ -28,7 +29,6 @@ afterEach(() => {
 describe('ExportMenu', () => {
   it('renders the disclosure toggle button', () => {
     render(<ExportMenu experimentId="exp-1" />)
-    // The <summary> element acts as the disclosure toggle
     expect(screen.getByText(/download ▾/i)).toBeInTheDocument()
   })
 
@@ -53,7 +53,35 @@ describe('ExportMenu', () => {
     clickSpy.mockRestore()
   })
 
-  it('triggers a download with the export bundle URL when "Export full bundle" is clicked', () => {
+  it('opens the export dialog when "Export full bundle" is clicked', () => {
+    render(<ExportMenu experimentId="exp-99" />)
+    fireEvent.click(screen.getByTestId('export-bundle-btn'))
+
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /export full bundle/i })).toBeInTheDocument()
+  })
+
+  it('defaults to "descriptor" mode in the dialog', () => {
+    render(<ExportMenu experimentId="exp-99" />)
+    fireEvent.click(screen.getByTestId('export-bundle-btn'))
+
+    const descriptorRadio = screen.getByTestId('dataset-mode-radio-descriptor')
+    expect(descriptorRadio).toBeChecked()
+    const referenceRadio = screen.getByTestId('dataset-mode-radio-reference')
+    expect(referenceRadio).not.toBeChecked()
+  })
+
+  it('allows selecting "reference" mode', () => {
+    render(<ExportMenu experimentId="exp-99" />)
+    fireEvent.click(screen.getByTestId('export-bundle-btn'))
+
+    fireEvent.click(screen.getByTestId('dataset-mode-radio-reference'))
+
+    expect(screen.getByTestId('dataset-mode-radio-reference')).toBeChecked()
+    expect(screen.getByTestId('dataset-mode-radio-descriptor')).not.toBeChecked()
+  })
+
+  it('calls exportBundleUrl with descriptor mode by default and triggers download', () => {
     let capturedHref = ''
     const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
       this: HTMLAnchorElement,
@@ -63,10 +91,45 @@ describe('ExportMenu', () => {
 
     render(<ExportMenu experimentId="exp-99" />)
     fireEvent.click(screen.getByTestId('export-bundle-btn'))
+    fireEvent.click(screen.getByTestId('export-dialog-confirm'))
 
-    expect(exportBundleUrl).toHaveBeenCalledWith('exp-99', false)
+    expect(exportBundleUrl).toHaveBeenCalledWith('exp-99', 'descriptor')
     expect(capturedHref).toContain('exp-99')
     expect(capturedHref).toContain('export')
+    clickSpy.mockRestore()
+  })
+
+  it('calls exportBundleUrl with reference mode when selected', () => {
+    let capturedHref = ''
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      capturedHref = this.href
+    })
+
+    render(<ExportMenu experimentId="exp-99" />)
+    fireEvent.click(screen.getByTestId('export-bundle-btn'))
+    fireEvent.click(screen.getByTestId('dataset-mode-radio-reference'))
+    fireEvent.click(screen.getByTestId('export-dialog-confirm'))
+
+    expect(exportBundleUrl).toHaveBeenCalledWith('exp-99', 'reference')
+    expect(capturedHref).toContain('dataset_mode=reference')
+    clickSpy.mockRestore()
+  })
+
+  it('uses descriptor mode URL which contains dataset_mode=descriptor', () => {
+    let capturedHref = ''
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      capturedHref = this.href
+    })
+
+    render(<ExportMenu experimentId="exp-99" />)
+    fireEvent.click(screen.getByTestId('export-bundle-btn'))
+    fireEvent.click(screen.getByTestId('export-dialog-confirm'))
+
+    expect(capturedHref).toContain('dataset_mode=descriptor')
     clickSpy.mockRestore()
   })
 
@@ -80,8 +143,28 @@ describe('ExportMenu', () => {
 
     render(<ExportMenu experimentId="my-exp" />)
     fireEvent.click(screen.getByTestId('export-bundle-btn'))
+    fireEvent.click(screen.getByTestId('export-dialog-confirm'))
 
     expect(capturedDownload).toBe('my-exp.secrev.zip')
     clickSpy.mockRestore()
+  })
+
+  it('closes the dialog when Cancel is clicked', () => {
+    render(<ExportMenu experimentId="exp-1" />)
+    fireEvent.click(screen.getByTestId('export-bundle-btn'))
+
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('export-dialog-cancel'))
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('shows descriptor and reference mode descriptions', () => {
+    render(<ExportMenu experimentId="exp-1" />)
+    fireEvent.click(screen.getByTestId('export-bundle-btn'))
+
+    expect(screen.getByText(/re-clone or re-derive/i)).toBeInTheDocument()
+    expect(screen.getByText(/target must already have them/i)).toBeInTheDocument()
   })
 })
