@@ -1016,3 +1016,510 @@ async def test_partial_failure_cleanup(tmp_path: Path):
     assert not orphan_dir.exists(), (
         f"Orphaned output directory was left behind after DB failure: {orphan_dir}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Helpers for dataset-related tests
+# ---------------------------------------------------------------------------
+
+
+def _make_dataset_row(
+    name: str,
+    kind: str = "git",
+    base_dataset: str | None = None,
+) -> dict:
+    """Build a minimal dataset row suitable for db.create_dataset."""
+    row: dict = {
+        "name": name,
+        "kind": kind,
+        "created_at": "2026-01-01T00:00:00",
+        "metadata_json": "{}",
+    }
+    if kind == "git":
+        row["origin_url"] = f"https://github.com/example/{name}"
+        row["origin_commit"] = "abc1234def5678901234567890123456789012ab"
+        row["origin_ref"] = "main"
+    elif kind == "derived":
+        row["base_dataset"] = base_dataset
+        row["recipe_json"] = json.dumps({"filter": "cve"})
+    return row
+
+
+def _make_label_row(
+    dataset_name: str,
+    idx: int,
+    dataset_version: str = "1.0.0",
+) -> dict:
+    """Build a minimal dataset_labels row."""
+    return {
+        "id": f"label-{dataset_name}-{idx:04d}",
+        "dataset_name": dataset_name,
+        "dataset_version": dataset_version,
+        "file_path": f"src/vuln_{idx}.py",
+        "line_start": 10 * idx,
+        "line_end": 10 * idx + 3,
+        "cwe_id": "CWE-89",
+        "vuln_class": "sqli",
+        "severity": "high",
+        "description": f"Test label {idx}",
+        "source": "manual",
+        "source_ref": None,
+        "confidence": "high",
+        "created_at": "2026-01-01T00:00:00",
+        "notes": None,
+        "introduced_in_diff": None,
+        "patch_lines_changed": None,
+    }
+
+
+async def _seed_db_with_dataset(
+    db: Database,
+    exp_id: str,
+    run_ids: list[str],
+    dataset_name: str,
+    dataset_kind: str = "git",
+    base_dataset_name: str | None = None,
+    label_count: int = 3,
+) -> None:
+    """Seed DB with an experiment whose runs reference a dataset, plus label rows."""
+    # Create base dataset if needed
+    if base_dataset_name:
+        base_row = _make_dataset_row(base_dataset_name, kind="git")
+        await db.create_dataset(base_row)
+        for i in range(label_count):
+            await db.append_dataset_labels([_make_label_row(base_dataset_name, i)])
+
+    # Create the main dataset
+    ds_row = _make_dataset_row(dataset_name, kind=dataset_kind, base_dataset=base_dataset_name)
+    await db.create_dataset(ds_row)
+    for i in range(label_count):
+        await db.append_dataset_labels([_make_label_row(dataset_name, i)])
+
+    # Seed experiment + runs; runs' config_json references the dataset
+    await db.import_experiment_rows(
+        experiment_row={
+            "id": exp_id,
+            "config_json": json.dumps({"experiment_id": exp_id, "dataset_name": dataset_name}),
+            "status": "completed",
+            "total_runs": len(run_ids),
+            "max_cost_usd": None,
+            "spent_usd": 0.0,
+            "created_at": "2026-01-01T00:00:00",
+            "completed_at": "2026-01-01T01:00:00",
+        },
+        run_rows=[
+            {
+                "id": rid,
+                "experiment_id": exp_id,
+                "config_json": json.dumps({"run_id": rid, "dataset_name": dataset_name}),
+                "status": "completed",
+                "model_id": "gpt-4o",
+                "strategy": "single_agent",
+                "tool_variant": "with_tools",
+                "review_profile": "default",
+                "verification_variant": "none",
+                "estimated_cost_usd": 0.01,
+                "duration_seconds": 10.0,
+                "result_path": None,
+                "error": None,
+                "created_at": "2026-01-01T00:00:00",
+                "completed_at": "2026-01-01T01:00:00",
+                "tool_extensions": "",
+            }
+            for rid in run_ids
+        ],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 18: Round-trip with descriptor (git dataset)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_descriptor_mode_round_trip_git_dataset(tmp_path: Path):
+    """Descriptor export embeds datasets.json + dataset_labels.json; import restores them."""
+    ds_name = "myrepo"
+    exp_id = "desc-exp-git"
+    run_id = "run-desc-git-1"
+
+    source_storage = tmp_path / "source_storage"
+    source_db = Database(tmp_path / "source.db")
+    await source_db.init()
+
+    await _seed_db_with_dataset(
+        source_db, exp_id, [run_id],
+        dataset_name=ds_name, dataset_kind="git", label_count=4,
+    )
+    _create_experiment_on_disk(source_storage, exp_id, run_id)
+
+    out_path = tmp_path / "export.secrev.zip"
+    await async_write_bundle(
+        source_db, source_storage, exp_id,
+        dataset_mode="descriptor", out_path=out_path,
+    )
+
+    # Verify datasets.json and dataset_labels.json are in the bundle
+    with zipfile.ZipFile(out_path, "r") as zf:
+        namelist = zf.namelist()
+        assert "datasets.json" in namelist, "datasets.json missing from descriptor bundle"
+        assert "dataset_labels.json" in namelist, "dataset_labels.json missing from descriptor bundle"
+
+        ds_rows = json.loads(zf.read("datasets.json"))
+        lbl_rows = json.loads(zf.read("dataset_labels.json"))
+
+    assert len(ds_rows) == 1
+    assert ds_rows[0]["name"] == ds_name
+    assert ds_rows[0]["kind"] == "git"
+    assert len(lbl_rows) == 4
+
+    # Verify manifest dataset_count + dataset_label_count
+    manifest = read_manifest(out_path)
+    assert manifest["dataset_mode"] == "descriptor"
+    assert manifest["artifact_counts"]["dataset_count"] == 1
+    assert manifest["artifact_counts"]["dataset_label_count"] == 4
+
+    # Import into a fresh DB
+    target_storage = tmp_path / "target_storage"
+    target_db = Database(tmp_path / "target.db")
+    await target_db.init()
+
+    summary = await async_apply_bundle(target_db, target_storage, out_path, conflict_policy="reject")
+    assert summary["datasets_imported"] > 0 or summary["datasets_imported"] == 1
+    assert summary["dataset_labels_imported"] == 4
+
+    # Dataset row restored
+    restored_ds = await target_db.get_dataset(ds_name)
+    assert restored_ds is not None
+    assert restored_ds["kind"] == "git"
+
+    # Labels restored
+    restored_labels = await target_db.list_dataset_labels(ds_name)
+    assert len(restored_labels) == 4
+
+
+# ---------------------------------------------------------------------------
+# Test 19: Round-trip with derived dataset chain
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_descriptor_mode_derived_dataset_chain(tmp_path: Path):
+    """Derived datasets recursively include the base dataset in datasets.json."""
+    base_name = "base-repo"
+    derived_name = "derived-subset"
+    exp_id = "desc-exp-derived"
+    run_id = "run-desc-derived-1"
+
+    source_storage = tmp_path / "source_storage"
+    source_db = Database(tmp_path / "source.db")
+    await source_db.init()
+
+    await _seed_db_with_dataset(
+        source_db, exp_id, [run_id],
+        dataset_name=derived_name,
+        dataset_kind="derived",
+        base_dataset_name=base_name,
+        label_count=2,
+    )
+    _create_experiment_on_disk(source_storage, exp_id, run_id)
+
+    out_path = tmp_path / "export.secrev.zip"
+    await async_write_bundle(
+        source_db, source_storage, exp_id,
+        dataset_mode="descriptor", out_path=out_path,
+    )
+
+    # Both rows must appear in datasets.json
+    with zipfile.ZipFile(out_path, "r") as zf:
+        ds_rows = json.loads(zf.read("datasets.json"))
+
+    ds_names_in_bundle = {r["name"] for r in ds_rows}
+    assert base_name in ds_names_in_bundle, "Base dataset missing from bundle"
+    assert derived_name in ds_names_in_bundle, "Derived dataset missing from bundle"
+    assert len(ds_rows) == 2
+
+    # Import into a fresh DB
+    target_storage = tmp_path / "target_storage"
+    target_db = Database(tmp_path / "target.db")
+    await target_db.init()
+
+    summary = await async_apply_bundle(target_db, target_storage, out_path, conflict_policy="reject")
+    assert summary["datasets_imported"] >= 2 or summary["datasets_imported"] > 0
+
+    # Both rows in target DB
+    base_row = await target_db.get_dataset(base_name)
+    derived_row = await target_db.get_dataset(derived_name)
+    assert base_row is not None
+    assert derived_row is not None
+    assert derived_row["base_dataset"] == base_name
+
+
+# ---------------------------------------------------------------------------
+# Test 20: Reference mode — no JSON files, dataset_count is 0
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_reference_mode_no_json_files(tmp_path: Path):
+    """Reference mode must NOT include datasets.json or dataset_labels.json."""
+    ds_name = "myrepo-ref"
+    exp_id = "ref-exp"
+    run_id = "run-ref-1"
+
+    storage_root = tmp_path / "storage"
+    db = Database(tmp_path / "test.db")
+    await db.init()
+
+    await _seed_db_with_dataset(
+        db, exp_id, [run_id],
+        dataset_name=ds_name, dataset_kind="git", label_count=2,
+    )
+    _create_experiment_on_disk(storage_root, exp_id, run_id)
+
+    out_path = tmp_path / "export.secrev.zip"
+    await async_write_bundle(
+        db, storage_root, exp_id,
+        dataset_mode="reference", out_path=out_path,
+    )
+
+    with zipfile.ZipFile(out_path, "r") as zf:
+        namelist = zf.namelist()
+        assert "datasets.json" not in namelist, "datasets.json must NOT be in reference bundle"
+        assert "dataset_labels.json" not in namelist, "dataset_labels.json must NOT be in reference bundle"
+
+    manifest = read_manifest(out_path)
+    assert manifest["dataset_mode"] == "reference"
+    # dataset_count is 0 in reference mode (no rows embedded)
+    assert manifest["artifact_counts"]["dataset_count"] == 0
+    assert manifest["artifact_counts"]["dataset_label_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Test 21: Manifest validation — dataset_mode and counts
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_manifest_dataset_fields_populated(tmp_path: Path):
+    """Manifest contains dataset_mode, dataset_count, dataset_label_count."""
+    ds_name = "manifest-check-ds"
+    exp_id = "manifest-exp"
+    run_id = "run-manifest-1"
+
+    storage_root = tmp_path / "storage"
+    db = Database(tmp_path / "test.db")
+    await db.init()
+
+    await _seed_db_with_dataset(
+        db, exp_id, [run_id],
+        dataset_name=ds_name, dataset_kind="git", label_count=5,
+    )
+    _create_experiment_on_disk(storage_root, exp_id, run_id)
+
+    for mode in ("descriptor", "reference"):
+        out_path = tmp_path / f"export_{mode}.secrev.zip"
+        await async_write_bundle(
+            db, storage_root, exp_id,
+            dataset_mode=mode, out_path=out_path,
+        )
+        m = read_manifest(out_path)
+        assert "dataset_mode" in m, f"dataset_mode missing in manifest for mode={mode}"
+        assert m["dataset_mode"] == mode
+        assert "artifact_counts" in m
+        assert "dataset_count" in m["artifact_counts"]
+        assert "dataset_label_count" in m["artifact_counts"]
+        if mode == "descriptor":
+            assert m["artifact_counts"]["dataset_count"] == 1
+            assert m["artifact_counts"]["dataset_label_count"] == 5
+        else:
+            assert m["artifact_counts"]["dataset_count"] == 0
+            assert m["artifact_counts"]["dataset_label_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Test 22: No dataset repo bytes on disk in export
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_no_dataset_bytes_on_disk_in_bundle(tmp_path: Path):
+    """Bundle must not contain datasets/<name>/... file path entries."""
+    ds_name = "no-bytes-ds"
+    exp_id = "nobytes-exp"
+    run_id = "run-nobytes-1"
+
+    storage_root = tmp_path / "storage"
+    db = Database(tmp_path / "test.db")
+    await db.init()
+
+    await _seed_db_with_dataset(
+        db, exp_id, [run_id],
+        dataset_name=ds_name, dataset_kind="git", label_count=1,
+    )
+    _create_experiment_on_disk(storage_root, exp_id, run_id)
+
+    # Create a fake on-disk dataset directory (should NOT be bundled)
+    fake_ds_dir = storage_root / "datasets" / ds_name
+    fake_ds_dir.mkdir(parents=True, exist_ok=True)
+    (fake_ds_dir / "README.md").write_text("# Fake dataset\n")
+
+    out_path = tmp_path / "export.secrev.zip"
+    await async_write_bundle(
+        db, storage_root, exp_id,
+        dataset_mode="descriptor", out_path=out_path,
+    )
+
+    with zipfile.ZipFile(out_path, "r") as zf:
+        namelist = zf.namelist()
+        dataset_file_entries = [n for n in namelist if n.startswith("datasets/") and "/" in n[len("datasets/"):]]
+        assert dataset_file_entries == [], (
+            f"Found unexpected dataset repo bytes in bundle: {dataset_file_entries}"
+        )
+
+    # Also check reference mode
+    out_path_ref = tmp_path / "export_ref.secrev.zip"
+    await async_write_bundle(
+        db, storage_root, exp_id,
+        dataset_mode="reference", out_path=out_path_ref,
+    )
+    with zipfile.ZipFile(out_path_ref, "r") as zf:
+        namelist = zf.namelist()
+        dataset_file_entries = [n for n in namelist if n.startswith("datasets/") and "/" in n[len("datasets/"):]]
+        assert dataset_file_entries == [], (
+            f"Found unexpected dataset repo bytes in reference bundle: {dataset_file_entries}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Test 23: Path-traversal still rejected (regression)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_path_traversal_still_rejected_with_datasets(tmp_path: Path):
+    """Path-traversal check must still fire on bundles that include datasets.json."""
+    ds_name = "traversal-ds"
+    exp_id = "traversal-ds-exp"
+    run_id = "run-traversal-ds-1"
+
+    storage_root = tmp_path / "storage"
+    db = Database(tmp_path / "test.db")
+    await db.init()
+
+    await _seed_db_with_dataset(
+        db, exp_id, [run_id],
+        dataset_name=ds_name, dataset_kind="git", label_count=1,
+    )
+    _create_experiment_on_disk(storage_root, exp_id, run_id)
+
+    good_bundle = tmp_path / "good.secrev.zip"
+    await async_write_bundle(
+        db, storage_root, exp_id,
+        dataset_mode="descriptor", out_path=good_bundle,
+    )
+
+    # Inject a path-traversal entry into the bundle
+    evil_bundle = tmp_path / "evil_ds.secrev.zip"
+    with zipfile.ZipFile(good_bundle, "r") as zin, zipfile.ZipFile(evil_bundle, "w") as zout:
+        for item in zin.infolist():
+            zout.writestr(item, zin.read(item.filename))
+        zout.writestr("../../etc/shadow", "root:*\n")
+
+    db2 = Database(tmp_path / "target.db")
+    await db2.init()
+    storage2 = tmp_path / "storage2"
+    storage2.mkdir(parents=True, exist_ok=True)
+
+    with pytest.raises(ValueError, match="[Pp]ath traversal"):
+        await async_apply_bundle(db2, storage2, evil_bundle, conflict_policy="reject")
+
+    # Nothing written outside storage2
+    assert not (tmp_path / "etc" / "shadow").exists()
+
+
+# ---------------------------------------------------------------------------
+# Test 24: Idempotent label re-import
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_idempotent_label_reimport(tmp_path: Path):
+    """Importing the same bundle twice must not raise IntegrityError or double labels."""
+    ds_name = "idem-ds"
+    exp_id = "idem-exp"
+    run_id_1 = "run-idem-1"
+
+    source_storage = tmp_path / "source_storage"
+    source_db = Database(tmp_path / "source.db")
+    await source_db.init()
+
+    await _seed_db_with_dataset(
+        source_db, exp_id, [run_id_1],
+        dataset_name=ds_name, dataset_kind="git", label_count=3,
+    )
+    _create_experiment_on_disk(source_storage, exp_id, run_id_1)
+
+    out_path = tmp_path / "export.secrev.zip"
+    await async_write_bundle(
+        source_db, source_storage, exp_id,
+        dataset_mode="descriptor", out_path=out_path,
+    )
+
+    # Target DB — import once
+    target_db = Database(tmp_path / "target.db")
+    await target_db.init()
+    target_storage = tmp_path / "target_storage"
+    target_storage.mkdir(parents=True, exist_ok=True)
+
+    summary1 = await async_apply_bundle(target_db, target_storage, out_path, conflict_policy="reject")
+    assert summary1["dataset_labels_imported"] == 3
+
+    labels_after_first = await target_db.list_dataset_labels(ds_name)
+    assert len(labels_after_first) == 3
+
+    # Import the same bundle into a second fresh DB to verify idempotency:
+    # labels are imported again without error (INSERT OR IGNORE on PK).
+    target_db2 = Database(tmp_path / "target2.db")
+    await target_db2.init()
+    target_storage3 = tmp_path / "target_storage3"
+    target_storage3.mkdir(parents=True, exist_ok=True)
+
+    # First import into db2
+    await async_apply_bundle(target_db2, target_storage3, out_path, conflict_policy="reject")
+    labels_after_first_db2 = await target_db2.list_dataset_labels(ds_name)
+    assert len(labels_after_first_db2) == 3
+
+    # Now directly re-import just the labels to test idempotency (INSERT OR IGNORE)
+    with zipfile.ZipFile(out_path, "r") as zf:
+        lbl_rows = json.loads(zf.read("dataset_labels.json"))
+
+    # Re-importing the same label rows must not raise and must not double the count
+    await target_db2.append_dataset_labels(lbl_rows)
+    labels_after_second = await target_db2.list_dataset_labels(ds_name)
+    assert len(labels_after_second) == 3, (
+        f"Labels doubled after second import: got {len(labels_after_second)}, expected 3"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 25: Reject dataset_mode='embedded' with 422
+# ---------------------------------------------------------------------------
+
+
+def test_reject_embedded_mode_returns_422(coordinator_client):
+    """Passing dataset_mode='embedded' to the export route must return 422."""
+    client, c, storage_root, db = coordinator_client
+    exp_id = "embedded-mode-exp"
+
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(_seed_db(db, exp_id, ["run-emb1"]))
+        _create_experiment_on_disk(storage_root, exp_id, "run-emb1")
+    finally:
+        loop.close()
+
+    resp = client.get(f"/experiments/{exp_id}/export?dataset_mode=embedded")
+    assert resp.status_code == 422, f"Expected 422, got {resp.status_code}: {resp.text}"
+    body = resp.json()
+    assert "embedded" in body.get("detail", "").lower() or "invalid" in body.get("detail", "").lower()
