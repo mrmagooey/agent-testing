@@ -112,6 +112,20 @@ _SHAPE_TO_STRATEGY = {
 }
 
 
+def _should_use_new_runner(user_strategy: "UserStrategy") -> bool:  # type: ignore[name-defined]
+    """Return True when *user_strategy* should use the pydantic-ai runner.
+
+    Phase-2 temporary gate: reads the ``use_new_runner`` flag on the strategy.
+    This field is ``exclude=True`` so it is never persisted; callers set it
+    at construction time to opt in.  Phase 4 removes this function and makes
+    ``run_strategy()`` the only path.
+
+    The import of ``runner.py`` must happen inside the caller's if-branch, not
+    here, so workers without the ``agent`` extra can still import ``worker.py``.
+    """
+    return getattr(user_strategy, "use_new_runner", False)
+
+
 class StrategyFactory:
     """Legacy factory kept for backwards-compatibility with tests that patch it.
 
@@ -266,15 +280,21 @@ class ExperimentWorker:
             # ------------------------------------------------------------------
             # Dispatch to the concrete strategy implementation
             # ------------------------------------------------------------------
-            shape = user_strategy.orchestration_shape
-            strategy_cls = _SHAPE_TO_STRATEGY.get(shape)
-            if strategy_cls is None:
-                raise ValueError(
-                    f"No strategy implementation for orchestration_shape={shape!r}"
-                )
-            strategy_impl = strategy_cls()
-
-            strategy_output = strategy_impl.run(target, model, tools, user_strategy)
+            if _should_use_new_runner(user_strategy):
+                # Lazy import so workers without the "agent" extra can still
+                # import worker.py cleanly.  The agent extra is MUTUALLY
+                # EXCLUSIVE with the worker extra (semgrep/otel conflicts).
+                from sec_review_framework.strategies.runner import run_strategy
+                strategy_output = run_strategy(user_strategy, target, model, tools)
+            else:
+                shape = user_strategy.orchestration_shape
+                strategy_cls = _SHAPE_TO_STRATEGY.get(shape)
+                if strategy_cls is None:
+                    raise ValueError(
+                        f"No strategy implementation for orchestration_shape={shape!r}"
+                    )
+                strategy_impl = strategy_cls()
+                strategy_output = strategy_impl.run(target, model, tools, user_strategy)
             candidates = strategy_output.findings
 
             verification_variant = VerificationVariant(user_strategy.default.verification)
