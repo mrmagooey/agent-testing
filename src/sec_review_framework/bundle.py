@@ -729,36 +729,27 @@ async def async_apply_bundle(
         ]
         # Use the same conflict_policy for datasets as for experiments.
         try:
+            # Snapshot existing names before import so we can count truly new rows
+            # (N8: accurate counter for merge policy).
+            existing_ds_names_before = {r["name"] for r in await db.list_datasets()}
+
             final_names = await db.import_datasets(
                 bundle_dataset_rows,
                 conflict_policy=conflict_policy,
             )
-            # Count newly inserted rows (non-collisions for merge/reject modes,
-            # or renamed rows). For merge, import_datasets skips existing rows.
-            # We approximate by counting distinct final names that match input names
-            # (no rename occurred) when policy=merge, and len(rows) for reject/rename.
-            if conflict_policy == "merge":
-                existing_ds_names = {r["name"] for r in await db.list_datasets()}
-                datasets_imported = sum(
-                    1 for r in bundle_dataset_rows
-                    if r["name"] not in existing_ds_names
-                )
-                # After import, recalculate
-                datasets_imported = len(final_names) - sum(
-                    1 for orig, final in zip(bundle_dataset_rows, final_names)
-                    if orig["name"] == final and orig["name"] in {
-                        r["name"] for r in bundle_dataset_rows
-                    }
-                )
-                # Simpler: just count how many were actually inserted
-                # import_datasets with merge skips existing; all final names are returned.
-                # Count rows where the final name is NOT already in the DB before import.
-                # Since we can't easily know this post-hoc, count length of returned names
-                # minus those that were in the DB already (best approximation).
-                datasets_imported = len(bundle_dataset_rows)  # upper bound; merge skips
-            else:
-                datasets_imported = len(bundle_dataset_rows)
+
+            # Count rows that were actually inserted (not skipped / pre-existing).
+            datasets_imported = sum(
+                1 for final in final_names
+                if final not in existing_ds_names_before
+            )
         except Exception as exc:
+            # C3: when conflict_policy is 'reject', surface the error as a
+            # BundleConflictError rather than silently demoting it to a warning.
+            if conflict_policy == "reject":
+                raise BundleConflictError(
+                    f"Dataset import conflict: {exc}"
+                ) from exc
             warnings.append(f"Dataset import warning: {exc}")
             final_names = []
             datasets_imported = 0
@@ -790,8 +781,19 @@ async def async_apply_bundle(
 
     if bundle_label_rows:
         try:
-            await db.append_dataset_labels(bundle_label_rows)
-            dataset_labels_imported = len(bundle_label_rows)
+            # C2: Rewrite dataset_name in label rows to the final (possibly renamed)
+            # dataset name so labels are queryable under the new name after a 'rename'
+            # policy import.
+            original_to_final: dict[str, str] = {
+                r["name"]: final
+                for r, final in zip(bundle_dataset_rows, final_names)
+            }
+            rewritten_label_rows = [
+                {**row, "dataset_name": original_to_final.get(row["dataset_name"], row["dataset_name"])}
+                for row in bundle_label_rows
+            ]
+            await db.append_dataset_labels(rewritten_label_rows)
+            dataset_labels_imported = len(rewritten_label_rows)
         except Exception as exc:
             warnings.append(f"Dataset labels import warning: {exc}")
             dataset_labels_imported = 0

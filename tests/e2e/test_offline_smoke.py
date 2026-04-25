@@ -22,7 +22,7 @@ from unittest.mock import patch
 import pytest
 
 from tests.conftest import FakeModelProvider
-from sec_review_framework.data.evaluation import GroundTruthSource
+from sec_review_framework.data.evaluation import GroundTruthLabel, GroundTruthSource
 from sec_review_framework.data.experiment import (
     ExperimentRun,
     ReviewProfileName,
@@ -32,6 +32,7 @@ from sec_review_framework.data.experiment import (
     ToolVariant,
     VerificationVariant,
 )
+from sec_review_framework.data.findings import Severity, VulnClass
 from sec_review_framework.models.base import ModelResponse, RetryPolicy
 from sec_review_framework.worker import ExperimentWorker, ModelProviderFactory
 
@@ -80,6 +81,47 @@ I have analysed the codebase. Here are my findings:
 
 
 @pytest.fixture
+def smoke_labels() -> list[GroundTruthLabel]:
+    """Ground-truth labels for the smoke dataset.
+
+    These are injected into the worker via a mock on ``_fetch_labels`` rather
+    than written to a labels.jsonl file.  Labels are stored in the coordinator
+    DB (Phase 2B) and fetched via HTTP in production.
+    """
+    dataset_version = "1.0.0"
+    return [
+        GroundTruthLabel(
+            id="lbl-sqli-001",
+            dataset_version=dataset_version,
+            file_path="myapp/views.py",
+            line_start=3,
+            line_end=4,
+            cwe_id="CWE-89",
+            vuln_class=VulnClass.SQLI,
+            severity=Severity.HIGH,
+            description="SQL injection via string formatting in query parameter",
+            source=GroundTruthSource.INJECTED,
+            confidence="confirmed",
+            created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        ),
+        GroundTruthLabel(
+            id="lbl-secret-001",
+            dataset_version=dataset_version,
+            file_path="myapp/auth.py",
+            line_start=1,
+            line_end=1,
+            cwe_id="CWE-798",
+            vuln_class=VulnClass.HARDCODED_SECRET,
+            severity=Severity.CRITICAL,
+            description="Hardcoded secret key in auth module",
+            source=GroundTruthSource.INJECTED,
+            confidence="confirmed",
+            created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        ),
+    ]
+
+
+@pytest.fixture
 def smoke_dirs(tmp_path: Path):
     """Build the datasets_dir and output_dir expected by ExperimentWorker.
 
@@ -88,13 +130,17 @@ def smoke_dirs(tmp_path: Path):
           datasets/
             targets/
               smoke-dataset/
-                labels.jsonl
                 repo/
                   myapp/
                     __init__.py
                     views.py   ← SQLi vuln (TP target)
                     auth.py    ← hardcoded secret (will be missed → FN)
           output/
+
+    Ground truth labels are supplied via the ``smoke_labels`` fixture and
+    injected into the worker via ``ExperimentWorker._fetch_labels``.  No
+    labels.jsonl file is written — labels now live in the coordinator DB
+    (Phase 2B) and workers fetch them over HTTP.
     """
     dataset_name = "smoke-dataset"
     dataset_version = "1.0.0"
@@ -118,40 +164,6 @@ def smoke_dirs(tmp_path: Path):
         "\n"
         "def get_token():\n"
         "    return SECRET_KEY\n"
-    )
-
-    # --- ground truth labels ---
-    labels_path = tmp_path / "datasets" / "targets" / dataset_name / "labels.jsonl"
-    sqli_label = {
-        "id": "lbl-sqli-001",
-        "dataset_version": dataset_version,
-        "file_path": "myapp/views.py",
-        "line_start": 3,
-        "line_end": 4,
-        "cwe_id": "CWE-89",
-        "vuln_class": "sqli",
-        "severity": "high",
-        "description": "SQL injection via string formatting in query parameter",
-        "source": GroundTruthSource.INJECTED.value,
-        "confidence": "confirmed",
-        "created_at": "2024-01-01T00:00:00+00:00",
-    }
-    secret_label = {
-        "id": "lbl-secret-001",
-        "dataset_version": dataset_version,
-        "file_path": "myapp/auth.py",
-        "line_start": 1,
-        "line_end": 1,
-        "cwe_id": "CWE-798",
-        "vuln_class": "hardcoded_secret",
-        "severity": "critical",
-        "description": "Hardcoded secret key in auth module",
-        "source": GroundTruthSource.INJECTED.value,
-        "confidence": "confirmed",
-        "created_at": "2024-01-01T00:00:00+00:00",
-    }
-    labels_path.write_text(
-        json.dumps(sqli_label) + "\n" + json.dumps(secret_label) + "\n"
     )
 
     output_dir = tmp_path / "output" / "smoke-run"
@@ -213,14 +225,28 @@ def smoke_model() -> FakeModelProvider:
 # ---------------------------------------------------------------------------
 
 
-def _run_smoke(run: ExperimentRun, smoke_dirs: dict, fake_model: FakeModelProvider) -> RunResult:
-    """Patch ModelProviderFactory.create to return fake_model, execute worker."""
+def _run_smoke(
+    run: ExperimentRun,
+    smoke_dirs: dict,
+    fake_model: FakeModelProvider,
+    labels: list | None = None,
+) -> RunResult:
+    """Patch ModelProviderFactory.create to return fake_model, execute worker.
+
+    ``labels`` is injected via ``ExperimentWorker._fetch_labels`` so tests do
+    not need a live coordinator HTTP endpoint.  Pass None to skip evaluation.
+    """
+    _labels = labels or []
 
     def _fake_create(self, model_id, model_config):  # noqa: ANN001
         return fake_model
 
+    def _fake_fetch_labels(self, run, datasets_dir):  # noqa: ANN001
+        return _labels
+
     with patch.object(ModelProviderFactory, "create", _fake_create):
-        ExperimentWorker().run(run, smoke_dirs["output_dir"], smoke_dirs["datasets_dir"])
+        with patch.object(ExperimentWorker, "_fetch_labels", _fake_fetch_labels):
+            ExperimentWorker().run(run, smoke_dirs["output_dir"], smoke_dirs["datasets_dir"])
 
     result_json = (smoke_dirs["output_dir"] / "run_result.json").read_text()
     return RunResult.model_validate_json(result_json)
@@ -231,11 +257,11 @@ def _run_smoke(run: ExperimentRun, smoke_dirs: dict, fake_model: FakeModelProvid
 # ---------------------------------------------------------------------------
 
 
-def test_offline_pipeline_smoke(smoke_dirs, smoke_run, smoke_model):
+def test_offline_pipeline_smoke(smoke_dirs, smoke_run, smoke_model, smoke_labels):
     """Full ExperimentWorker pipeline smoke test — no real LLM calls, no K8s."""
     output_dir: Path = smoke_dirs["output_dir"]
 
-    result = _run_smoke(smoke_run, smoke_dirs, smoke_model)
+    result = _run_smoke(smoke_run, smoke_dirs, smoke_model, labels=smoke_labels)
 
     # --- run_result.json ---
     run_result_path = output_dir / "run_result.json"

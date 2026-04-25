@@ -29,7 +29,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import sec_review_framework.coordinator as coord_module
-from sec_review_framework.bundle import async_apply_bundle, async_write_bundle
+from sec_review_framework.bundle import BundleConflictError, async_apply_bundle, async_write_bundle
 from sec_review_framework.coordinator import ExperimentCoordinator, app
 from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
 from sec_review_framework.db import Database
@@ -1162,3 +1162,305 @@ async def test_rematerialize_endpoint_templates_version_mismatch(tmp_path: Path)
     assert resp.status_code == 409, (
         f"Expected 409 for templates_version mismatch, got {resp.status_code}: {resp.text}"
     )
+
+
+# ---------------------------------------------------------------------------
+# 12. test_rename_policy_with_fresh_destination_carries_labels (C2 regression)
+# ---------------------------------------------------------------------------
+
+
+async def test_rename_policy_with_fresh_destination_carries_labels(tmp_path: Path) -> None:
+    """Source has dataset 'foo' with labels; export; import to a destination with
+    no 'foo' and conflict_policy='rename'; assert dataset is renamed AND its labels
+    are queryable under the new name (C2 regression: labels must not be orphaned).
+    """
+    src_repo = tmp_path / "origin_repo"
+    sha = _init_git_repo(src_repo)
+
+    db = Database(tmp_path / "src.db")
+    await db.init()
+    coord = _make_coordinator(tmp_path, db)
+
+    ds_name = "foo"
+    now = datetime.now(UTC).isoformat()
+
+    await db.create_dataset({
+        "name": ds_name,
+        "kind": "git",
+        "origin_url": f"file://{src_repo}",
+        "origin_commit": sha,
+        "created_at": now,
+    })
+    label = _make_label_row(str(uuid.uuid4()), ds_name)
+    await db.append_dataset_labels([label])
+
+    # Materialize on source
+    repo_dir = coord.storage_root / "datasets" / ds_name / "repo"
+    repo_dir.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["git", "clone", f"file://{src_repo}", str(repo_dir)],
+        check=True, capture_output=True,
+    )
+    await db.update_dataset_materialized_at(ds_name, now)
+
+    # Pre-seed destination with 'foo' so that the import triggers a rename
+    db2 = Database(tmp_path / "dst.db")
+    await db2.init()
+    storage2 = tmp_path / "storage2"
+    storage2.mkdir()
+    await db2.create_dataset({
+        "name": ds_name,
+        "kind": "git",
+        "origin_url": "file:///dummy",
+        "origin_commit": "0000000",
+        "created_at": now,
+    })
+
+    coord2 = ExperimentCoordinator(
+        k8s_client=None,
+        storage_root=storage2,
+        concurrency_caps={},
+        worker_image="worker:latest",
+        namespace="default",
+        db=db2,
+        reporter=MarkdownReportGenerator(),
+        cost_calculator=CostCalculator(pricing={
+            "gpt-4o": ModelPricing(input_per_million=5.0, output_per_million=15.0)
+        }),
+        default_cap=4,
+    )
+
+    # Create experiment in source so we can export a bundle
+    exp_id = "rt-rename-labels-exp-001"
+    run_id, exp_row, run_row = _seed_experiment(coord.storage_root, exp_id, ds_name)
+    await db.import_experiment_rows(exp_row, [run_row])
+
+    out_path = tmp_path / "bundle.secrev.zip"
+    await async_write_bundle(db, coord.storage_root, exp_id, out_path=out_path)
+
+    # Import with conflict_policy='rename' — 'foo' already exists so it gets renamed
+    summary = await async_apply_bundle(
+        db2, storage2, out_path,
+        conflict_policy="rename",
+        materialize=coord2.materialize_dataset,
+    )
+
+    # The renamed dataset must exist in the DB
+    all_datasets = await db2.list_datasets()
+    all_names = {r["name"] for r in all_datasets}
+    renamed_names = [n for n in all_names if n.startswith(f"{ds_name}_imported_")]
+    assert len(renamed_names) == 1, (
+        f"Expected exactly one renamed dataset (foo_imported_xxx), got: {all_names}"
+    )
+    renamed_name = renamed_names[0]
+
+    # Labels must be queryable under the RENAMED name, not the original
+    labels_under_original = await db2.list_dataset_labels(ds_name)
+    labels_under_renamed = await db2.list_dataset_labels(renamed_name)
+
+    assert len(labels_under_renamed) == 1, (
+        f"Expected 1 label under renamed dataset {renamed_name!r}, "
+        f"got {len(labels_under_renamed)}"
+    )
+    assert labels_under_renamed[0]["id"] == label["id"], (
+        "Label ID mismatch under renamed dataset"
+    )
+
+    # The original 'foo' dataset should have zero labels from this import
+    # (the pre-seeded 'foo' row has no labels of its own from source).
+    # The new label must NOT appear under the original name.
+    assert not any(
+        lbl["id"] == label["id"] for lbl in labels_under_original
+    ), "Label must not be orphaned under the original 'foo' name"
+
+
+# ---------------------------------------------------------------------------
+# 13. test_reject_conflict_policy_raises_for_datasets (C3 regression)
+# ---------------------------------------------------------------------------
+
+
+async def test_reject_conflict_policy_raises_for_datasets(tmp_path: Path) -> None:
+    """Pre-seed destination with dataset 'foo'; bundle has dataset 'foo';
+    import with conflict_policy='reject'; assert raises BundleConflictError
+    and no rows or labels were inserted (C3 regression).
+    """
+    src_repo = tmp_path / "origin_repo"
+    sha = _init_git_repo(src_repo)
+
+    db = Database(tmp_path / "src.db")
+    await db.init()
+    coord = _make_coordinator(tmp_path, db)
+
+    ds_name = "foo-reject"
+    now = datetime.now(UTC).isoformat()
+
+    await db.create_dataset({
+        "name": ds_name,
+        "kind": "git",
+        "origin_url": f"file://{src_repo}",
+        "origin_commit": sha,
+        "created_at": now,
+    })
+    label = _make_label_row(str(uuid.uuid4()), ds_name)
+    await db.append_dataset_labels([label])
+
+    repo_dir = coord.storage_root / "datasets" / ds_name / "repo"
+    repo_dir.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["git", "clone", f"file://{src_repo}", str(repo_dir)],
+        check=True, capture_output=True,
+    )
+    await db.update_dataset_materialized_at(ds_name, now)
+
+    exp_id = "rt-reject-exp-001"
+    run_id, exp_row, run_row = _seed_experiment(coord.storage_root, exp_id, ds_name)
+    await db.import_experiment_rows(exp_row, [run_row])
+
+    out_path = tmp_path / "bundle.secrev.zip"
+    await async_write_bundle(db, coord.storage_root, exp_id, out_path=out_path)
+
+    # Pre-seed destination with the same dataset name to force collision
+    db2 = Database(tmp_path / "dst.db")
+    await db2.init()
+    storage2 = tmp_path / "storage2"
+    storage2.mkdir()
+    await db2.create_dataset({
+        "name": ds_name,
+        "kind": "git",
+        "origin_url": "file:///dummy",
+        "origin_commit": "0000000",
+        "created_at": now,
+    })
+
+    coord2 = ExperimentCoordinator(
+        k8s_client=None,
+        storage_root=storage2,
+        concurrency_caps={},
+        worker_image="worker:latest",
+        namespace="default",
+        db=db2,
+        reporter=MarkdownReportGenerator(),
+        cost_calculator=CostCalculator(pricing={
+            "gpt-4o": ModelPricing(input_per_million=5.0, output_per_million=15.0)
+        }),
+        default_cap=4,
+    )
+
+    # Count labels in destination before import attempt
+    labels_before = await db2.list_dataset_labels(ds_name)
+
+    with pytest.raises(BundleConflictError):
+        await async_apply_bundle(
+            db2, storage2, out_path,
+            conflict_policy="reject",
+            materialize=coord2.materialize_dataset,
+        )
+
+    # Labels must not have been inserted
+    labels_after = await db2.list_dataset_labels(ds_name)
+    assert len(labels_after) == len(labels_before), (
+        f"Labels were inserted despite reject conflict: before={len(labels_before)}, "
+        f"after={len(labels_after)}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 14. test_partial_clone_cleaned_up_on_checkout_failure (C4 regression)
+# ---------------------------------------------------------------------------
+
+
+async def test_partial_clone_cleaned_up_on_checkout_failure(tmp_path: Path) -> None:
+    """When git checkout fails after a successful clone, the partial repo dir
+    is removed so that a subsequent materialize_dataset call retries cleanly
+    (C4 regression).
+    """
+    src_repo = tmp_path / "origin_repo"
+    sha = _init_git_repo(src_repo)
+
+    db = Database(tmp_path / "test.db")
+    await db.init()
+    coord = _make_coordinator(tmp_path, db)
+
+    ds_name = "partial-clone-ds"
+    now = datetime.now(UTC).isoformat()
+
+    await db.create_dataset({
+        "name": ds_name,
+        "kind": "git",
+        "origin_url": f"file://{src_repo}",
+        "origin_commit": sha,  # valid SHA — clone will succeed, checkout mocked to fail
+        "created_at": now,
+    })
+
+    target_repo_dir = coord.storage_root / "datasets" / ds_name / "repo"
+
+    original_run = subprocess.run
+
+    def _failing_checkout(*args, **kwargs):
+        """Let git clone pass; make git checkout raise CalledProcessError."""
+        cmd = args[0] if args else kwargs.get("args", [])
+        # Detect the checkout invocation by command shape
+        if isinstance(cmd, list) and "-C" in cmd and "checkout" in cmd:
+            raise subprocess.CalledProcessError(1, cmd)
+        return original_run(*args, **kwargs)
+
+    with patch("subprocess.run", side_effect=_failing_checkout):
+        with pytest.raises(subprocess.CalledProcessError):
+            await coord.materialize_dataset(ds_name)
+
+    # The partial repo dir must have been cleaned up
+    assert not target_repo_dir.exists(), (
+        f"Partial repo dir {target_repo_dir} must be removed after checkout failure"
+    )
+
+    # A follow-up call (without the mock) must succeed (retry cleanly)
+    await coord.materialize_dataset(ds_name)
+    assert target_repo_dir.exists(), "Repo must be materialized on retry"
+
+
+# ---------------------------------------------------------------------------
+# 15. test_dataset_name_path_traversal_rejected (N7 regression)
+# ---------------------------------------------------------------------------
+
+
+async def test_dataset_name_path_traversal_rejected(tmp_path: Path) -> None:
+    """Dataset names containing path traversal characters must be rejected at
+    every creation site with HTTP 400 / 422 (N7 regression).
+    """
+    db = Database(tmp_path / "test.db")
+    await db.init()
+    coord = _make_coordinator(tmp_path, db)
+
+    bad_names = [
+        "../evil",
+        "foo/bar",
+        "\x00name",
+        "..",
+        ".",
+        "",
+    ]
+
+    for bad_name in bad_names:
+        # materialize_dataset must validate name as defense-in-depth
+        from fastapi import HTTPException as _HTTPException
+        with pytest.raises(_HTTPException) as exc_info:
+            await coord.materialize_dataset(bad_name)
+        assert exc_info.value.status_code == 400, (
+            f"Expected 400 for name {bad_name!r}, got {exc_info.value.status_code}"
+        )
+
+    # Via the HTTP API — POST /datasets/{name}/inject with traversal in name
+    # FastAPI routes {dataset_name} so we test via coordinator method directly.
+    with patch.object(coord_module, "coordinator", coord):
+        with patch.object(coord, "reconcile", return_value=None):
+            with TestClient(app, raise_server_exceptions=False) as client:
+                for bad_name in ["../evil", "foo/bar"]:
+                    # inject preview endpoint
+                    resp = client.post(
+                        f"/datasets/{bad_name}/inject/preview",
+                        json={"template_id": "t", "target_file": "app.py"},
+                    )
+                    assert resp.status_code in (400, 404, 422), (
+                        f"Expected 400/404/422 for dataset name {bad_name!r}, "
+                        f"got {resp.status_code}: {resp.text}"
+                    )

@@ -18,7 +18,6 @@ test_coordinator_smoke.py. No Kubernetes, no real LLM calls.
 from __future__ import annotations
 
 import asyncio
-import json
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -27,8 +26,6 @@ from fastapi.testclient import TestClient
 
 from sec_review_framework.coordinator import ExperimentCoordinator, app
 from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
-from sec_review_framework.data.evaluation import GroundTruthLabel, GroundTruthSource
-from sec_review_framework.data.findings import Severity, VulnClass
 from sec_review_framework.db import Database
 
 # ---------------------------------------------------------------------------
@@ -66,10 +63,12 @@ def _make_inject_dataset(storage_root: Path) -> None:
           <DATASET_NAME>/
             repo/
               app.py          ← Python file with a function def anchor
-            labels.json       ← one pre-existing label (JSON array)
           templates/
             sqli/
               test_sqli_format_string.yaml  ← injection template
+
+    Pre-existing labels are stored in the DB (Phase 2B), not in a labels.json
+    file.  The fixture only creates the repo directory and injection template.
     """
     dataset_dir = storage_root / "datasets" / DATASET_NAME
     repo_dir = dataset_dir / "repo"
@@ -79,27 +78,6 @@ def _make_inject_dataset(storage_root: Path) -> None:
     (repo_dir / "app.py").write_text(
         "def get_user(name):\n"
         '    return db.execute("SELECT * FROM users WHERE name = ?", [name])\n',
-        encoding="utf-8",
-    )
-
-    # One pre-existing label (JSON array format as _append_labels writes)
-    existing_label = GroundTruthLabel(
-        id="label-pre-001",
-        dataset_version="1.0.0",
-        file_path="app.py",
-        line_start=1,
-        line_end=2,
-        cwe_id="CWE-89",
-        vuln_class=VulnClass.SQLI,
-        severity=Severity.HIGH,
-        description="Pre-existing SQL injection label",
-        source=GroundTruthSource.INJECTED,
-        confidence="confirmed",
-        created_at=datetime(2026, 1, 1, tzinfo=UTC),
-    )
-    labels_file = dataset_dir / "labels.json"
-    labels_file.write_text(
-        json.dumps([existing_label.model_dump(mode="json")], indent=2),
         encoding="utf-8",
     )
 

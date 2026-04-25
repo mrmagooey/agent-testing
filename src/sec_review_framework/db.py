@@ -1119,10 +1119,17 @@ class Database:
     # ---------------------------------------------------------------------------
 
     async def create_dataset(self, row: dict) -> None:
-        """Insert a new dataset row. Raises sqlite3.IntegrityError on duplicate name
-        or CHECK violation. Caller must supply: name, kind, created_at, plus
-        kind-appropriate fields (origin_url+origin_commit for 'git'; base_dataset+
-        recipe_json for 'derived'). metadata_json defaults to '{}' if absent."""
+        """Insert a new dataset row. Raises ``sqlite3.IntegrityError`` on
+        duplicate name or CHECK violation. Caller must supply: name, kind,
+        created_at, plus kind-appropriate fields (origin_url+origin_commit for
+        'git'; base_dataset+recipe_json for 'derived'). metadata_json defaults
+        to '{}' if absent.
+
+        Note: :meth:`import_datasets` also raises on collision, but surfaces
+        the error as a plain ``Exception`` with a descriptive message (not
+        necessarily ``sqlite3.IntegrityError``) to decouple callers from the
+        storage engine.
+        """
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("PRAGMA foreign_keys = ON")
             await db.execute(
@@ -1240,9 +1247,6 @@ class Database:
             for r in rows:
                 orig = r["name"]
                 final_name = original_to_final[orig]
-                is_collision = orig in existing_names or (
-                    orig in names_used_in_batch and final_name != orig
-                )
 
                 if conflict_policy == "merge" and orig in existing_names:
                     # Skip rows that already exist.

@@ -1725,6 +1725,30 @@ class ExperimentCoordinator:
     # Datasets
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _validate_dataset_name(name: str) -> None:
+        """Reject dataset names that could cause path traversal or DB confusion.
+
+        Valid names are non-empty strings that contain no NUL bytes, forward
+        slashes, backslashes, or ``..`` components.  The special names ``.``
+        and ``..`` are also rejected.
+
+        Raises:
+            HTTPException(400): if the name fails validation.
+        """
+        _INVALID = ("\x00", "/", "\\", "..")
+        if not name or name in (".", ".."):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid dataset name {name!r}: must be a non-empty string",
+            )
+        for bad in _INVALID:
+            if bad in name:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid dataset name {name!r}: contains disallowed sequence {bad!r}",
+                )
+
     async def list_datasets(self) -> list[dict]:
         return await self.db.list_datasets()
 
@@ -1756,7 +1780,11 @@ class ExperimentCoordinator:
         during derived dataset materialization).
         For ``kind='derived'``: materializes the base if absent, checks
         templates_version, then replays the injection recipe.
+
+        Validates ``name`` for path traversal characters as defense-in-depth
+        (rows inserted via bundle import also pass through here).
         """
+        self._validate_dataset_name(name)
         row = await self.db.get_dataset(name)
         if row is None:
             raise HTTPException(status_code=404, detail=f"unknown dataset {name}")
@@ -1764,18 +1792,37 @@ class ExperimentCoordinator:
         if row["kind"] == "git":
             if not target_repo_dir.exists():
                 target_repo_dir.parent.mkdir(parents=True, exist_ok=True)
-                subprocess.run(
-                    ["git", "clone", "--depth=10", row["origin_url"], str(target_repo_dir)],
-                    check=True,
-                    capture_output=True,
-                )
-                if row.get("origin_commit"):
+                # C4: Wrap clone + checkout in a try block.  If checkout fails after
+                # a successful clone the directory exists but is at the wrong commit.
+                # Remove it so that subsequent calls retry from scratch.
+                # N6: use "--" before the URL in git clone to guard against URLs
+                # starting with "-".  For checkout the revision is a SHA so we use
+                # fetch+checkout to avoid `--` ambiguity (git checkout -- <sha> would
+                # be interpreted as a path restore, not a branch/commit switch).
+                try:
                     subprocess.run(
-                        ["git", "checkout", row["origin_commit"]],
-                        cwd=target_repo_dir,
+                        ["git", "clone", "--depth=10", "--", row["origin_url"], str(target_repo_dir)],
                         check=True,
                         capture_output=True,
                     )
+                    if row.get("origin_commit"):
+                        # Fetch the specific commit (shallow may not have it), then detach.
+                        subprocess.run(
+                            [
+                                "git", "-C", str(target_repo_dir),
+                                "fetch", "--depth=1", "origin", row["origin_commit"],
+                            ],
+                            check=True,
+                            capture_output=True,
+                        )
+                        subprocess.run(
+                            ["git", "-C", str(target_repo_dir), "checkout", row["origin_commit"]],
+                            check=True,
+                            capture_output=True,
+                        )
+                except Exception:
+                    shutil.rmtree(target_repo_dir, ignore_errors=True)
+                    raise
         elif row["kind"] == "derived":
             base_repo_dir_check = self.storage_root / "datasets" / row["base_dataset"] / "repo"
             if not base_repo_dir_check.exists():
@@ -1808,7 +1855,14 @@ class ExperimentCoordinator:
 
     @property
     def templates_version(self) -> str:
-        """SHA-256 hash over template files; cached after first access."""
+        """SHA-256 hash over template files; cached after first access.
+
+        The value is pinned at first access and does not change while the
+        coordinator process is running.  If the templates directory is
+        modified on disk, a coordinator restart is required to pick up the
+        new hash.  This is intentional: templates should only change during
+        a deployment, which always restarts the pod.
+        """
         if hasattr(self, "_templates_version_cache"):
             return self._templates_version_cache  # type: ignore[return-value]
         templates_root = self.storage_root / "datasets" / "templates"
@@ -1830,6 +1884,8 @@ class ExperimentCoordinator:
             import_spec = CVEImportSpec(**spec)
         except (ValidationError, TypeError) as exc:
             raise HTTPException(status_code=400, detail=str(exc))
+        # N7: reject dataset names that could cause path traversal.
+        self._validate_dataset_name(import_spec.dataset_name)
         importer = self._build_cve_importer()
         try:
             labels = importer.import_from_spec(import_spec)
@@ -1860,6 +1916,8 @@ class ExperimentCoordinator:
         return labels
 
     async def inject_vuln(self, dataset_name: str, req: dict) -> object:
+        # N7: reject dataset names that could cause path traversal.
+        self._validate_dataset_name(dataset_name)
         repo_path, template_id, target_file, substitutions = self._parse_injection_request(
             dataset_name, req
         )
@@ -1904,6 +1962,8 @@ class ExperimentCoordinator:
         return label
 
     def preview_injection(self, dataset_name: str, req: dict) -> dict:
+        # N7: reject dataset names that could cause path traversal.
+        self._validate_dataset_name(dataset_name)
         repo_path, template_id, target_file, substitutions = self._parse_injection_request(
             dataset_name, req
         )
@@ -3575,7 +3635,15 @@ async def rematerialize_dataset(dataset_name: str) -> dict:
     404 if the dataset row does not exist.
     409 if a derived dataset's templates_version does not match the target.
     502 on clone / network failure.
+
+    Gated by the ``IMPORT_ENABLED`` env var (default: true).
     """
+    if not IMPORT_ENABLED:
+        raise HTTPException(
+            status_code=403,
+            detail="Dataset rematerialization is disabled on this instance. "
+            "Set IMPORT_ENABLED=true to enable.",
+        )
     return await coordinator.rematerialize_dataset(dataset_name)
 
 

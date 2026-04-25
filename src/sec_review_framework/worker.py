@@ -24,7 +24,7 @@ from sec_review_framework.models.litellm_provider import LiteLLMProvider
 from sec_review_framework.tools.registry import ToolRegistryFactory
 from sec_review_framework.cost.calculator import CostCalculator
 from sec_review_framework.evaluation.evaluator import FileLevelEvaluator
-from sec_review_framework.ground_truth.models import LabelStore, TargetCodebase
+from sec_review_framework.ground_truth.models import TargetCodebase
 from sec_review_framework.verification.verifier import LLMVerifier
 from sec_review_framework.reporting.markdown import MarkdownReportGenerator
 from sec_review_framework.strategies.single_agent import SingleAgentStrategy
@@ -167,9 +167,66 @@ class ExperimentWorker:
     Entry point for K8s Job pods.
     """
 
+    def _fetch_labels(
+        self, run: ExperimentRun, datasets_dir: Path
+    ) -> list:
+        """Return ground-truth labels for the run's dataset.
+
+        In production (HTTP transport) the labels are fetched from the
+        coordinator over HTTP — workers have no direct DB access.
+
+        The coordinator base URL is derived from ``run.upload_url`` (which
+        is ``{coordinator_internal_url}/api/internal/runs/{id}/result``) or,
+        failing that, from the ``COORDINATOR_INTERNAL_URL`` environment
+        variable.
+
+        If neither is available (PVC transport, offline tests) an empty list
+        is returned and evaluation is skipped for this run.
+        """
+        from sec_review_framework.data.evaluation import GroundTruthLabel
+
+        coordinator_url: str | None = None
+
+        if run.upload_url:
+            # Strip the run-specific suffix to get the base URL.
+            # upload_url shape: {base}/api/internal/runs/{id}/result
+            # We want: {base}
+            import re as _re
+            m = _re.match(r"(https?://[^/]+(?:/[^/]+)*?)/api/internal/runs/", run.upload_url)
+            if m:
+                coordinator_url = m.group(1)
+
+        if coordinator_url is None:
+            coordinator_url = os.environ.get("COORDINATOR_INTERNAL_URL", "").rstrip("/") or None
+
+        if not coordinator_url:
+            # No coordinator URL available — return empty labels list (evaluation skipped).
+            return []
+
+        import httpx as _httpx
+
+        params: dict[str, str] = {}
+        if run.dataset_version:
+            params["version"] = run.dataset_version
+
+        try:
+            with _httpx.Client(timeout=30.0) as client:
+                resp = client.get(
+                    f"{coordinator_url}/datasets/{run.dataset_name}/labels",
+                    params=params,
+                )
+                resp.raise_for_status()
+        except _httpx.HTTPError as exc:
+            raise RuntimeError(
+                f"Failed to fetch labels for dataset {run.dataset_name!r}: {exc}"
+            ) from exc
+
+        raw_labels = resp.json()
+        return [GroundTruthLabel.model_validate(lbl) for lbl in raw_labels]
+
     def run(self, run: ExperimentRun, output_dir: Path, datasets_dir: Path) -> None:
         target = TargetCodebase(datasets_dir / "targets" / run.dataset_name / "repo")
-        labels = LabelStore(datasets_dir).load(run.dataset_name, run.dataset_version)
+        labels = self._fetch_labels(run, datasets_dir)
         model = ModelProviderFactory().create(run.model_id, run.provider_kwargs)
 
         start = time.monotonic()

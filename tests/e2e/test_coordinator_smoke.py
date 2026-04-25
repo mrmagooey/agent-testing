@@ -21,10 +21,6 @@ from fastapi.testclient import TestClient
 
 from sec_review_framework.coordinator import ExperimentCoordinator, app
 from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
-from sec_review_framework.data.evaluation import (
-    GroundTruthLabel,
-    GroundTruthSource,
-)
 from sec_review_framework.data.experiment import (
     ExperimentMatrix,
     ReviewProfileName,
@@ -32,7 +28,6 @@ from sec_review_framework.data.experiment import (
     ToolVariant,
     VerificationVariant,
 )
-from sec_review_framework.data.findings import Severity, VulnClass
 from sec_review_framework.db import Database
 from sec_review_framework.models.base import ModelResponse, RetryPolicy
 from sec_review_framework.reporting.json_report import JSONReportGenerator
@@ -73,14 +68,18 @@ class CombinedReportGenerator(ReportGenerator):
 
 def _make_minimal_dataset(datasets_dir: Path, dataset_name: str) -> None:
     """
-    Create a minimal dataset layout that ExperimentWorker and LabelStore expect:
+    Create a minimal dataset layout that ExperimentWorker expects:
 
         datasets_dir/
           targets/
             <dataset_name>/
               repo/
                 app.py          ← source file to review
-              labels.jsonl      ← ground truth labels
+
+    Ground truth labels are stored in the coordinator DB (Phase 2B) and fetched
+    by workers via HTTP.  No labels.jsonl file is written here; evaluation will
+    be skipped (metrics=None) for in-process test runs that lack a live HTTP
+    coordinator, which is acceptable for smoke-test purposes.
     """
     target_dir = datasets_dir / "targets" / dataset_name
     repo_dir = target_dir / "repo"
@@ -93,24 +92,6 @@ def _make_minimal_dataset(datasets_dir: Path, dataset_name: str) -> None:
         '    return db.execute(query)\n',
         encoding="utf-8",
     )
-
-    # One ground-truth label matching the injected sqli
-    label = GroundTruthLabel(
-        id="label-sqli-001",
-        dataset_version="1.0.0",
-        file_path="app.py",
-        line_start=2,
-        line_end=2,
-        cwe_id="CWE-89",
-        vuln_class=VulnClass.SQLI,
-        severity=Severity.HIGH,
-        description="SQL injection via string formatting",
-        source=GroundTruthSource.INJECTED,
-        confidence="confirmed",
-        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
-    )
-    labels_path = target_dir / "labels.jsonl"
-    labels_path.write_text(label.model_dump_json() + "\n", encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
