@@ -32,6 +32,7 @@ from sec_review_framework.agent.subagent import (  # noqa: E402
     SubagentDeps,
     SubagentOutput,
     _check_caps,
+    _resolve_role,
     _run_child_sync,
     make_invoke_subagent_batch_tool,
     make_invoke_subagent_tool,
@@ -599,3 +600,230 @@ class TestChildIsolation:
 
         # clone() was called at least once (child_deps + make_tool_callables)
         assert len(clones_used) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Tests: _resolve_role helper
+# ---------------------------------------------------------------------------
+
+
+class TestResolveRole:
+    """Tests for the _resolve_role helper function."""
+
+    def test_exact_match_returns_role(self) -> None:
+        available = {"builtin_v2.sqli_specialist", "builtin_v2.xss_specialist"}
+        assert _resolve_role("builtin_v2.sqli_specialist", available) == "builtin_v2.sqli_specialist"
+
+    def test_bare_suffix_resolves_to_namespaced(self) -> None:
+        available = {"builtin_v2.sqli_specialist"}
+        assert _resolve_role("sqli_specialist", available) == "builtin_v2.sqli_specialist"
+
+    def test_ambiguous_bare_raises_model_retry(self) -> None:
+        available = {"builtin_v2.sqli_specialist", "experimental.sqli_specialist"}
+        with pytest.raises(ModelRetry, match="Ambiguous role"):
+            _resolve_role("sqli_specialist", available)
+
+    def test_unknown_role_returns_none(self) -> None:
+        available = {"builtin_v2.sqli_specialist"}
+        assert _resolve_role("nonexistent_role", available) is None
+
+    def test_empty_available_returns_none(self) -> None:
+        assert _resolve_role("sqli_specialist", set()) is None
+
+    def test_exact_match_preferred_over_suffix_match(self) -> None:
+        """If the bare name is itself in available_roles, exact match wins."""
+        available = {"sqli_specialist", "builtin_v2.sqli_specialist"}
+        # "sqli_specialist" is an exact match — should not be ambiguous
+        assert _resolve_role("sqli_specialist", available) == "sqli_specialist"
+
+    def test_multiple_suffix_matches_raises(self) -> None:
+        available = {"ns1.foo_role", "ns2.foo_role", "ns3.foo_role"}
+        with pytest.raises(ModelRetry, match="Ambiguous role"):
+            _resolve_role("foo_role", available)
+
+
+# ---------------------------------------------------------------------------
+# Tests: invoke_subagent role resolution
+# ---------------------------------------------------------------------------
+
+
+class TestInvokeSubagentRoleResolution:
+    """Tests that invoke_subagent resolves bare and namespaced roles."""
+
+    @pytest.mark.asyncio
+    async def test_resolves_bare_role_name(self) -> None:
+        """Bare role name 'sqli_specialist' resolves to 'builtin_v2.sqli_specialist'."""
+        strategy = _make_strategy(strategy_id="builtin_v2.sqli_specialist")
+        scripted = ScriptedLiteLLMProvider(
+            responses=[{"content": "done", "tool_calls": [], "input_tokens": 5, "output_tokens": 3}]
+        )
+
+        invoke_subagent = make_invoke_subagent_tool()
+        deps = _make_deps(
+            available_roles={"builtin_v2.sqli_specialist"},
+            strategies={"builtin_v2.sqli_specialist": strategy},
+        )
+        ctx = _make_run_context(deps)
+
+        with patch(
+            "sec_review_framework.agent.subagent.LiteLLMProvider",
+            return_value=scripted,
+        ):
+            await invoke_subagent(ctx, role="sqli_specialist", input={"vuln_class": "sqli"})
+
+        # Log must record the fully-namespaced role
+        assert len(deps.single_call_log) == 1
+        logged_role, _ = deps.single_call_log[0]
+        assert logged_role == "builtin_v2.sqli_specialist"
+
+    @pytest.mark.asyncio
+    async def test_resolves_full_namespaced_role(self) -> None:
+        """Full namespaced role 'builtin_v2.sqli_specialist' is accepted directly."""
+        strategy = _make_strategy(strategy_id="builtin_v2.sqli_specialist")
+        scripted = ScriptedLiteLLMProvider(
+            responses=[{"content": "done", "tool_calls": [], "input_tokens": 5, "output_tokens": 3}]
+        )
+
+        invoke_subagent = make_invoke_subagent_tool()
+        deps = _make_deps(
+            available_roles={"builtin_v2.sqli_specialist"},
+            strategies={"builtin_v2.sqli_specialist": strategy},
+        )
+        ctx = _make_run_context(deps)
+
+        with patch(
+            "sec_review_framework.agent.subagent.LiteLLMProvider",
+            return_value=scripted,
+        ):
+            await invoke_subagent(
+                ctx, role="builtin_v2.sqli_specialist", input={"vuln_class": "sqli"}
+            )
+
+        assert len(deps.single_call_log) == 1
+        logged_role, _ = deps.single_call_log[0]
+        assert logged_role == "builtin_v2.sqli_specialist"
+
+    @pytest.mark.asyncio
+    async def test_ambiguous_bare_role_raises_model_retry(self) -> None:
+        """Bare name matching two namespaces raises ModelRetry with ambiguity message."""
+        strategy = _make_strategy(strategy_id="builtin_v2.sqli_specialist")
+        invoke_subagent = make_invoke_subagent_tool()
+        deps = _make_deps(
+            available_roles={"builtin_v2.sqli_specialist", "experimental.sqli_specialist"},
+            strategies={
+                "builtin_v2.sqli_specialist": strategy,
+                "experimental.sqli_specialist": strategy,
+            },
+        )
+        ctx = _make_run_context(deps)
+
+        with pytest.raises(ModelRetry, match="Ambiguous role"):
+            await invoke_subagent(ctx, role="sqli_specialist", input={})
+
+    @pytest.mark.asyncio
+    async def test_unknown_role_raises_model_retry_with_available(self) -> None:
+        """Completely unknown role raises ModelRetry listing available roles."""
+        invoke_subagent = make_invoke_subagent_tool()
+        deps = _make_deps(available_roles={"builtin_v2.sqli_specialist"})
+        ctx = _make_run_context(deps)
+
+        with pytest.raises(ModelRetry, match="Unknown subagent role"):
+            await invoke_subagent(ctx, role="totally_unknown_role", input={})
+
+
+# ---------------------------------------------------------------------------
+# Tests: invoke_subagent_batch role resolution
+# ---------------------------------------------------------------------------
+
+
+class TestInvokeSubagentBatchRoleResolution:
+    """Tests that invoke_subagent_batch resolves bare and namespaced roles."""
+
+    @pytest.mark.asyncio
+    async def test_resolves_bare_role_name(self) -> None:
+        """Bare role name resolves to full namespaced ID in batch_call_log."""
+        strategy = _make_strategy(strategy_id="builtin_v2.sqli_specialist")
+
+        def _make_scripted() -> ScriptedLiteLLMProvider:
+            return ScriptedLiteLLMProvider(
+                responses=[{"content": "done", "tool_calls": [], "input_tokens": 5, "output_tokens": 3}]
+            )
+
+        invoke_batch = make_invoke_subagent_batch_tool()
+        deps = _make_deps(
+            available_roles={"builtin_v2.sqli_specialist"},
+            strategies={"builtin_v2.sqli_specialist": strategy},
+        )
+        ctx = _make_run_context(deps)
+
+        with patch(
+            "sec_review_framework.agent.subagent.LiteLLMProvider",
+            side_effect=[_make_scripted(), _make_scripted()],
+        ):
+            await invoke_batch(
+                ctx,
+                role="sqli_specialist",
+                inputs=[{"vuln_class": "sqli"}, {"vuln_class": "sqli"}],
+            )
+
+        assert len(deps.batch_call_log) == 1
+        logged_role, _ = deps.batch_call_log[0]
+        assert logged_role == "builtin_v2.sqli_specialist"
+
+    @pytest.mark.asyncio
+    async def test_resolves_full_namespaced_role(self) -> None:
+        """Full namespaced role is recorded as-is in batch_call_log."""
+        strategy = _make_strategy(strategy_id="builtin_v2.sqli_specialist")
+
+        def _make_scripted() -> ScriptedLiteLLMProvider:
+            return ScriptedLiteLLMProvider(
+                responses=[{"content": "done", "tool_calls": [], "input_tokens": 5, "output_tokens": 3}]
+            )
+
+        invoke_batch = make_invoke_subagent_batch_tool()
+        deps = _make_deps(
+            available_roles={"builtin_v2.sqli_specialist"},
+            strategies={"builtin_v2.sqli_specialist": strategy},
+        )
+        ctx = _make_run_context(deps)
+
+        with patch(
+            "sec_review_framework.agent.subagent.LiteLLMProvider",
+            side_effect=[_make_scripted()],
+        ):
+            await invoke_batch(
+                ctx,
+                role="builtin_v2.sqli_specialist",
+                inputs=[{"vuln_class": "sqli"}],
+            )
+
+        assert len(deps.batch_call_log) == 1
+        logged_role, _ = deps.batch_call_log[0]
+        assert logged_role == "builtin_v2.sqli_specialist"
+
+    @pytest.mark.asyncio
+    async def test_ambiguous_bare_role_raises_model_retry(self) -> None:
+        """Bare name matching two namespaces raises ModelRetry."""
+        strategy = _make_strategy(strategy_id="builtin_v2.sqli_specialist")
+        invoke_batch = make_invoke_subagent_batch_tool()
+        deps = _make_deps(
+            available_roles={"builtin_v2.sqli_specialist", "experimental.sqli_specialist"},
+            strategies={
+                "builtin_v2.sqli_specialist": strategy,
+                "experimental.sqli_specialist": strategy,
+            },
+        )
+        ctx = _make_run_context(deps)
+
+        with pytest.raises(ModelRetry, match="Ambiguous role"):
+            await invoke_batch(ctx, role="sqli_specialist", inputs=[{}])
+
+    @pytest.mark.asyncio
+    async def test_unknown_role_raises_model_retry_with_available(self) -> None:
+        """Completely unknown role raises ModelRetry listing available roles."""
+        invoke_batch = make_invoke_subagent_batch_tool()
+        deps = _make_deps(available_roles={"builtin_v2.sqli_specialist"})
+        ctx = _make_run_context(deps)
+
+        with pytest.raises(ModelRetry, match="Unknown subagent role"):
+            await invoke_batch(ctx, role="totally_unknown_role", inputs=[{}])

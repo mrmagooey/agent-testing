@@ -51,11 +51,16 @@ from sec_review_framework.tools.registry import ToolRegistry  # noqa: E402
 
 
 class ScriptedLiteLLMProvider(LiteLLMProvider):
-    """LiteLLMProvider returning pre-scripted responses for offline tests."""
+    """LiteLLMProvider returning pre-scripted responses for offline tests.
+
+    Also maintains a ``token_log`` list of all :class:`ModelResponse` objects
+    returned, so tests can inspect per-call token costs.
+    """
 
     def __init__(self, responses: list[dict[str, Any]], model_name: str = "fake/test") -> None:
         super().__init__(model_name=model_name)
         self._responses: list[dict[str, Any]] = list(responses)
+        self.token_log: list[ModelResponse] = []
 
     def _do_complete(
         self,
@@ -68,7 +73,7 @@ class ScriptedLiteLLMProvider(LiteLLMProvider):
         if not self._responses:
             raise RuntimeError("ScriptedLiteLLMProvider: no more scripted responses")
         data = self._responses.pop(0)
-        return ModelResponse(
+        response = ModelResponse(
             content=data.get("content", ""),
             tool_calls=data.get("tool_calls", []),
             input_tokens=data.get("input_tokens", 200),
@@ -76,6 +81,8 @@ class ScriptedLiteLLMProvider(LiteLLMProvider):
             model_id=self.model_name,
             raw={},
         )
+        self.token_log.append(response)
+        return response
 
 
 # ---------------------------------------------------------------------------
@@ -900,3 +907,191 @@ class TestPerVulnClassParityV2:
         registry = load_default_registry()
         v1 = registry.get("builtin.per_vuln_class")
         assert v1.use_new_runner is False
+
+
+# ---------------------------------------------------------------------------
+# Tests: bare-role dispatch — integration test for role resolution fix
+# ---------------------------------------------------------------------------
+
+
+class TestBareRoleResolutionIntegration:
+    """Integration test: supervisor dispatches using bare role names (no namespace).
+
+    Verifies that the role-resolution fix in invoke_subagent lets the supervisor
+    call ``invoke_subagent(role="sqli_specialist", ...)`` even when
+    ``available_roles`` contains only ``"builtin_v2.sqli_specialist"``.
+
+    The test asserts:
+    - No ModelRetry is raised during the parent agent run.
+    - ``single_call_log`` records the *resolved* (namespaced) role.
+    - The programmatic fallback does NOT re-invoke the specialist.
+    """
+
+    def test_bare_role_dispatch_records_namespaced_id_no_fallback(self) -> None:
+        """Supervisor uses bare 'sqli_specialist'; log records 'builtin_v2.sqli_specialist'.
+
+        This simulates the exact bug scenario from Phase 3c: the parent prompt
+        says ``invoke_subagent(role="sqli_specialist")`` but available_roles has
+        the namespaced form.  Without the fix, ModelRetry fires each turn and the
+        run wastes its full turn budget.
+
+        With the fix, the call succeeds on the first try and the resolved role
+        appears in single_call_log — so the dispatch validator counts it as
+        dispatched and does NOT trigger the programmatic fallback.
+        """
+        from unittest import mock
+
+        # Build a minimal deps with only the sqli_specialist
+        sqli_strategy = _make_mock_specialist_strategy(VulnClass.SQLI, [])
+        deps = SubagentDeps(
+            depth=0,
+            max_depth=3,
+            invocations=0,
+            max_invocations=100,
+            max_batch_size=32,
+            # available_roles uses full namespaced ID
+            available_roles={"builtin_v2.sqli_specialist"},
+            subagent_strategies={"builtin_v2.sqli_specialist": sqli_strategy},
+            tool_registry=ToolRegistry(),
+        )
+
+        # Simulate the supervisor dispatching with the bare name
+        from sec_review_framework.agent.subagent import SubagentOutput, make_invoke_subagent_tool
+
+        def _mock_child_sync(strategy, input_data, parent_deps):
+            return SubagentOutput(role="builtin_v2.sqli_specialist", output=[], usage={})
+
+        with mock.patch(
+            "sec_review_framework.agent.subagent._run_child_sync",
+            side_effect=_mock_child_sync,
+        ):
+            import asyncio
+
+            tool_fn = make_invoke_subagent_tool()
+            ctx = mock.MagicMock()
+            ctx.deps = deps
+
+            # Must NOT raise ModelRetry — bare role resolves to namespaced ID
+            asyncio.run(
+                tool_fn(ctx, role="sqli_specialist", input={"vuln_class": "sqli"})
+            )
+
+        # The log records the RESOLVED (namespaced) role — not the bare alias
+        assert len(deps.single_call_log) == 1
+        logged_role, logged_input = deps.single_call_log[0]
+        assert logged_role == "builtin_v2.sqli_specialist", (
+            f"Expected 'builtin_v2.sqli_specialist' in log, got {logged_role!r}"
+        )
+        assert logged_input == {"vuln_class": "sqli"}
+
+    def test_bare_role_dispatch_counts_as_dispatched_no_fallback(self) -> None:
+        """After bare-role dispatch, the dispatch validator sees it as dispatched.
+
+        Runs a full run_strategy call where:
+        - The supervisor dispatches with bare name "sqli_specialist" (via pre-populated
+          single_call_log to avoid needing a real LLM for the parent agent turn).
+        - expected_dispatch includes one entry for sqli.
+        - Fallback mode is "programmatic".
+
+        Assert: programmatic fallback is NOT triggered (the validator finds the
+        namespaced role already in the log).
+        """
+        from unittest import mock
+
+        from sec_review_framework.strategies.runner import _programmatic_fallback, run_strategy
+
+        registry = load_default_registry()
+        strategy = registry.get("builtin_v2.per_vuln_class")
+
+        # Pre-populate single_call_log with the NAMESPACED role (as stored by
+        # the fixed invoke_subagent after resolving the bare name).
+        all_roles = {f"builtin_v2.{vc.value}_specialist" for vc in VulnClass}
+        # Simulate: all 16 roles were dispatched using bare names, which got
+        # resolved and logged as namespaced IDs.
+        mock_deps = SubagentDeps(
+            depth=0,
+            max_depth=3,
+            invocations=0,
+            max_invocations=100,
+            max_batch_size=32,
+            available_roles=all_roles,
+            subagent_strategies={
+                role: _make_mock_specialist_strategy(
+                    VulnClass(role.removeprefix("builtin_v2.").removesuffix("_specialist")), []
+                )
+                for role in all_roles
+            },
+            tool_registry=ToolRegistry(),
+        )
+        # Simulate having dispatched all 16 via bare names (stored as namespaced)
+        mock_deps.single_call_log = [
+            (role, {"vuln_class": role.removeprefix("builtin_v2.").removesuffix("_specialist")})
+            for role in all_roles
+        ]
+
+        all_findings_dicts = [
+            {
+                "id": str(__import__("uuid").uuid4()),
+                "file_path": f"src/module_{vc.value}.py",
+                "line_start": 1,
+                "line_end": 1,
+                "vuln_class": vc.value,
+                "cwe_ids": [],
+                "severity": "high",
+                "title": f"{vc.value} finding",
+                "description": f"A {vc.value} vulnerability.",
+                "recommendation": "Fix it.",
+                "confidence": 0.9,
+                "raw_llm_output": "",
+                "produced_by": "test",
+                "experiment_id": "test",
+            }
+            for vc in VulnClass
+        ]
+
+        provider = ScriptedLiteLLMProvider(
+            responses=[
+                {
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "name": "final_result",
+                            "id": "tc_bare_integration",
+                            "input": {"response": all_findings_dicts},
+                        }
+                    ],
+                    "input_tokens": 300,
+                    "output_tokens": 100,
+                }
+            ]
+        )
+
+        expected_dispatch = [{"vuln_class": vc.value} for vc in VulnClass]
+
+        fallback_call_count = [0]
+        original_fallback = _programmatic_fallback
+
+        def _counting_fallback(*args, **kwargs):
+            fallback_call_count[0] += 1
+            return original_fallback(*args, **kwargs)
+
+        with mock.patch(
+            "sec_review_framework.strategies.runner._programmatic_fallback",
+            side_effect=_counting_fallback,
+        ):
+            output = run_strategy(
+                strategy,
+                FakeTarget(),
+                provider,
+                ToolRegistry(),
+                deps_factory=lambda: mock_deps,
+                expected_dispatch=expected_dispatch,
+                dispatch_match_key="vuln_class",
+            )
+
+        # Fallback should NOT have been called — all 16 were dispatched
+        assert fallback_call_count[0] == 0, (
+            f"Programmatic fallback was triggered {fallback_call_count[0]} time(s) "
+            "but should have been 0 — all roles were already in single_call_log"
+        )
+        assert len(output.findings) == 16
