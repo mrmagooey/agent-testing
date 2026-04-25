@@ -9,7 +9,6 @@ from pathlib import Path
 import yaml
 
 from sec_review_framework.data.evaluation import GroundTruthLabel
-from sec_review_framework.ground_truth.models import LabelStore
 from sec_review_framework.ground_truth.vuln_injector import VulnInjector
 
 
@@ -17,6 +16,8 @@ class DiffDatasetGenerator:
     """
     Takes a clean repo, applies vuln injection templates to create a
     "vulnerable branch", and generates diff_spec.yaml for DiffReview testing.
+
+    Labels are returned to the caller for persistence via Database.append_dataset_labels.
     """
 
     def __init__(self, injector: VulnInjector, datasets_root: Path) -> None:
@@ -37,7 +38,7 @@ class DiffDatasetGenerator:
         3. Apply injection templates
         4. git commit (head_ref)
         5. Write diff_spec.yaml
-        6. Write labels via LabelStore
+        6. Return labels (caller persists via Database.append_dataset_labels)
         Returns list of GroundTruthLabel records created.
         """
         repo_dest = self.datasets_root / "targets" / dataset_name / "repo"
@@ -90,7 +91,5 @@ class DiffDatasetGenerator:
         spec_path = self.datasets_root / "targets" / dataset_name / "diff_spec.yaml"
         spec_path.write_text(yaml.dump(diff_spec))
 
-        # Step 6: Write labels
-        LabelStore(self.datasets_root).append(dataset_name, labels)
-
+        # Step 6: Return labels — caller must persist via Database.append_dataset_labels
         return labels

@@ -1725,26 +1725,77 @@ class ExperimentCoordinator:
     # Datasets
     # ------------------------------------------------------------------
 
-    def list_datasets(self) -> list[dict]:
-        datasets_dir = self.storage_root / "datasets"
-        if not datasets_dir.exists():
-            return []
-        result = []
-        for dataset_dir in datasets_dir.iterdir():
-            if not dataset_dir.is_dir():
-                continue
-            labels_file = dataset_dir / "labels.json"
-            label_count = 0
-            if labels_file.exists():
-                try:
-                    labels = json.loads(labels_file.read_text())
-                    label_count = len(labels) if isinstance(labels, list) else 0
-                except Exception:
-                    pass
-            result.append({"name": dataset_dir.name, "label_count": label_count})
-        return result
+    async def list_datasets(self) -> list[dict]:
+        return await self.db.list_datasets()
 
-    def import_cve(self, spec: dict) -> list[GroundTruthLabel]:
+    async def materialize_dataset(self, name: str) -> None:
+        """Clone (or re-materialize) a dataset onto disk and stamp materialized_at."""
+        row = await self.db.get_dataset(name)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"unknown dataset {name}")
+        target_repo_dir = self.storage_root / "datasets" / name / "repo"
+        if row["kind"] == "git":
+            target_repo_dir.parent.mkdir(parents=True, exist_ok=True)
+            subprocess.run(
+                ["git", "clone", "--depth=10", row["origin_url"], str(target_repo_dir)],
+                check=True,
+                capture_output=True,
+            )
+            if row.get("origin_commit"):
+                subprocess.run(
+                    ["git", "checkout", row["origin_commit"]],
+                    cwd=target_repo_dir,
+                    check=True,
+                    capture_output=True,
+                )
+        elif row["kind"] == "derived":
+            await self.materialize_dataset(row["base_dataset"])
+            recipe = json.loads(row["recipe_json"])
+            if recipe.get("templates_version") != self.templates_version:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"templates_version mismatch: "
+                        f"bundle={recipe.get('templates_version')} "
+                        f"target={self.templates_version}"
+                    ),
+                )
+            base_repo_dir = self.storage_root / "datasets" / row["base_dataset"] / "repo"
+            target_repo_dir.parent.mkdir(parents=True, exist_ok=True)
+            import shutil as _shutil
+            if target_repo_dir.exists():
+                _shutil.rmtree(target_repo_dir)
+            _shutil.copytree(base_repo_dir, target_repo_dir)
+            injector = self._build_vuln_injector()
+            for app_spec in recipe.get("applications", []):
+                injector.inject(
+                    repo_path=target_repo_dir,
+                    template_id=app_spec["template_id"],
+                    target_file=app_spec["target_file"],
+                    substitutions=app_spec.get("substitutions"),
+                )
+        await self.db.update_dataset_materialized_at(name, datetime.now(UTC).isoformat())
+
+    @property
+    def templates_version(self) -> str:
+        """SHA-256 hash over template files; cached after first access."""
+        if hasattr(self, "_templates_version_cache"):
+            return self._templates_version_cache  # type: ignore[return-value]
+        templates_root = self.storage_root / "datasets" / "templates"
+        if not templates_root.exists():
+            self._templates_version_cache = "absent"
+            return self._templates_version_cache
+        import hashlib as _hashlib
+        h = _hashlib.sha256()
+        for file_path in sorted(templates_root.rglob("*")):
+            if file_path.is_file():
+                rel = str(file_path.relative_to(templates_root))
+                h.update(rel.encode())
+                h.update(file_path.read_bytes())
+        self._templates_version_cache = h.hexdigest()
+        return self._templates_version_cache
+
+    async def import_cve(self, spec: dict) -> list[GroundTruthLabel]:
         try:
             import_spec = CVEImportSpec(**spec)
         except (ValidationError, TypeError) as exc:
@@ -1756,10 +1807,29 @@ class ExperimentCoordinator:
             raise HTTPException(status_code=400, detail=str(exc))
         except subprocess.CalledProcessError:
             raise HTTPException(status_code=502, detail="git clone or checkout failed")
-        self._append_labels(import_spec.dataset_name, labels)
+        # Persist dataset row to DB
+        now = datetime.now(UTC).isoformat()
+        dataset_row = {
+            "name": import_spec.dataset_name,
+            "kind": "git",
+            "origin_url": import_spec.repo_url,
+            "origin_commit": import_spec.fix_commit_sha,
+            "origin_ref": None,
+            "cve_id": import_spec.cve_id,
+            "metadata_json": "{}",
+            "created_at": now,
+        }
+        await self.db.create_dataset(dataset_row)
+        await self.db.update_dataset_materialized_at(import_spec.dataset_name, now)
+        # Persist labels to DB (add dataset_name field required by schema)
+        label_rows = [
+            {**lbl.model_dump(mode="json"), "dataset_name": import_spec.dataset_name}
+            for lbl in labels
+        ]
+        await self.db.append_dataset_labels(label_rows)
         return labels
 
-    def inject_vuln(self, dataset_name: str, req: dict) -> object:
+    async def inject_vuln(self, dataset_name: str, req: dict) -> object:
         repo_path, template_id, target_file, substitutions = self._parse_injection_request(
             dataset_name, req
         )
@@ -1775,8 +1845,33 @@ class ExperimentCoordinator:
             )
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail=f"Target file {target_file} not found")
-        self._append_labels(dataset_name, [result.label])
-        return result.label
+        label = result.label
+        # Build derived dataset row
+        now = datetime.now(UTC).isoformat()
+        derived_name = f"{dataset_name}_injected_{template_id}"
+        recipe = {
+            "templates_version": self.templates_version,
+            "applications": [
+                {
+                    "template_id": template_id,
+                    "target_file": target_file,
+                    "substitutions": substitutions,
+                }
+            ],
+        }
+        derived_row = {
+            "name": derived_name,
+            "kind": "derived",
+            "base_dataset": dataset_name,
+            "recipe_json": json.dumps(recipe),
+            "metadata_json": "{}",
+            "created_at": now,
+        }
+        await self.db.create_dataset(derived_row)
+        await self.db.update_dataset_materialized_at(derived_name, now)
+        label_row = {**label.model_dump(mode="json"), "dataset_name": derived_name}
+        await self.db.append_dataset_labels([label_row])
+        return label
 
     def preview_injection(self, dataset_name: str, req: dict) -> dict:
         repo_path, template_id, target_file, substitutions = self._parse_injection_request(
@@ -1819,23 +1914,6 @@ class ExperimentCoordinator:
                 status_code=400, detail=f"target_file {target_file} escapes dataset repo"
             )
         return repo_path, template_id, target_file, substitutions
-
-    def _append_labels(self, dataset_name: str, new_labels: list[GroundTruthLabel]) -> None:
-        """Atomically append new labels to datasets/{name}/labels.json."""
-        labels_file = self.storage_root / "datasets" / dataset_name / "labels.json"
-        labels_file.parent.mkdir(parents=True, exist_ok=True)
-        existing: list[dict] = []
-        if labels_file.exists():
-            try:
-                existing = json.loads(labels_file.read_text())
-                if not isinstance(existing, list):
-                    existing = []
-            except Exception:
-                existing = []
-        combined = existing + [label.model_dump(mode="json") for label in new_labels]
-        tmp = labels_file.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(combined, indent=2))
-        tmp.replace(labels_file)
 
     def _build_cve_resolver(self) -> CVEResolver:
         token = os.environ.get("GITHUB_TOKEN", "")
@@ -1919,14 +1997,21 @@ class ExperimentCoordinator:
             self._vuln_injector = VulnInjector(templates_root=templates_root)
         return self._vuln_injector
 
-    def get_labels(self, dataset_name: str, version: str | None = None) -> list[dict]:
-        labels_file = self.storage_root / "datasets" / dataset_name / "labels.json"
-        if not labels_file.exists():
-            return []
-        try:
-            return json.loads(labels_file.read_text())
-        except Exception:
-            return []
+    async def get_labels(
+        self,
+        dataset_name: str,
+        version: str | None = None,
+        cwe: str | None = None,
+        severity: str | None = None,
+        source: str | None = None,
+    ) -> list[dict]:
+        return await self.db.list_dataset_labels(
+            dataset_name,
+            version=version,
+            cwe=cwe,
+            severity=severity,
+            source=source,
+        )
 
     def get_file_tree(self, dataset_name: str) -> dict:
         dataset_dir = self.storage_root / "datasets" / dataset_name
@@ -1949,7 +2034,7 @@ class ExperimentCoordinator:
 
     _MAX_FILE_BYTES = 2 * 1024 * 1024  # 2 MiB
 
-    def get_file_content(
+    async def get_file_content(
         self,
         dataset_name: str,
         path: str,
@@ -2009,7 +2094,7 @@ class ExperimentCoordinator:
         else:
             content = candidate.read_text(errors="replace")
 
-        file_labels = [lb for lb in self.get_labels(dataset_name) if lb.get("file_path") == path]
+        file_labels = [lb for lb in await self.get_labels(dataset_name) if lb.get("file_path") == path]
 
         result: dict = {
             "path": path,
@@ -3069,7 +3154,7 @@ async def run_smoke_test() -> dict:
     model_id = configured_models[0]["id"]
 
     # Pick the first available dataset; require at least one to be present
-    datasets = coordinator.list_datasets()
+    datasets = await coordinator.list_datasets()
     if not datasets:
         raise HTTPException(
             status_code=412,
@@ -3384,9 +3469,9 @@ async def tool_audit(experiment_id: str, run_id: str) -> dict:
 # --- Datasets ---
 
 @app.get("/datasets")
-def list_datasets() -> list[dict]:
+async def list_datasets() -> list[dict]:
     """List available target datasets with label counts."""
-    return coordinator.list_datasets()
+    return await coordinator.list_datasets()
 
 
 @app.post("/datasets/discover-cves")
@@ -3409,9 +3494,9 @@ def resolve_cve(id: str) -> CVECandidateResponse:
 
 
 @app.post("/datasets/import-cve", status_code=201)
-def import_cve(spec: dict) -> dict:
+async def import_cve(spec: dict) -> dict:
     """Import a CVE-patched repo as a ground truth dataset."""
-    labels = coordinator.import_cve(spec)
+    labels = await coordinator.import_cve(spec)
     return {"labels_created": len(labels)}
 
 
@@ -3425,16 +3510,22 @@ def preview_injection(dataset_name: str, req: dict) -> dict:
 
 
 @app.post("/datasets/{dataset_name}/inject", status_code=201)
-def inject_vuln(dataset_name: str, req: dict) -> dict:
+async def inject_vuln(dataset_name: str, req: dict) -> dict:
     """Inject a vulnerability from a template into a dataset."""
-    label = coordinator.inject_vuln(dataset_name, req)
+    label = await coordinator.inject_vuln(dataset_name, req)
     return {"label_id": label.id, "file_path": label.file_path}
 
 
 @app.get("/datasets/{dataset_name}/labels")
-def get_labels(dataset_name: str, version: str | None = None) -> list[dict]:
+async def get_labels(dataset_name: str, request: Request) -> list[dict]:
     """View ground truth labels for a dataset."""
-    return coordinator.get_labels(dataset_name, version)
+    return await coordinator.get_labels(
+        dataset_name,
+        version=request.query_params.get("version"),
+        cwe=request.query_params.get("cwe"),
+        severity=request.query_params.get("severity"),
+        source=request.query_params.get("source"),
+    )
 
 
 @app.get("/datasets/{dataset_name}/tree")
@@ -3444,14 +3535,14 @@ def get_file_tree(dataset_name: str) -> dict:
 
 
 @app.get("/datasets/{dataset_name}/file")
-def get_file_content(
+async def get_file_content(
     dataset_name: str,
     path: str,
     start: int | None = None,
     end: int | None = None,
 ) -> dict:
     """Read a file from the dataset repo. Returns content with metadata."""
-    return coordinator.get_file_content(dataset_name, path, start=start, end=end)
+    return await coordinator.get_file_content(dataset_name, path, start=start, end=end)
 
 
 # --- Feedback ---
