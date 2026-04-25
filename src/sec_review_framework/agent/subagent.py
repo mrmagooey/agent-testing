@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import json
 from dataclasses import dataclass, field
 
 # TYPE_CHECKING import keeps the circular reference from materialising at runtime.
@@ -141,22 +142,24 @@ class SubagentDeps:
         The child:
 
         - Has ``depth = self.depth + 1``.
-        - Shares the *same* ``invocations`` counter (passed by reference via
-          the parent list trick — see implementation).
+        - The child starts with a snapshot of the current invocation count;
+          future recursive dispatches inside the child increment the child's
+          counter, not the parent's.
         - Receives a *cloned* :class:`~sec_review_framework.tools.registry.ToolRegistry`
           so its audit log is independent.
         - Inherits all other caps and strategies.
 
         Note: Python ``dataclass`` fields are not automatically shared by
-        reference.  The invocation counter is shared via ``SubagentDeps``
-        being mutable — the child holds a reference to the *same*
-        :class:`SubagentDeps` object and increments ``invocations`` directly
-        on the parent before each call (see :func:`_check_and_increment_caps`).
+        reference. The invocation counter is snapshotted here (as an immutable
+        integer), and the child's subsequent invocations are tracked in the
+        child's own ``invocations`` field.  The parent's counter is incremented
+        by the parent's invoke_subagent tool (see :func:`_check_caps`) before
+        calling ``_run_child_sync``.
         """
         return SubagentDeps(
             depth=self.depth + 1,
             max_depth=self.max_depth,
-            invocations=self.invocations,  # snapshot; actual accounting is in parent
+            invocations=self.invocations,
             max_invocations=self.max_invocations,
             max_batch_size=self.max_batch_size,
             available_roles=set(self.available_roles),
@@ -256,9 +259,7 @@ def _run_child_sync(
     )
 
     # Convert input_data to a user message string
-    import json as _json
-
-    user_message = _json.dumps(input_data) if isinstance(input_data, dict) else str(input_data)
+    user_message = json.dumps(input_data) if isinstance(input_data, dict) else str(input_data)
 
     # Run synchronously — this is called from a ThreadPoolExecutor worker thread
     result = asyncio.run(child_agent.run(user_message, deps=child_deps))
@@ -409,7 +410,7 @@ def make_invoke_subagent_batch_tool(
         def _run_one(inp: dict[str, Any]) -> SubagentOutput:
             return _run_child_sync(strategy, inp, deps)
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
             futures = [loop.run_in_executor(pool, _run_one, inp) for inp in inputs]
             results = await asyncio.gather(*futures)
