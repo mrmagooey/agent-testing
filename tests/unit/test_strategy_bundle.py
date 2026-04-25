@@ -299,3 +299,41 @@ def test_canonical_json_tools_sorted():
     j = json.loads(canonical_json(s))
     tools = j["default"]["tools"]
     assert tools == sorted(tools)
+
+
+# ---------------------------------------------------------------------------
+# dispatch_fallback Literal type validation
+# ---------------------------------------------------------------------------
+
+
+def test_dispatch_fallback_valid_values_accepted():
+    """All three Literal values are accepted without error."""
+    for valid_value in ("reprompt", "programmatic", "none"):
+        bundle = StrategyBundleDefault(
+            system_prompt="p",
+            user_prompt_template="u",
+            model_id="m",
+            tools=frozenset(),
+            verification="none",
+            max_turns=10,
+            tool_extensions=frozenset(),
+            dispatch_fallback=valid_value,  # type: ignore[arg-type]
+        )
+        assert bundle.dispatch_fallback == valid_value
+
+
+def test_dispatch_fallback_invalid_value_raises_validation_error():
+    """A non-Literal value for dispatch_fallback raises Pydantic ValidationError."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        StrategyBundleDefault(
+            system_prompt="p",
+            user_prompt_template="u",
+            model_id="m",
+            tools=frozenset(),
+            verification="none",
+            max_turns=10,
+            tool_extensions=frozenset(),
+            dispatch_fallback="invalid_fallback_value",  # type: ignore[arg-type]
+        )

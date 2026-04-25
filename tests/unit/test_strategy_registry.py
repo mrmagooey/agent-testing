@@ -237,10 +237,10 @@ def test_phase3c_specialists_no_use_new_runner():
 
 
 def test_phase3c_total_builtin_count():
-    """Registry must have exactly 5 legacy + 9 builtin_v2 = 22 total builtin entries.
+    """Registry must have exactly 5 legacy + 7 builtin_v2 non-specialists + 16 specialists = 28 total.
 
     5 legacy: single_agent, per_file, per_vuln_class, sast_first, diff_review
-    9 builtin_v2 (non-specialist): single_agent, diff_review, per_file,
+    7 builtin_v2 (non-specialist): single_agent, diff_review, per_file,
         sast_first, file_reviewer, triage_agent, per_vuln_class
     16 builtin_v2 specialists (one per VulnClass)
     Total: 5 + 7 + 16 = 28
