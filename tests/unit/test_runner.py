@@ -442,6 +442,90 @@ class TestBuildUserPrompt:
         prompt = _build_user_prompt(template, BareTarget())
         assert "<bare>" in prompt
 
+    def test_context_dict_overrides_target_values(self) -> None:
+        """Caller-supplied context overrides target-derived placeholders."""
+        template = "{repo_summary}"
+        target = FakeTarget()
+        prompt = _build_user_prompt(template, target, context={"repo_summary": "custom_summary"})
+        assert "custom_summary" in prompt
+        assert "app/views.py" not in prompt
+
+    def test_context_fills_per_subagent_placeholders(self) -> None:
+        """Per-subagent placeholders like file_path and sast_summary come from context."""
+        template = "File: {file_path}\nSAST: {sast_summary}"
+        target = FakeTarget()
+        prompt = _build_user_prompt(
+            template,
+            target,
+            context={"file_path": "app/views.py", "sast_summary": "SQL injection"},
+        )
+        assert "app/views.py" in prompt
+        assert "SQL injection" in prompt
+
+    def test_glob_placeholder_from_target_config(self) -> None:
+        """glob placeholder is filled from target.config.file_glob if available."""
+
+        class TargetWithGlob:
+            def get_file_tree(self) -> str:
+                return "src/"
+
+            class config:
+                file_glob = "**/*.py"
+
+        template = "Glob: {glob}"
+        prompt = _build_user_prompt(template, TargetWithGlob())
+        assert "**/*.py" in prompt
+
+    def test_glob_placeholder_defaults_to_empty(self) -> None:
+        """glob placeholder defaults to empty string when target has no config."""
+        template = "Glob: {glob}"
+        target = FakeTarget()
+        prompt = _build_user_prompt(template, target)
+        assert "Glob: " in prompt
+
+    def test_diff_text_from_target(self) -> None:
+        """diff_text placeholder is filled from target.diff_text if available."""
+
+        class TargetWithDiff:
+            def get_file_tree(self) -> str:
+                return "src/"
+
+            diff_text = "+++ new line added"
+
+        template = "Diff: {diff_text}"
+        prompt = _build_user_prompt(template, TargetWithDiff())
+        assert "+++ new line added" in prompt
+
+    def test_diff_text_defaults_to_empty(self) -> None:
+        """diff_text placeholder defaults to empty string when target has no diff_text."""
+        template = "Diff: {diff_text}"
+        target = FakeTarget()
+        prompt = _build_user_prompt(template, target)
+        assert "Diff: " in prompt
+
+    def test_file_content_placeholder_from_context(self) -> None:
+        """file_content placeholder is filled from context only."""
+        template = "Content:\n{file_content}"
+        target = FakeTarget()
+        prompt = _build_user_prompt(
+            template, target, context={"file_content": "import os\nos.system('hack')"}
+        )
+        assert "import os" in prompt
+
+    def test_vuln_class_placeholder_from_context(self) -> None:
+        """vuln_class placeholder is filled from context only."""
+        template = "Scan for {vuln_class} only."
+        target = FakeTarget()
+        prompt = _build_user_prompt(template, target, context={"vuln_class": "sqli"})
+        assert "sqli" in prompt
+
+    def test_context_none_is_safe(self) -> None:
+        """Passing context=None must not raise."""
+        template = "{repo_summary}"
+        target = FakeTarget()
+        prompt = _build_user_prompt(template, target, context=None)
+        assert "app/views.py" in prompt
+
 
 # ---------------------------------------------------------------------------
 # Tests: feature flag — _should_use_new_runner

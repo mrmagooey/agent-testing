@@ -124,7 +124,11 @@ def test_all_5_builtins_present():
 
 
 def test_all_7_builtins_present_after_phase3a():
-    """After Phase 3a, the registry has the original 5 plus 2 v2 entries."""
+    """After Phase 3a, the registry has the original 5 plus at least the 2 Phase-3a v2 entries.
+
+    Phase 3b adds 4 more (per_file, sast_first, file_reviewer, triage_agent).
+    This test uses subset-check so it does not need updating for each phase.
+    """
     registry = load_default_registry()
     expected_ids = {
         "builtin.single_agent",
@@ -136,7 +140,7 @@ def test_all_7_builtins_present_after_phase3a():
         "builtin_v2.diff_review",
     }
     actual_ids = {s.id for s in registry.list_all()}
-    assert expected_ids == actual_ids
+    assert expected_ids <= actual_ids
 
 
 def test_all_builtins_have_is_builtin_true():
@@ -145,10 +149,19 @@ def test_all_builtins_have_is_builtin_true():
         assert strategy.is_builtin, f"{strategy.id} should have is_builtin=True"
 
 
-def test_all_builtins_have_no_parent():
+def test_top_level_builtins_have_no_parent():
+    """Top-level (non-subagent) builtin strategies must have no parent_strategy_id.
+
+    Subagent strategies (e.g. builtin_v2.file_reviewer, builtin_v2.triage_agent)
+    DO carry a parent_strategy_id; those are excluded from this check.
+    """
     registry = load_default_registry()
+    subagent_ids = {"builtin_v2.file_reviewer", "builtin_v2.triage_agent"}
     for strategy in registry.list_all():
-        assert strategy.parent_strategy_id is None
+        if strategy.id not in subagent_ids:
+            assert strategy.parent_strategy_id is None, (
+                f"{strategy.id} unexpectedly has parent_strategy_id set"
+            )
 
 
 def test_builtin_orchestration_shapes():
