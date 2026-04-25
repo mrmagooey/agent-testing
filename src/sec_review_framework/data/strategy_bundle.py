@@ -11,7 +11,7 @@ import fnmatch
 import json
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -68,7 +68,7 @@ class StrategyBundleDefault(BaseModel):
     # "none"          — no fallback; missing dispatches are silently dropped.
     #
     # Phase 4 will normalise this across all strategies.
-    dispatch_fallback: str = "reprompt"
+    dispatch_fallback: Literal["reprompt", "programmatic", "none"] = "reprompt"
 
     model_config = {"frozen": True}
 
