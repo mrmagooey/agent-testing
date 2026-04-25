@@ -17,7 +17,6 @@ from sec_review_framework.data.strategy_bundle import (
     UserStrategy,
 )
 
-
 # ---------------------------------------------------------------------------
 # StrategyRegistry
 # ---------------------------------------------------------------------------
@@ -221,6 +220,59 @@ def seed_builtins(registry: StrategyRegistry) -> None:
             overrides=[],
             created_at=_CREATED_AT,
             is_builtin=True,
+        )
+    )
+
+
+    # ------------------------------------------------------------------
+    # builtin_v2.single_agent — parent-agent runner (Phase 3)
+    # ------------------------------------------------------------------
+    registry.register(
+        UserStrategy(
+            id="builtin_v2.single_agent",
+            name="Single Agent v2 (builtin)",
+            parent_strategy_id=None,
+            orchestration_shape=OrchestrationShape.SINGLE_AGENT,
+            default=StrategyBundleDefault(
+                system_prompt=_read(_SYSTEM_DIR / "single_agent.txt"),
+                user_prompt_template=_read(_USER_DIR / "single_agent.txt"),
+                profile_modifier="",
+                model_id=_DEFAULT_MODEL_ID,
+                tools=_DEFAULT_TOOLS,
+                verification=_DEFAULT_VERIFICATION,
+                max_turns=80,
+                tool_extensions=_DEFAULT_TOOL_EXTENSIONS,
+            ),
+            overrides=[],
+            created_at=_CREATED_AT,
+            is_builtin=True,
+            use_new_runner=True,
+        )
+    )
+
+    # ------------------------------------------------------------------
+    # builtin_v2.diff_review — parent-agent runner (Phase 3)
+    # ------------------------------------------------------------------
+    registry.register(
+        UserStrategy(
+            id="builtin_v2.diff_review",
+            name="Diff Review v2 (builtin)",
+            parent_strategy_id=None,
+            orchestration_shape=OrchestrationShape.DIFF_REVIEW,
+            default=StrategyBundleDefault(
+                system_prompt=_read(_SYSTEM_DIR / "diff_review.txt"),
+                user_prompt_template=_read(_USER_DIR / "diff_review.txt"),
+                profile_modifier="",
+                model_id=_DEFAULT_MODEL_ID,
+                tools=_DEFAULT_TOOLS,
+                verification=_DEFAULT_VERIFICATION,
+                max_turns=60,
+                tool_extensions=_DEFAULT_TOOL_EXTENSIONS,
+            ),
+            overrides=[],
+            created_at=_CREATED_AT,
+            is_builtin=True,
+            use_new_runner=True,
         )
     )
 
