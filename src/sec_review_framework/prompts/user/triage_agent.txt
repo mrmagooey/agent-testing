@@ -1,0 +1,11 @@
+Triage the following Semgrep findings for this file and look for additional issues Semgrep missed.
+
+File: {file_path}
+
+Semgrep findings:
+{sast_findings}
+
+Use the `read_file` tool to read the file content.
+Confirm, reject, or escalate each Semgrep finding. Also report any additional security issues you find.
+
+{finding_output_format}
