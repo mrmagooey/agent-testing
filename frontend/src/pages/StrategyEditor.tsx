@@ -5,14 +5,23 @@ import {
   createStrategy,
   validateStrategy,
   listToolExtensions,
+  listStrategiesFull,
   type UserStrategy,
   type OrchestrationShape,
   type StrategyBundleDefault,
   type StrategyBundleOverride,
   type OverrideRule,
   type ToolExtension,
+  type StrategySummary,
 } from '../api/client'
-import { VULN_CLASSES, GLOB_PREVIEW_SAMPLE_FILES } from '../api/strategies'
+import {
+  VULN_CLASSES,
+  GLOB_PREVIEW_SAMPLE_FILES,
+  OUTPUT_TYPE_NAMES,
+  DISPATCH_FALLBACK_OPTIONS,
+  type DispatchFallback,
+  type OutputTypeName,
+} from '../api/strategies'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/ui/tabs'
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -123,10 +132,11 @@ interface BundleFormProps {
   bundle: StrategyBundleDefault
   onChange: (b: StrategyBundleDefault) => void
   toolExtensions: ToolExtension[]
+  registryStrategies: StrategySummary[]
   showPlaceholderLinter?: boolean
 }
 
-function BundleDefaultForm({ bundle, onChange, toolExtensions, showPlaceholderLinter = true }: BundleFormProps) {
+function BundleDefaultForm({ bundle, onChange, toolExtensions, registryStrategies, showPlaceholderLinter = true }: BundleFormProps) {
   const set = <K extends keyof StrategyBundleDefault>(key: K, val: StrategyBundleDefault[K]) =>
     onChange({ ...bundle, [key]: val })
 
@@ -143,6 +153,15 @@ function BundleDefaultForm({ bundle, onChange, toolExtensions, showPlaceholderLi
       : [...bundle.tool_extensions, k]
     set('tool_extensions', next)
   }
+
+  const toggleSubagent = (id: string) => {
+    const next = bundle.subagents.includes(id)
+      ? bundle.subagents.filter((x) => x !== id)
+      : [...bundle.subagents, id]
+    set('subagents', next)
+  }
+
+  const hasSubagents = bundle.subagents.length > 0
 
   return (
     <div className="space-y-4">
@@ -226,6 +245,140 @@ function BundleDefaultForm({ bundle, onChange, toolExtensions, showPlaceholderLi
           </div>
         </div>
       )}
+
+      {/* Subagents multi-select */}
+      {registryStrategies.length > 0 && (
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+            Subagents
+          </label>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
+            Select strategies that this strategy may dispatch to as subagents.
+          </p>
+          <div
+            className="flex flex-col gap-1.5 max-h-48 overflow-y-auto rounded-lg border border-gray-200 dark:border-gray-700 p-2"
+            data-testid="subagents-list"
+          >
+            {registryStrategies.map((s) => (
+              <label
+                key={s.id}
+                className="flex items-center gap-2 cursor-pointer py-0.5 px-1 rounded hover:bg-gray-50 dark:hover:bg-gray-800"
+              >
+                <input
+                  type="checkbox"
+                  checked={bundle.subagents.includes(s.id)}
+                  onChange={() => toggleSubagent(s.id)}
+                  className="rounded"
+                  data-testid={`subagent-checkbox-${s.id}`}
+                />
+                <span className="text-sm font-mono text-gray-700 dark:text-gray-300">
+                  {s.id}
+                </span>
+                <span className="text-xs text-gray-400 dark:text-gray-500">
+                  ({s.orchestration_shape})
+                </span>
+              </label>
+            ))}
+          </div>
+          {bundle.subagents.length > 0 && (
+            <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+              {bundle.subagents.length} subagent{bundle.subagents.length !== 1 ? 's' : ''} selected — caps fields below are required.
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Subagent caps — visible always, required when subagents non-empty */}
+      <div className="space-y-3">
+        <div className="flex items-center gap-2">
+          <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">Subagent Caps</h3>
+          {!hasSubagents && (
+            <span className="text-xs text-gray-400 dark:text-gray-500">(unused when no subagents selected)</span>
+          )}
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div>
+            <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">
+              Max Depth
+            </label>
+            <input
+              type="number"
+              min={1}
+              value={bundle.max_subagent_depth}
+              onChange={(e) => set('max_subagent_depth', parseInt(e.target.value, 10) || 1)}
+              className="w-full text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2"
+              data-testid="max-subagent-depth-input"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">
+              Max Invocations
+            </label>
+            <input
+              type="number"
+              min={1}
+              value={bundle.max_subagent_invocations}
+              onChange={(e) => set('max_subagent_invocations', parseInt(e.target.value, 10) || 1)}
+              className="w-full text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2"
+              data-testid="max-subagent-invocations-input"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">
+              Max Batch Size
+            </label>
+            <input
+              type="number"
+              min={1}
+              value={bundle.max_subagent_batch_size}
+              onChange={(e) => set('max_subagent_batch_size', parseInt(e.target.value, 10) || 1)}
+              className="w-full text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2"
+              data-testid="max-subagent-batch-size-input"
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Dispatch Fallback */}
+      <div>
+        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+          Dispatch Fallback
+        </label>
+        <select
+          value={bundle.dispatch_fallback}
+          onChange={(e) => set('dispatch_fallback', e.target.value as DispatchFallback)}
+          className="w-full text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2"
+          data-testid="dispatch-fallback-select"
+        >
+          {DISPATCH_FALLBACK_OPTIONS.map((v) => (
+            <option key={v} value={v}>{v}</option>
+          ))}
+        </select>
+        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+          Behaviour when a subagent dispatch is incomplete: reprompt the supervisor, invoke programmatically, or drop.
+        </p>
+      </div>
+
+      {/* Output Type Name */}
+      <div>
+        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+          Output Type
+        </label>
+        <select
+          value={bundle.output_type_name ?? ''}
+          onChange={(e) => set('output_type_name', (e.target.value as OutputTypeName) || null)}
+          className="w-full text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2"
+          data-testid="output-type-name-select"
+        >
+          <option value="">(none — free-form text)</option>
+          {OUTPUT_TYPE_NAMES.map((v) => (
+            <option key={v} value={v}>{v}</option>
+          ))}
+        </select>
+        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+          Structured output type for subagent responses. None means legacy free-form text.
+        </p>
+      </div>
 
       {/* Profile Modifier */}
       <div>
@@ -585,6 +738,12 @@ const emptyDefault: StrategyBundleDefault = {
   verification: 'none',
   max_turns: 10,
   tool_extensions: [],
+  subagents: [],
+  max_subagent_depth: 3,
+  max_subagent_invocations: 100,
+  max_subagent_batch_size: 32,
+  dispatch_fallback: 'reprompt',
+  output_type_name: null,
 }
 
 // ─── Main Editor Component ───────────────────────────────────────────────────
@@ -606,10 +765,14 @@ export default function StrategyEditor() {
   const [defaultBundle, setDefaultBundle] = useState<StrategyBundleDefault>(emptyDefault)
   const [overrides, setOverrides] = useState<OverrideRule[]>([])
   const [toolExtensions, setToolExtensions] = useState<ToolExtension[]>([])
+  const [registryStrategies, setRegistryStrategies] = useState<StrategySummary[]>([])
 
   useEffect(() => {
     // Load tool extensions
     listToolExtensions().then(setToolExtensions).catch(() => {})
+
+    // Load strategy registry for subagents multi-select
+    listStrategiesFull().then(setRegistryStrategies).catch(() => {})
 
     // If fork mode, load parent strategy
     if (isFork && id) {
@@ -623,6 +786,7 @@ export default function StrategyEditor() {
             ...parent.default,
             tools: [...parent.default.tools],
             tool_extensions: [...parent.default.tool_extensions],
+            subagents: [...(parent.default.subagents ?? [])],
           })
           setOverrides(parent.overrides.map((r) => ({
             key: r.key,
@@ -647,6 +811,25 @@ export default function StrategyEditor() {
     e.preventDefault()
     setSaving(true)
     setSaveErrors([])
+
+    // Validate subagent caps: if subagents selected, caps must be >= 1
+    const clientErrors: string[] = []
+    if (defaultBundle.subagents.length > 0) {
+      if (!defaultBundle.max_subagent_depth || defaultBundle.max_subagent_depth < 1) {
+        clientErrors.push('max_subagent_depth must be a positive integer when subagents are selected.')
+      }
+      if (!defaultBundle.max_subagent_invocations || defaultBundle.max_subagent_invocations < 1) {
+        clientErrors.push('max_subagent_invocations must be a positive integer when subagents are selected.')
+      }
+      if (!defaultBundle.max_subagent_batch_size || defaultBundle.max_subagent_batch_size < 1) {
+        clientErrors.push('max_subagent_batch_size must be a positive integer when subagents are selected.')
+      }
+    }
+    if (clientErrors.length > 0) {
+      setSaveErrors(clientErrors)
+      setSaving(false)
+      return
+    }
 
     // Determine effective overrides (filter out empty keys for glob shapes)
     const effectiveOverrides: OverrideRule[] =
@@ -779,6 +962,7 @@ export default function StrategyEditor() {
               bundle={defaultBundle}
               onChange={setDefaultBundle}
               toolExtensions={toolExtensions}
+              registryStrategies={registryStrategies}
             />
           </div>
 
