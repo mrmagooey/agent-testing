@@ -1,6 +1,6 @@
 """Unified parent-agent runner for pydantic-ai–backed strategies.
 
-This module is the **Phase 2** implementation of the unified runner described
+This module is the **Phase 2/3b** implementation of the unified runner described
 in ``plan_subagents_pydantic_ai.md`` § 7.  It provides a single entry-point,
 :func:`run_strategy`, that builds a pydantic-ai :class:`~pydantic_ai.Agent`
 from a :class:`~sec_review_framework.data.strategy_bundle.UserStrategy` and
@@ -16,7 +16,7 @@ Contract
   continue to go through the legacy ``_SHAPE_TO_STRATEGY`` dispatch in
   ``worker.py``.  Phase 3 migrates the five built-in shapes; Phase 4 deletes
   the old code paths.
-- ``output_type`` is always ``list[Finding]`` in Phase 2.  Richer per-strategy
+- ``output_type`` is always ``list[Finding]`` in Phase 2/3b.  Richer per-strategy
   schemas (e.g. ``ReviewSummary``) are deferred to Phase 3.
 
 Feature-flag mechanism
@@ -43,6 +43,13 @@ A :class:`~sec_review_framework.agent.subagent.SubagentDeps` is constructed
 (or provided by the caller via *deps_factory*) and passed as ``deps`` to
 ``agent.run_sync()``.
 
+Dispatch validator
+------------------
+After ``agent.run_sync()`` completes, :func:`_validate_dispatch` inspects the
+``invoke_subagent_batch`` calls recorded on the deps object.  If any expected
+inputs were not dispatched, the validator re-prompts the agent with the missing
+list (continuation message).  The re-prompt is bounded to 1 attempt.
+
 Error handling
 --------------
 :exc:`~pydantic_ai.exceptions.UnexpectedModelBehavior` from pydantic-ai is
@@ -55,7 +62,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 # pydantic-ai imports — fail loudly if the "agent" extra is not installed.
 # Do NOT guard with try/except; the caller (worker.py) gates this import
@@ -103,6 +110,8 @@ def run_strategy(
     tools: ToolRegistry,
     *,
     deps_factory: Callable[[], SubagentDeps] | None = None,
+    expected_dispatch: list[dict[str, Any]] | None = None,
+    dispatch_match_key: str = "file_path",
 ) -> StrategyOutput:
     """Run *strategy* using the pydantic-ai unified runner.
 
@@ -132,11 +141,19 @@ def run_strategy(
         :class:`~sec_review_framework.agent.subagent.SubagentDeps`.  Used in
         tests to inject controlled deps.  When ``None`` and subagents are
         declared, a default ``SubagentDeps`` is built from the strategy caps.
+    expected_dispatch:
+        Optional list of input dicts the parent is expected to dispatch via
+        ``invoke_subagent_batch``.  When provided, the dispatch validator runs
+        after the first agent turn; if any inputs were missed the agent is
+        re-prompted with the missing items (one re-prompt only).
+    dispatch_match_key:
+        The key used to identify unique inputs in *expected_dispatch* (default
+        ``"file_path"``).
 
     Returns
     -------
     StrategyOutput
-        Findings list with dedup metadata.  In Phase 2 ``pre_dedup_count``
+        Findings list with dedup metadata.  In Phase 2/3b ``pre_dedup_count``
         and ``post_dedup_count`` are both equal to ``len(findings)`` (no
         deduplication — single agent, no overlap).
 
@@ -216,6 +233,37 @@ def run_strategy(
 
     findings: list[Finding] = result.output or []
 
+    # ------------------------------------------------------------------
+    # 7. Dispatch validator (optional, bounded to 1 re-prompt)
+    # ------------------------------------------------------------------
+    if expected_dispatch and deps is not None:
+        missing = _validate_dispatch(
+            strategy.id,
+            expected_dispatch,
+            deps.batch_call_log,
+            dispatch_match_key,
+        )
+        if missing:
+            re_prompt = (
+                "You missed dispatching the following inputs. "
+                "Please call invoke_subagent_batch now for these missing items:\n"
+                + "\n".join(str(m) for m in missing)
+            )
+            try:
+                retry_result = agent.run_sync(
+                    re_prompt,
+                    message_history=result.all_messages(),
+                    deps=deps,
+                )
+                extra_findings: list[Finding] = retry_result.output or []
+                findings = findings + extra_findings
+            except UnexpectedModelBehavior as exc:
+                logging.warning(
+                    "run_strategy: re-prompt for strategy %r failed: %s",
+                    strategy.id,
+                    exc,
+                )
+
     # Stamp required fields that pydantic-ai's structured output does not
     # populate automatically (id, raw_llm_output, produced_by, experiment_id).
     findings = _stamp_findings(findings, strategy_id=strategy.id)
@@ -235,12 +283,41 @@ def run_strategy(
 # ---------------------------------------------------------------------------
 
 
-def _build_user_prompt(template: str, target: object) -> str:
-    """Render *template* with *target* context.
+def _build_user_prompt(
+    template: str,
+    target: object,
+    context: dict[str, Any] | None = None,
+) -> str:
+    """Render *template* with *target* context and optional extra *context*.
 
-    Supports the same ``{repo_summary}`` and ``{finding_output_format}``
-    placeholders used by the legacy strategies.  Unknown placeholders are
-    left untouched (``str.format_map`` with a ``defaultdict`` fallback).
+    Supports all placeholders used by the built-in strategy prompt files:
+
+    - ``{repo_summary}`` — file tree or source-file list from *target*.
+    - ``{finding_output_format}`` — from ``common.FINDING_OUTPUT_FORMAT``.
+    - ``{glob}`` — from ``target.config.file_glob`` if available (else ``""``)
+      or from *context*.
+    - ``{diff_text}`` — from ``target.diff_text`` if available (else ``""``)
+      or from *context*.
+    - ``{file_path}`` — per-subagent placeholder; filled from *context* only.
+    - ``{file_content}`` — per-subagent placeholder; filled from *context* only.
+    - ``{sast_summary}`` — per-subagent placeholder; filled from *context* only.
+    - ``{vuln_class}`` — per-subagent placeholder; filled from *context* only.
+
+    Any placeholder not present in the built-in mapping or *context* is left
+    untouched so that templates with partial placeholders do not fail.
+
+    Parameters
+    ----------
+    template:
+        The raw prompt template string.
+    target:
+        The target codebase object.  Attributes are introspected for standard
+        placeholders (``get_file_tree``, ``list_source_files``, ``diff_text``,
+        ``config.file_glob``).
+    context:
+        Optional extra key→value pairs that override or supplement the values
+        derived from *target*.  Useful for per-subagent placeholders like
+        ``file_path``, ``file_content``, ``sast_summary``, ``vuln_class``.
     """
     from sec_review_framework.strategies.common import FINDING_OUTPUT_FORMAT
 
@@ -254,18 +331,94 @@ def _build_user_prompt(template: str, target: object) -> str:
         except AttributeError:
             repo_summary = str(target)
 
+    # Extract optional target attributes with safe fallbacks
+    try:
+        diff_text: str = target.diff_text  # type: ignore[attr-defined]
+    except AttributeError:
+        diff_text = ""
+
+    try:
+        glob: str = target.config.file_glob  # type: ignore[attr-defined]
+    except AttributeError:
+        glob = ""
+
     class _Missing(dict):
         """Leave unknown placeholders as-is."""
 
         def __missing__(self, key: str) -> str:
             return "{" + key + "}"
 
-    return template.format_map(
-        _Missing(
-            repo_summary=repo_summary,
-            finding_output_format=FINDING_OUTPUT_FORMAT,
+    # Base values from target
+    base: dict[str, Any] = {
+        "repo_summary": repo_summary,
+        "finding_output_format": FINDING_OUTPUT_FORMAT,
+        "diff_text": diff_text,
+        "glob": glob,
+        # Per-subagent placeholders — empty by default; callers pass via context
+        "file_path": "",
+        "file_content": "",
+        "sast_summary": "",
+        "vuln_class": "",
+    }
+
+    # Caller-supplied context overrides target-derived values
+    if context:
+        base.update(context)
+
+    return template.format_map(_Missing(base))
+
+
+def _validate_dispatch(
+    strategy_id: str,
+    expected_inputs: list[dict[str, Any]],
+    actual_calls: list[tuple[str, list[dict[str, Any]]]],
+    match_key: str,
+) -> list[dict[str, Any]]:
+    """Check that all *expected_inputs* were dispatched in *actual_calls*.
+
+    Parameters
+    ----------
+    strategy_id:
+        Strategy identifier (for logging only).
+    expected_inputs:
+        List of input dicts the parent was expected to dispatch (e.g. one per
+        file or one per flagged file).  Each dict must contain *match_key*.
+    actual_calls:
+        The ``deps.batch_call_log`` recorded during the run — a list of
+        ``(role, inputs)`` tuples.
+    match_key:
+        The key used to identify unique inputs (e.g. ``"file_path"``).
+
+    Returns
+    -------
+    list[dict[str, Any]]
+        Sub-list of *expected_inputs* that were NOT dispatched.  Empty list
+        means all inputs were dispatched correctly.
+    """
+    dispatched_keys: set[str] = set()
+    for _role, inputs in actual_calls:
+        for inp in inputs:
+            if match_key in inp:
+                dispatched_keys.add(str(inp[match_key]))
+
+    missing = [
+        inp
+        for inp in expected_inputs
+        if str(inp.get(match_key, "")) not in dispatched_keys
+    ]
+
+    if missing:
+        logging.warning(
+            "_validate_dispatch: strategy %r missed %d/%d expected inputs (key=%r). "
+            "Missing: %s",
+            strategy_id,
+            len(missing),
+            len(expected_inputs),
+            match_key,
+            [inp.get(match_key) for inp in missing],
         )
-    )
+
+    return missing
 
 
 def _build_default_deps(
