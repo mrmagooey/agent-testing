@@ -1,0 +1,12 @@
+Perform a parallel per-file security audit of the repository.
+
+Repository structure:
+{repo_summary}
+
+Steps:
+1. Call `list_files` with glob="{glob}" to get the list of source files to review.
+2. Call `invoke_subagent_batch` with role="file_reviewer" and inputs=[{{"file_path": f}} for each file f].
+3. Aggregate the returned list[Finding]s from all subagents.
+4. Deduplicate by (file_path, line_start, vuln_class) and return the final list.
+
+{finding_output_format}

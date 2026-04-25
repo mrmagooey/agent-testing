@@ -1,0 +1,8 @@
+Perform a security review of the following file.
+
+File: {file_path}
+
+Use the `read_file` tool to read the file content.
+You may use other tools to read related files if context is needed.
+
+{finding_output_format}

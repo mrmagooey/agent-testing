@@ -276,6 +276,112 @@ def seed_builtins(registry: StrategyRegistry) -> None:
         )
     )
 
+    # ------------------------------------------------------------------
+    # builtin_v2.file_reviewer — subagent invoked by builtin_v2.per_file
+    # ------------------------------------------------------------------
+    registry.register(
+        UserStrategy(
+            id="builtin_v2.file_reviewer",
+            name="File Reviewer subagent (builtin)",
+            parent_strategy_id="builtin_v2.per_file",
+            orchestration_shape=OrchestrationShape.SINGLE_AGENT,
+            default=StrategyBundleDefault(
+                system_prompt=_read(_SYSTEM_DIR / "file_reviewer.txt"),
+                user_prompt_template=_read(_USER_DIR / "file_reviewer.txt"),
+                profile_modifier="",
+                model_id=_DEFAULT_MODEL_ID,
+                tools=_DEFAULT_TOOLS,
+                verification=_DEFAULT_VERIFICATION,
+                max_turns=20,
+                tool_extensions=_DEFAULT_TOOL_EXTENSIONS,
+            ),
+            overrides=[],
+            created_at=_CREATED_AT,
+            is_builtin=True,
+            use_new_runner=True,
+        )
+    )
+
+    # ------------------------------------------------------------------
+    # builtin_v2.per_file — parent-agent runner (Phase 3b)
+    # ------------------------------------------------------------------
+    registry.register(
+        UserStrategy(
+            id="builtin_v2.per_file",
+            name="Per File v2 (builtin)",
+            parent_strategy_id=None,
+            orchestration_shape=OrchestrationShape.PER_FILE,
+            default=StrategyBundleDefault(
+                system_prompt=_read(_SYSTEM_DIR / "per_file_v2.txt"),
+                user_prompt_template=_read(_USER_DIR / "per_file_v2.txt"),
+                profile_modifier="",
+                model_id=_DEFAULT_MODEL_ID,
+                tools=_DEFAULT_TOOLS,
+                verification=_DEFAULT_VERIFICATION,
+                max_turns=20,
+                tool_extensions=_DEFAULT_TOOL_EXTENSIONS,
+                subagents=["builtin_v2.file_reviewer"],
+            ),
+            overrides=[],
+            created_at=_CREATED_AT,
+            is_builtin=True,
+            use_new_runner=True,
+        )
+    )
+
+    # ------------------------------------------------------------------
+    # builtin_v2.triage_agent — subagent invoked by builtin_v2.sast_first
+    # ------------------------------------------------------------------
+    registry.register(
+        UserStrategy(
+            id="builtin_v2.triage_agent",
+            name="Triage Agent subagent (builtin)",
+            parent_strategy_id="builtin_v2.sast_first",
+            orchestration_shape=OrchestrationShape.SINGLE_AGENT,
+            default=StrategyBundleDefault(
+                system_prompt=_read(_SYSTEM_DIR / "triage_agent.txt"),
+                user_prompt_template=_read(_USER_DIR / "triage_agent.txt"),
+                profile_modifier="",
+                model_id=_DEFAULT_MODEL_ID,
+                tools=_DEFAULT_TOOLS,
+                verification=_DEFAULT_VERIFICATION,
+                max_turns=20,
+                tool_extensions=_DEFAULT_TOOL_EXTENSIONS,
+            ),
+            overrides=[],
+            created_at=_CREATED_AT,
+            is_builtin=True,
+            use_new_runner=True,
+        )
+    )
+
+    # ------------------------------------------------------------------
+    # builtin_v2.sast_first — parent-agent runner (Phase 3b)
+    # ------------------------------------------------------------------
+    registry.register(
+        UserStrategy(
+            id="builtin_v2.sast_first",
+            name="SAST First v2 (builtin)",
+            parent_strategy_id=None,
+            orchestration_shape=OrchestrationShape.SAST_FIRST,
+            default=StrategyBundleDefault(
+                system_prompt=_read(_SYSTEM_DIR / "sast_first_v2.txt"),
+                user_prompt_template=_read(_USER_DIR / "sast_first_v2.txt"),
+                profile_modifier="",
+                model_id=_DEFAULT_MODEL_ID,
+                tools=_DEFAULT_TOOLS,
+                verification=_DEFAULT_VERIFICATION,
+                max_turns=25,
+                tool_extensions=_DEFAULT_TOOL_EXTENSIONS,
+                subagents=["builtin_v2.triage_agent"],
+            ),
+            overrides=[],
+            created_at=_CREATED_AT,
+            is_builtin=True,
+            use_new_runner=True,
+        )
+    )
+
 
 def load_default_registry() -> StrategyRegistry:
     """Return a new StrategyRegistry seeded with the 5 builtin strategies."""
