@@ -7,6 +7,27 @@ export type OrchestrationShape =
   | 'sast_first'
   | 'diff_review'
 
+export type DispatchFallback = 'reprompt' | 'programmatic' | 'none'
+
+export type OutputTypeName =
+  | 'finding_list'
+  | 'verifier_verdict'
+  | 'source_list'
+  | 'taint_path_list'
+  | 'sanitization_verdict'
+  | 'classifier_judgement_list'
+
+export const OUTPUT_TYPE_NAMES: OutputTypeName[] = [
+  'finding_list',
+  'verifier_verdict',
+  'source_list',
+  'taint_path_list',
+  'sanitization_verdict',
+  'classifier_judgement_list',
+]
+
+export const DISPATCH_FALLBACK_OPTIONS: DispatchFallback[] = ['reprompt', 'programmatic', 'none']
+
 export interface StrategyBundleDefault {
   system_prompt: string
   user_prompt_template: string
@@ -16,6 +37,12 @@ export interface StrategyBundleDefault {
   verification: string
   max_turns: number
   tool_extensions: string[]
+  subagents: string[]
+  max_subagent_depth: number
+  max_subagent_invocations: number
+  max_subagent_batch_size: number
+  dispatch_fallback: DispatchFallback
+  output_type_name: OutputTypeName | null
 }
 
 export interface StrategyBundleOverride {

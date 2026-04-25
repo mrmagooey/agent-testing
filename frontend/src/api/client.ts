@@ -601,6 +601,8 @@ export function listStrategies(): Promise<string[]> {
 
 export type {
   OrchestrationShape,
+  DispatchFallback,
+  OutputTypeName,
   StrategySummary,
   UserStrategy,
   StrategyBundleDefault,
