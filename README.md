@@ -354,6 +354,83 @@ make kind-e2e-down              Delete the kind cluster
 
 ---
 
+## Authoring a parent-subagent strategy
+
+Strategies are `UserStrategy` objects stored in the `StrategyRegistry`. A strategy
+with a non-empty `subagents` list becomes a parent: the runner injects
+`invoke_subagent` and `invoke_subagent_batch` as tools the parent agent can call.
+
+### Minimal example (two subagents)
+
+```python
+from sec_review_framework.data.strategy_bundle import (
+    OrchestrationShape, StrategyBundleDefault, UserStrategy,
+)
+from datetime import datetime, timezone
+
+strategy = UserStrategy(
+    id="my_org.triage_then_verify",
+    name="Triage + verify",
+    parent_strategy_id=None,
+    orchestration_shape=OrchestrationShape.SINGLE_AGENT,
+    default=StrategyBundleDefault(
+        system_prompt="You are a security triage coordinator.",
+        user_prompt_template="Repository:\n{repo_summary}\n\nTriage, then verify each finding.",
+        model_id="openai/gpt-4o",
+        tools=frozenset(["read_file", "grep"]),
+        verification="none",
+        max_turns=60,
+        tool_extensions=frozenset(),
+        subagents=["my_org.file_reviewer", "my_org.verifier"],
+        max_subagent_depth=2,
+        max_subagent_invocations=80,
+        max_subagent_batch_size=20,
+        dispatch_fallback="reprompt",
+        output_type_name=None,
+    ),
+    created_at=datetime.now(timezone.utc),
+)
+```
+
+The parent prompt should instruct the agent how to use the two injected tools:
+- `invoke_subagent(role, input)` — single dispatch (one subagent call).
+- `invoke_subagent_batch(role, inputs)` — parallel fan-out over a list.
+
+### Key fields
+
+| Field | Effect |
+|---|---|
+| `subagents` | List of strategy IDs the parent may call as subagents. |
+| `max_subagent_depth` | Maximum recursive nesting depth (default 3). |
+| `max_subagent_invocations` | Total invocations across the run (default 100). |
+| `max_subagent_batch_size` | Max inputs per `invoke_subagent_batch` call (default 32). |
+| `dispatch_fallback` | `"reprompt"` (re-ask once), `"programmatic"` (force-fire missed), `"none"`. |
+| `output_type_name` | Structured Pydantic output type for child agents (see `agent/output_types.py`). |
+
+### Via the API
+
+```bash
+curl -X POST https://coordinator/api/strategies \
+  -H 'Content-Type: application/json' \
+  -d @my_strategy.json
+```
+
+The request body is the `UserStrategy` JSON. The strategy is stored in the DB
+and immediately available for experiment submissions. List registered strategies
+via `GET /api/strategies`.
+
+### Via the StrategyEditor UI
+
+Open the web UI at `/strategies/editor`. See the **Strategy Editor** section in
+the UI for the form-based authoring flow — it covers the same fields and lets you
+test a strategy on a dataset before including it in an experiment matrix.
+
+For the detailed execution model (how `run_strategy` builds the pydantic-ai
+agent, how dispatch validation works, how `LiteLLMModel` adapts providers), see
+[ARCHITECTURE.md § 7](ARCHITECTURE.md#7-strategy-implementations).
+
+---
+
 ## License
 
 Internal research project.
