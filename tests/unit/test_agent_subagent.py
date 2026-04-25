@@ -1,0 +1,601 @@
+"""Unit tests for :mod:`sec_review_framework.agent.subagent`.
+
+Tests cover:
+- SubagentDeps construction and child_deps()
+- SubagentOutput Pydantic model
+- invoke_subagent: caps enforcement (depth, invocations, unknown role)
+- invoke_subagent_batch: caps enforcement (batch size, invocations, unknown role)
+- Batch parallel dispatch (independence of results)
+- Child agent isolation (no shared state between invocations)
+
+Tests that exercise _run_child_sync use a patched LiteLLMProvider so no
+network calls are made.
+
+Skipped cleanly when the ``agent`` extra (pydantic-ai) is not installed.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+# Skip the entire module if pydantic_ai is not installed.
+pydantic_ai = pytest.importorskip("pydantic_ai")
+
+from pydantic_ai import RunContext  # noqa: E402
+from pydantic_ai.exceptions import ModelRetry  # noqa: E402
+
+from sec_review_framework.agent.subagent import (  # noqa: E402
+    SubagentDeps,
+    SubagentOutput,
+    _check_caps,
+    _run_child_sync,
+    make_invoke_subagent_batch_tool,
+    make_invoke_subagent_tool,
+)
+from sec_review_framework.data.strategy_bundle import (  # noqa: E402
+    OrchestrationShape,
+    StrategyBundleDefault,
+    UserStrategy,
+)
+from sec_review_framework.models.base import Message, ToolDefinition  # noqa: E402
+from sec_review_framework.models.base import ModelResponse as FrameworkModelResponse  # noqa: E402
+from sec_review_framework.models.litellm_provider import LiteLLMProvider  # noqa: E402
+from sec_review_framework.tools.registry import ToolRegistry  # noqa: E402
+
+# ---------------------------------------------------------------------------
+# Test helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_strategy(
+    model_id: str = "fake/test",
+    strategy_id: str = "test.strategy",
+    system_prompt: str = "You are a reviewer.",
+) -> UserStrategy:
+    """Construct a minimal single-agent UserStrategy for testing."""
+    return UserStrategy(
+        id=strategy_id,
+        name=f"Test strategy: {strategy_id}",
+        parent_strategy_id=None,
+        orchestration_shape=OrchestrationShape.SINGLE_AGENT,
+        default=StrategyBundleDefault(
+            system_prompt=system_prompt,
+            user_prompt_template="Review this.",
+            model_id=model_id,
+            tools=frozenset(),
+            verification="none",
+            max_turns=10,
+            tool_extensions=frozenset(),
+        ),
+        overrides=[],
+        created_at=datetime(2026, 1, 1),
+        is_builtin=False,
+    )
+
+
+def _make_deps(
+    available_roles: set[str] | None = None,
+    strategies: dict[str, UserStrategy] | None = None,
+    depth: int = 0,
+    max_depth: int = 3,
+    invocations: int = 0,
+    max_invocations: int = 100,
+    max_batch_size: int = 32,
+) -> SubagentDeps:
+    """Build a SubagentDeps with sensible test defaults."""
+    if available_roles is None:
+        available_roles = set()
+    if strategies is None:
+        strategies = {}
+    return SubagentDeps(
+        depth=depth,
+        max_depth=max_depth,
+        invocations=invocations,
+        max_invocations=max_invocations,
+        max_batch_size=max_batch_size,
+        available_roles=available_roles,
+        subagent_strategies=strategies,
+        tool_registry=ToolRegistry(),
+    )
+
+
+def _make_run_context(deps: SubagentDeps) -> RunContext[SubagentDeps]:
+    """Build a minimal RunContext wrapping *deps*."""
+    ctx = MagicMock(spec=RunContext)
+    ctx.deps = deps
+    ctx.run_id = "test-run-id"
+    return ctx
+
+
+class ScriptedLiteLLMProvider(LiteLLMProvider):
+    """Pre-scripted provider for offline tests."""
+
+    def __init__(self, responses: list[dict[str, Any]], model_name: str = "fake/test") -> None:
+        super().__init__(model_name=model_name)
+        self._responses: list[dict[str, Any]] = list(responses)
+
+    def _do_complete(
+        self,
+        messages: list[Message],
+        tools: list[ToolDefinition] | None,
+        system_prompt: str | None,
+        max_tokens: int,
+        temperature: float,
+    ) -> FrameworkModelResponse:
+        if not self._responses:
+            raise RuntimeError("ScriptedLiteLLMProvider: no more scripted responses")
+        data = self._responses.pop(0)
+        return FrameworkModelResponse(
+            content=data.get("content", ""),
+            tool_calls=data.get("tool_calls", []),
+            input_tokens=data.get("input_tokens", 10),
+            output_tokens=data.get("output_tokens", 5),
+            model_id=self.model_name,
+            raw={},
+        )
+
+
+# ---------------------------------------------------------------------------
+# Tests: SubagentDeps
+# ---------------------------------------------------------------------------
+
+
+class TestSubagentDeps:
+    """Tests for SubagentDeps construction and child_deps()."""
+
+    def test_default_construction(self) -> None:
+        deps = SubagentDeps()
+        assert deps.depth == 0
+        assert deps.max_depth == 3
+        assert deps.invocations == 0
+        assert deps.max_invocations == 100
+        assert deps.max_batch_size == 32
+        assert deps.available_roles == set()
+        assert deps.subagent_strategies == {}
+
+    def test_child_deps_depth_incremented(self) -> None:
+        deps = SubagentDeps(depth=0, max_depth=5)
+        child = deps.child_deps()
+        assert child.depth == 1
+
+    def test_child_deps_max_depth_inherited(self) -> None:
+        deps = SubagentDeps(depth=0, max_depth=7)
+        child = deps.child_deps()
+        assert child.max_depth == 7
+
+    def test_child_deps_caps_inherited(self) -> None:
+        deps = SubagentDeps(max_invocations=50, max_batch_size=16)
+        child = deps.child_deps()
+        assert child.max_invocations == 50
+        assert child.max_batch_size == 16
+
+    def test_child_deps_strategies_copied(self) -> None:
+        strategy = _make_strategy()
+        deps = SubagentDeps(
+            available_roles={"reviewer"},
+            subagent_strategies={"reviewer": strategy},
+        )
+        child = deps.child_deps()
+        assert "reviewer" in child.available_roles
+        assert "reviewer" in child.subagent_strategies
+
+    def test_child_deps_tool_registry_cloned(self) -> None:
+        registry = ToolRegistry()
+        deps = SubagentDeps(tool_registry=registry)
+        child = deps.child_deps()
+        # Child registry is a distinct object (clone)
+        assert child.tool_registry is not registry
+
+    def test_child_deps_registry_has_independent_audit_log(self) -> None:
+        registry = ToolRegistry()
+        deps = SubagentDeps(tool_registry=registry)
+        child = deps.child_deps()
+        assert child.tool_registry.audit_log is not registry.audit_log
+
+
+# ---------------------------------------------------------------------------
+# Tests: SubagentOutput
+# ---------------------------------------------------------------------------
+
+
+class TestSubagentOutput:
+    """Tests for SubagentOutput Pydantic model."""
+
+    def test_basic_construction(self) -> None:
+        output = SubagentOutput(
+            role="reviewer",
+            output={"findings": []},
+            usage={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+        )
+        assert output.role == "reviewer"
+        assert output.output == {"findings": []}
+        assert output.usage["total_tokens"] == 15
+
+    def test_output_accepts_any_type(self) -> None:
+        # output field is Any
+        output_str = SubagentOutput(role="r", output="plain string", usage={})
+        output_list = SubagentOutput(role="r", output=[1, 2, 3], usage={})
+        output_none = SubagentOutput(role="r", output=None, usage={})
+        assert output_str.output == "plain string"
+        assert output_list.output == [1, 2, 3]
+        assert output_none.output is None
+
+    def test_usage_can_be_empty_dict(self) -> None:
+        output = SubagentOutput(role="r", output="x", usage={})
+        assert output.usage == {}
+
+
+# ---------------------------------------------------------------------------
+# Tests: _check_caps
+# ---------------------------------------------------------------------------
+
+
+class TestCheckCaps:
+    """Tests for the internal _check_caps helper."""
+
+    def test_no_violation_does_not_raise(self) -> None:
+        deps = _make_deps(depth=0, max_depth=3, invocations=0, max_invocations=10)
+        ctx = _make_run_context(deps)
+        # Should not raise
+        _check_caps(ctx, count=1)
+
+    def test_depth_at_max_raises_model_retry(self) -> None:
+        deps = _make_deps(depth=3, max_depth=3)
+        ctx = _make_run_context(deps)
+        with pytest.raises(ModelRetry, match="depth cap"):
+            _check_caps(ctx, count=1)
+
+    def test_depth_above_max_raises_model_retry(self) -> None:
+        deps = _make_deps(depth=5, max_depth=3)
+        ctx = _make_run_context(deps)
+        with pytest.raises(ModelRetry):
+            _check_caps(ctx, count=1)
+
+    def test_invocation_cap_exceeded_raises_model_retry(self) -> None:
+        deps = _make_deps(invocations=9, max_invocations=10)
+        ctx = _make_run_context(deps)
+        with pytest.raises(ModelRetry, match="invocation cap"):
+            _check_caps(ctx, count=2)  # 9 + 2 = 11 > 10
+
+    def test_invocation_cap_exact_boundary_raises(self) -> None:
+        deps = _make_deps(invocations=10, max_invocations=10)
+        ctx = _make_run_context(deps)
+        with pytest.raises(ModelRetry):
+            _check_caps(ctx, count=1)
+
+    def test_invocation_cap_just_under_boundary_does_not_raise(self) -> None:
+        deps = _make_deps(invocations=9, max_invocations=10)
+        ctx = _make_run_context(deps)
+        # 9 + 1 = 10 == 10, not > 10, so should pass
+        _check_caps(ctx, count=1)
+
+
+# ---------------------------------------------------------------------------
+# Tests: invoke_subagent tool — caps and role validation
+# ---------------------------------------------------------------------------
+
+
+class TestInvokeSubagentTool:
+    """Tests for make_invoke_subagent_tool."""
+
+    @pytest.mark.asyncio
+    async def test_unknown_role_raises_model_retry(self) -> None:
+        invoke_subagent = make_invoke_subagent_tool()
+        deps = _make_deps(available_roles={"known_role"})
+        ctx = _make_run_context(deps)
+
+        with pytest.raises(ModelRetry, match="Unknown subagent role"):
+            await invoke_subagent(ctx, role="unknown_role", input={})
+
+    @pytest.mark.asyncio
+    async def test_depth_cap_raises_model_retry(self) -> None:
+        invoke_subagent = make_invoke_subagent_tool()
+        strategy = _make_strategy()
+        deps = _make_deps(
+            available_roles={"reviewer"},
+            strategies={"reviewer": strategy},
+            depth=3,
+            max_depth=3,
+        )
+        ctx = _make_run_context(deps)
+
+        with pytest.raises(ModelRetry, match="depth cap"):
+            await invoke_subagent(ctx, role="reviewer", input={"task": "review"})
+
+    @pytest.mark.asyncio
+    async def test_invocation_cap_raises_model_retry(self) -> None:
+        invoke_subagent = make_invoke_subagent_tool()
+        strategy = _make_strategy()
+        deps = _make_deps(
+            available_roles={"reviewer"},
+            strategies={"reviewer": strategy},
+            invocations=100,
+            max_invocations=100,
+        )
+        ctx = _make_run_context(deps)
+
+        with pytest.raises(ModelRetry, match="invocation cap"):
+            await invoke_subagent(ctx, role="reviewer", input={})
+
+    @pytest.mark.asyncio
+    async def test_invocation_counter_incremented_on_success(self) -> None:
+        """Successful invocation increments deps.invocations by 1."""
+        strategy = _make_strategy(model_id="fake/test")
+
+        scripted = ScriptedLiteLLMProvider(
+            responses=[{"content": "review complete", "tool_calls": [], "input_tokens": 5, "output_tokens": 3}]
+        )
+
+        invoke_subagent = make_invoke_subagent_tool()
+        deps = _make_deps(
+            available_roles={"reviewer"},
+            strategies={"reviewer": strategy},
+            invocations=0,
+        )
+        ctx = _make_run_context(deps)
+
+        with patch(
+            "sec_review_framework.agent.subagent.LiteLLMProvider",
+            return_value=scripted,
+        ):
+            await invoke_subagent(ctx, role="reviewer", input={"code": "x = 1"})
+
+        assert deps.invocations == 1
+
+    @pytest.mark.asyncio
+    async def test_returns_subagent_output_on_success(self) -> None:
+        """Successful invocation returns a SubagentOutput with the role name."""
+        strategy = _make_strategy(model_id="fake/test")
+        scripted = ScriptedLiteLLMProvider(
+            responses=[
+                {"content": "no issues found", "tool_calls": [], "input_tokens": 5, "output_tokens": 3}
+            ]
+        )
+
+        invoke_subagent = make_invoke_subagent_tool()
+        deps = _make_deps(
+            available_roles={"reviewer"},
+            strategies={"reviewer": strategy},
+        )
+        ctx = _make_run_context(deps)
+
+        with patch(
+            "sec_review_framework.agent.subagent.LiteLLMProvider",
+            return_value=scripted,
+        ):
+            result = await invoke_subagent(ctx, role="reviewer", input={"code": "pass"})
+
+        assert isinstance(result, SubagentOutput)
+        assert result.role == "test.strategy"  # strategy.id
+        assert "usage" in result.__dict__ or result.usage is not None
+
+
+# ---------------------------------------------------------------------------
+# Tests: invoke_subagent_batch tool — caps and parallel dispatch
+# ---------------------------------------------------------------------------
+
+
+class TestInvokeSubagentBatchTool:
+    """Tests for make_invoke_subagent_batch_tool."""
+
+    @pytest.mark.asyncio
+    async def test_unknown_role_raises_model_retry(self) -> None:
+        invoke_batch = make_invoke_subagent_batch_tool()
+        deps = _make_deps(available_roles={"known_role"})
+        ctx = _make_run_context(deps)
+
+        with pytest.raises(ModelRetry, match="Unknown subagent role"):
+            await invoke_batch(ctx, role="unknown_role", inputs=[{}])
+
+    @pytest.mark.asyncio
+    async def test_batch_too_large_raises_model_retry(self) -> None:
+        invoke_batch = make_invoke_subagent_batch_tool()
+        strategy = _make_strategy()
+        deps = _make_deps(
+            available_roles={"reviewer"},
+            strategies={"reviewer": strategy},
+            max_batch_size=3,
+        )
+        ctx = _make_run_context(deps)
+
+        with pytest.raises(ModelRetry, match="Batch too large"):
+            await invoke_batch(ctx, role="reviewer", inputs=[{}] * 4)
+
+    @pytest.mark.asyncio
+    async def test_invocation_cap_exceeded_raises_model_retry(self) -> None:
+        invoke_batch = make_invoke_subagent_batch_tool()
+        strategy = _make_strategy()
+        deps = _make_deps(
+            available_roles={"reviewer"},
+            strategies={"reviewer": strategy},
+            invocations=8,
+            max_invocations=10,
+        )
+        ctx = _make_run_context(deps)
+
+        # 8 + 4 = 12 > 10
+        with pytest.raises(ModelRetry, match="invocation cap"):
+            await invoke_batch(ctx, role="reviewer", inputs=[{}] * 4)
+
+    @pytest.mark.asyncio
+    async def test_depth_cap_raises_model_retry(self) -> None:
+        invoke_batch = make_invoke_subagent_batch_tool()
+        strategy = _make_strategy()
+        deps = _make_deps(
+            available_roles={"reviewer"},
+            strategies={"reviewer": strategy},
+            depth=3,
+            max_depth=3,
+        )
+        ctx = _make_run_context(deps)
+
+        with pytest.raises(ModelRetry, match="depth cap"):
+            await invoke_batch(ctx, role="reviewer", inputs=[{}])
+
+    @pytest.mark.asyncio
+    async def test_invocation_counter_incremented_by_batch_size(self) -> None:
+        """Batch invocation increments deps.invocations by len(inputs)."""
+        strategy = _make_strategy(model_id="fake/test")
+
+        def _make_scripted() -> ScriptedLiteLLMProvider:
+            return ScriptedLiteLLMProvider(
+                responses=[{"content": "done", "tool_calls": [], "input_tokens": 5, "output_tokens": 3}]
+            )
+
+        invoke_batch = make_invoke_subagent_batch_tool()
+        deps = _make_deps(
+            available_roles={"reviewer"},
+            strategies={"reviewer": strategy},
+            invocations=0,
+        )
+        ctx = _make_run_context(deps)
+
+        with patch(
+            "sec_review_framework.agent.subagent.LiteLLMProvider",
+            side_effect=[_make_scripted(), _make_scripted(), _make_scripted()],
+        ):
+            await invoke_batch(ctx, role="reviewer", inputs=[{}, {}, {}])
+
+        assert deps.invocations == 3
+
+    @pytest.mark.asyncio
+    async def test_batch_returns_list_of_subagent_outputs(self) -> None:
+        """Batch invocation returns one SubagentOutput per input."""
+        strategy = _make_strategy(model_id="fake/test")
+
+        def _make_scripted() -> ScriptedLiteLLMProvider:
+            return ScriptedLiteLLMProvider(
+                responses=[{"content": "result", "tool_calls": [], "input_tokens": 5, "output_tokens": 3}]
+            )
+
+        invoke_batch = make_invoke_subagent_batch_tool()
+        deps = _make_deps(
+            available_roles={"reviewer"},
+            strategies={"reviewer": strategy},
+        )
+        ctx = _make_run_context(deps)
+
+        with patch(
+            "sec_review_framework.agent.subagent.LiteLLMProvider",
+            side_effect=[_make_scripted(), _make_scripted()],
+        ):
+            results = await invoke_batch(ctx, role="reviewer", inputs=[{"a": 1}, {"a": 2}])
+
+        assert isinstance(results, list)
+        assert len(results) == 2
+        assert all(isinstance(r, SubagentOutput) for r in results)
+
+    @pytest.mark.asyncio
+    async def test_empty_batch_is_accepted(self) -> None:
+        """Empty inputs list is valid (0 invocations dispatched)."""
+        invoke_batch = make_invoke_subagent_batch_tool()
+        strategy = _make_strategy()
+        deps = _make_deps(
+            available_roles={"reviewer"},
+            strategies={"reviewer": strategy},
+        )
+        ctx = _make_run_context(deps)
+
+        results = await invoke_batch(ctx, role="reviewer", inputs=[])
+        assert results == []
+        assert deps.invocations == 0
+
+
+# ---------------------------------------------------------------------------
+# Tests: child isolation
+# ---------------------------------------------------------------------------
+
+
+class TestChildIsolation:
+    """Verify that child agents run in isolation — no shared state."""
+
+    def test_each_child_gets_fresh_provider(self) -> None:
+        """Each _run_child_sync call builds a new LiteLLMProvider.
+
+        _run_child_sync must be called from a thread with no running event
+        loop — this test uses asyncio.run in its own thread to simulate the
+        production ThreadPoolExecutor environment.
+        """
+        import concurrent.futures
+
+        strategy = _make_strategy()
+        calls: list[str] = []
+
+        def _fake_provider(model_name: str) -> ScriptedLiteLLMProvider:
+            calls.append(model_name)
+            return ScriptedLiteLLMProvider(
+                responses=[{"content": "done", "tool_calls": [], "input_tokens": 5, "output_tokens": 3}]
+            )
+
+        deps = SubagentDeps(
+            depth=0,
+            max_depth=3,
+            invocations=0,
+            max_invocations=100,
+            max_batch_size=32,
+            available_roles={"reviewer"},
+            subagent_strategies={"reviewer": strategy},
+            tool_registry=ToolRegistry(),
+        )
+
+        def run_in_thread(inp: dict) -> SubagentOutput:
+            with patch(
+                "sec_review_framework.agent.subagent.LiteLLMProvider",
+                side_effect=_fake_provider,
+            ):
+                return _run_child_sync(strategy, inp, deps)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(run_in_thread, {"input": "a"}), pool.submit(run_in_thread, {"input": "b"})]
+            [f.result() for f in futures]
+
+        # Each call creates a fresh provider
+        assert len(calls) == 2
+
+    def test_child_registry_is_cloned(self) -> None:
+        """Child receives a clone of the parent registry, not the same object.
+
+        _run_child_sync must be called from a thread with no running event loop.
+        """
+        import concurrent.futures
+
+        strategy = _make_strategy()
+        parent_registry = ToolRegistry()
+        deps = SubagentDeps(
+            depth=0,
+            max_depth=3,
+            invocations=0,
+            max_invocations=100,
+            max_batch_size=32,
+            available_roles={"reviewer"},
+            subagent_strategies={"reviewer": strategy},
+            tool_registry=parent_registry,
+        )
+
+        clones_used: list[ToolRegistry] = []
+        original_clone = parent_registry.clone
+
+        def _capture_clone() -> ToolRegistry:
+            clone = original_clone()
+            clones_used.append(clone)
+            return clone
+
+        def run_in_thread() -> SubagentOutput:
+            scripted = ScriptedLiteLLMProvider(
+                responses=[{"content": "done", "tool_calls": [], "input_tokens": 5, "output_tokens": 3}]
+            )
+            with patch.object(parent_registry, "clone", side_effect=_capture_clone), patch(
+                "sec_review_framework.agent.subagent.LiteLLMProvider",
+                return_value=scripted,
+            ):
+                return _run_child_sync(strategy, {}, deps)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            pool.submit(run_in_thread).result()
+
+        # clone() was called at least once (child_deps + make_tool_callables)
+        assert len(clones_used) >= 1
