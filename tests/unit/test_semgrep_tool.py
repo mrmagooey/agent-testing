@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from sec_review_framework.tools.semgrep import SASTMatch, SemgrepTool
+from sec_review_framework.tools.semgrep import SASTMatch, SemgrepBinaryNotFoundError, SemgrepTool
 
 
 # ---------------------------------------------------------------------------
@@ -80,12 +80,28 @@ def test_invoke_path_escape_blocked(tmp_path: Path):
     assert "escapes" in result
 
 
-def test_missing_semgrep_binary_returns_error(tmp_path: Path):
+def test_missing_semgrep_binary_raises_domain_error(tmp_path: Path):
+    """When the semgrep binary is absent, SemgrepBinaryNotFoundError is raised."""
     tool = SemgrepTool(repo_path=tmp_path)
     with patch("subprocess.run", side_effect=FileNotFoundError):
-        result = tool.invoke({"path": "."})
-    assert "Error" in result
-    assert "semgrep" in result.lower()
+        with pytest.raises(SemgrepBinaryNotFoundError) as exc_info:
+            tool.invoke({"path": "."})
+    assert "PATH" in str(exc_info.value)
+    assert "sidecar" in str(exc_info.value)
+
+
+def test_semgrep_binary_not_found_error_is_runtime_error(tmp_path: Path):
+    """SemgrepBinaryNotFoundError is a RuntimeError subclass."""
+    err = SemgrepBinaryNotFoundError("msg")
+    assert isinstance(err, RuntimeError)
+
+
+def test_run_full_scan_raises_domain_error_when_binary_missing(tmp_path: Path):
+    """run_full_scan propagates SemgrepBinaryNotFoundError when binary absent."""
+    tool = SemgrepTool(repo_path=tmp_path)
+    with patch("subprocess.run", side_effect=FileNotFoundError):
+        with pytest.raises(SemgrepBinaryNotFoundError):
+            tool.run_full_scan()
 
 
 def test_timeout_handled_gracefully(tmp_path: Path):

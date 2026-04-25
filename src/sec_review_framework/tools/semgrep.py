@@ -1,4 +1,10 @@
-"""Semgrep SAST tool wrapper for the security review framework."""
+"""Semgrep SAST tool wrapper for the security review framework.
+
+Semgrep is invoked as an **external binary** via subprocess — it is NOT a Python
+dependency of this package.  The binary must be available on PATH at runtime.
+When using the ``sast_first`` strategy, ensure the SAST runtime sidecar (or your
+local environment) has ``semgrep`` installed and reachable.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +17,15 @@ from pydantic import BaseModel
 
 from sec_review_framework.models.base import ToolDefinition
 from sec_review_framework.tools.registry import Tool
+
+
+class SemgrepBinaryNotFoundError(RuntimeError):
+    """Raised when the ``semgrep`` binary is not found on PATH.
+
+    The ``sast_first`` strategy requires ``semgrep`` to be available as an
+    external binary.  It is NOT installed by ``uv sync`` — it must be provided
+    by the SAST runtime sidecar or your local environment.
+    """
 
 
 class SASTMatch(BaseModel):
@@ -144,8 +159,10 @@ class SemgrepTool(Tool):
             )
         except subprocess.TimeoutExpired:
             return "Error: semgrep timed out after 120 seconds."
-        except FileNotFoundError:
-            return "Error: semgrep binary not found. Install with: pip install semgrep"
+        except FileNotFoundError as exc:
+            raise SemgrepBinaryNotFoundError(
+                "semgrep binary not found on PATH; ensure the SAST runtime sidecar is configured"
+            ) from exc
 
         if proc.returncode not in (0, 1):
             # semgrep exits 1 when findings exist, which is normal.
