@@ -18,7 +18,6 @@ from sec_review_framework.strategies.strategy_registry import (
     load_default_registry,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -118,6 +117,23 @@ def test_all_5_builtins_present():
         "builtin.per_vuln_class",
         "builtin.sast_first",
         "builtin.diff_review",
+    }
+    actual_ids = {s.id for s in registry.list_all()}
+    # Phase 3a adds builtin_v2.* entries; original 5 must still be present.
+    assert expected_ids <= actual_ids
+
+
+def test_all_7_builtins_present_after_phase3a():
+    """After Phase 3a, the registry has the original 5 plus 2 v2 entries."""
+    registry = load_default_registry()
+    expected_ids = {
+        "builtin.single_agent",
+        "builtin.per_file",
+        "builtin.per_vuln_class",
+        "builtin.sast_first",
+        "builtin.diff_review",
+        "builtin_v2.single_agent",
+        "builtin_v2.diff_review",
     }
     actual_ids = {s.id for s in registry.list_all()}
     assert expected_ids == actual_ids
