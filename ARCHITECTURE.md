@@ -47,6 +47,7 @@
 │    POST /experiments/{id}/cancel          — cancel remaining jobs              │
 │    GET  /experiments/{id}/results/download — download reports as .zip          │
 │    GET  /experiments/{id}/export          — export experiment as .secrev.zip   │
+│                                             (?dataset_mode=reference|descriptor)    │
 │    POST /experiments/import               — import .secrev.zip bundle          │
 │    GET  /experiments/{id}/compare-runs    — side-by-side run comparison        │
 │                                                                             │
@@ -57,12 +58,15 @@
 │                                                                             │
 │  Datasets:                                                                  │
 │    GET  /datasets                     — list available datasets            │
+│    GET  /datasets/{name}              — get dataset row (kind, origin)     │
 │    POST /datasets/discover-cves       — auto-discover CVEs by criteria     │
 │    POST /datasets/resolve-cve         — resolve a CVE ID to repo+commit   │
 │    POST /datasets/import-cve          — import (auto-resolve or full spec) │
+│    POST /datasets/{name}/rematerialize — re-clone or re-derive cache      │
 │    POST /datasets/{name}/inject/preview — dry-run: show diff before inject │
 │    POST /datasets/{name}/inject       — inject a vuln from template        │
 │    GET  /datasets/{name}/labels       — view ground truth labels           │
+│                                         (?cwe=&severity=&source=)            │
 │    GET  /datasets/{name}/tree         — repo file tree                    │
 │    GET  /datasets/{name}/file         — read file content (syntax-ready)  │
 │                                                                             │
@@ -1838,6 +1842,8 @@ Experiments can be serialized into `.secrev.zip` bundles for transfer between de
 manifest.json                     # metadata: schema_version, source_deployment, exported_at, etc.
 experiment.json                   # experiments table row as JSON
 runs.json                         # array of runs table rows (tool_extensions preserved)
+datasets.json                     # array of dataset rows (only if dataset_mode=descriptor)
+dataset_labels.json               # array of dataset_labels rows (only if dataset_mode=descriptor)
 outputs/
   matrix_report.json
   matrix_report.md
@@ -1854,10 +1860,6 @@ outputs/
 config/
   runs/
     <run_id>.json                 # run config (model, strategy, profile, etc.)
-datasets/                         # only if include_datasets=true
-  <name>/
-    repo/                         # full repo checkout
-    labels.jsonl                  # ground truth labels
 ```
 
 **Manifest Schema:**
@@ -1871,11 +1873,13 @@ datasets/                         # only if include_datasets=true
   "experiment_id": "exp_abc123",
   "run_ids": ["run_1", "run_2"],
   "dataset_names": ["dataset_a"],
-  "dataset_mode": "reference|embedded",
+  "dataset_mode": "reference|descriptor",
   "artifact_counts": {
     "findings": 24,
     "runs": 2,
-    "outputs": 6
+    "outputs": 6,
+    "dataset_count": 1,
+    "dataset_label_count": 42
   },
   "uncompressed_bytes": 52428800,
   "notes": ""
@@ -1888,9 +1892,46 @@ datasets/                         # only if include_datasets=true
 - Run IDs (including legacy `_ext-<sorted>` suffixes) are preserved verbatim.
 - `run_upload_tokens` is never serialized (per-deployment secret).
 - Findings are rebuilt on import from each run's `run_result.json` using the same path as `scripts/backfill_findings_index.py`.
-- Missing dataset references produce warnings, not failures.
 - Conflict policy (`reject`, `rename`, `merge`) determines behavior on existing experiment IDs.
 - Import is gated by `IMPORT_ENABLED` env var; returns 503 if disabled.
+
+**Dataset import (descriptor mode):**
+
+- `datasets.json` and `dataset_labels.json` are inserted into the `datasets` and `dataset_labels` tables.
+- For `kind='git'` datasets, `Coordinator.materialize_dataset()` clones the repo at the specified commit SHA on demand.
+- For `kind='derived'` datasets, materialization recurses through `base_dataset` and re-applies template injections; the recipe is stored in `recipe_json`.
+- `materialized_at` is NULL initially; it is set when the on-disk cache is first populated.
+- If `templates_version` in a derived dataset's recipe does not match the target deployment's configured version, a warning is emitted and the row is inserted with `materialized_at` still NULL; re-materialization is deferred until the versions align.
+- Import summary response includes `datasets_imported` (count), `datasets_rehydrated` (list of names), and `dataset_labels_imported` (count).
+- Missing dataset references in `reference` mode produce warnings, not failures. Missing datasets required for run evaluation will be flagged when runs are executed.
+
+### 5.7 Dataset Model
+
+Two new SQLite tables (`datasets`, `dataset_labels`) are the source of truth for all ground-truth datasets and their labels. The legacy `labels.json` / `labels.jsonl` files are no longer written or read.
+
+**Tables Overview:**
+
+- `datasets` — one row per dataset, with columns: `name`, `kind`, `origin` (JSON), `recipe_json` (for derived), `materialized_at` (NULL until cache is populated), `templates_version` (for derived datasets).
+- `dataset_labels` — one row per ground-truth label (CVE, injected vuln, etc.), with columns: `dataset_name`, `file`, `line_start`, `line_end`, `cwe`, `severity`, `source`, `description`, etc. Supports filtering by `cwe`, `severity`, `source`.
+
+**Three Dataset Concepts:**
+
+1. **Templates** — framework-internal vulnerability injection recipe library at `storage_root/datasets/templates/` (or configured path). Versioned via a `templates_version` string (typically a sha256 hash of the templates directory). Used by `VulnInjector` to apply synthetic vulns. Not a dataset itself; a shared plugin-like infrastructure.
+
+2. **`kind='git'` datasets** — origin is a git repository: `{"url": "https://...", "commit_sha": "...", "ref": "...", "cve_id": "..."}`. Re-cloned on demand by `Coordinator.materialize_dataset()` into the on-disk cache.
+
+3. **`kind='derived'` datasets** — origin is a base dataset (recursive) plus a recipe: `{"base_dataset": "...", "recipe_json": "[{\"template_id\": \"...\", \"target_file\": \"...\", \"seed\": ...}, ...]", "templates_version": "..."}`. Re-derived on demand by applying the recipe's template injections in order to the materialized base dataset.
+
+**Materialization:**
+
+- `materialized_at` is NULL when a dataset row is inserted but the on-disk cache is not yet populated.
+- Materialization is triggered on-demand: when a run needs the dataset, `Coordinator.materialize_dataset()` checks if `materialized_at` is not NULL; if NULL, it materializes (clones for git, re-derives for derived) and sets `materialized_at` to the completion timestamp.
+- For derived datasets, materialization is recursive: if the base dataset is not materialized, it is materialized first.
+- If `templates_version` in a derived dataset's recipe does not match the deployment's current version, materialization is deferred (warning emitted, `materialized_at` stays NULL) until the versions align.
+
+**Why `labels.json` Was Removed:**
+
+Previously, labels were read from files on disk (`datasets/targets/{name}/labels.jsonl`), which created a path-mismatch bug: the coordinator wrote to `storage_root/datasets/{name}/labels.json` while the evaluator read from `datasets_root/targets/{name}/labels.jsonl`. Now, a single source of truth (the DB table) eliminates path confusion and enables structured querying (filtering by CWE, severity, source).
 
 ---
 
@@ -1921,8 +1962,6 @@ class LabelStore:
             for label in labels:
                 f.write(label.model_dump_json() + "\n")
 ```
-
-> **Known divergence:** the coordinator's `import_cve` handler currently writes via a private `_append_labels` helper that targets `storage_root/datasets/{name}/labels.json` (a single JSON array), while `LabelStore.load()` — used by the evaluator and every other reader — expects `datasets_root/targets/{name}/labels.jsonl` (newline-delimited). Unless `storage_root` and `datasets_root` resolve to the same directory and the reader tolerates the format mismatch, labels written through `import_cve` will not be visible to downstream consumers. This needs reconciliation in the coordinator; the canonical layout is the one shown above.
 
 ### 6.2 CVE Selection Pipeline
 

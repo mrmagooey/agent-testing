@@ -278,15 +278,24 @@ Helm knobs in `values.yaml` under `providerProbe`:
 
 ## Moving experiments between deployments
 
-Experiments can be exported as `.secrev.zip` bundles (containing all on-disk artifacts, DB rows, and optionally embedded datasets) and imported into another deployment. The bundle preserves run IDs and tool extension metadata; datasets are optional (default: reference-only).
+Experiments can be exported as `.secrev.zip` bundles (containing all on-disk artifacts, DB rows, and dataset descriptors) and imported into another deployment. The bundle preserves run IDs and tool extension metadata; datasets are controlled via the `dataset_mode` parameter.
 
 **Export:**
 
 ```bash
 curl -o my-experiment.secrev.zip https://coordinator-url/api/experiments/{experiment_id}/export
-# Or with datasets embedded:
-curl -o my-experiment.secrev.zip 'https://coordinator-url/api/experiments/{experiment_id}/export?include_datasets=true'
+# Or with datasets included (reference mode, default):
+curl -o my-experiment.secrev.zip 'https://coordinator-url/api/experiments/{experiment_id}/export?dataset_mode=reference'
+# Or with dataset descriptors (rows + labels for re-materialization):
+curl -o my-experiment.secrev.zip 'https://coordinator-url/api/experiments/{experiment_id}/export?dataset_mode=descriptor'
 ```
+
+**Dataset Modes:**
+
+- `reference` — manifest carries dataset names only; target deployment must already have them locally.
+- `descriptor` (default) — manifest + bundle ship `datasets.json` (rows) and `dataset_labels.json` (label rows); target re-materializes datasets on import as needed.
+
+For `kind='git'` datasets in descriptor mode, the target deployment requires network access to the origin repository. For `kind='derived'` datasets, the target must have a matching `templates_version` configured; mismatches are recorded but do not block import.
 
 **Import:**
 
