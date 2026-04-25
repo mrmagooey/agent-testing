@@ -13,7 +13,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from sec_review_framework.data.findings import VulnClass
 
@@ -26,10 +26,9 @@ from sec_review_framework.data.findings import VulnClass
 class OrchestrationShape(str, Enum):
     """Enum tag carried by every UserStrategy.
 
-    Deprecated (Phase 4): new code should not branch on this value; runner.py
-    treats all UserStrategies uniformly via run_strategy(). Enum members are
-    kept for backward-compatible deserialization of historical BundleSnapshot /
-    ExperimentRun rows — do not remove them.
+    Retained for back-compat deserialization. New code should not BRANCH on
+    this value (use UserStrategy fields instead), but new shapes may add enum
+    members so older snapshots can deserialize.
     """
 
     SINGLE_AGENT = "single_agent"
@@ -82,6 +81,40 @@ class StrategyBundleDefault(BaseModel):
     #
     # Phase 4 will normalise this across all strategies.
     dispatch_fallback: Literal["reprompt", "programmatic", "none"] = "reprompt"
+
+    # Phase 5: structured output type name for subagent output.
+    # When set, _run_child_sync resolves the type and passes output_type=...
+    # to the child Agent so pydantic-ai validates/coerces the LLM response into
+    # the declared Pydantic model.  None means free-form text (legacy behaviour).
+    #
+    # Valid names (see agent/output_types.py):
+    #   "finding_list"               → list[Finding]
+    #   "verifier_verdict"           → VerifierVerdict
+    #   "source_list"                → list[Source]
+    #   "taint_path_list"            → list[TaintPath]
+    #   "sanitization_verdict"       → SanitizationVerdict
+    #   "classifier_judgement_list"  → list[ClassifierJudgement]
+    output_type_name: str | None = None
+
+    @field_validator("output_type_name")
+    @classmethod
+    def _validate_output_type_name(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        _VALID_OUTPUT_TYPE_NAMES = {
+            "finding_list",
+            "verifier_verdict",
+            "source_list",
+            "taint_path_list",
+            "sanitization_verdict",
+            "classifier_judgement_list",
+        }
+        if v not in _VALID_OUTPUT_TYPE_NAMES:
+            raise ValueError(
+                f"output_type_name {v!r} is not a known output type. "
+                f"Valid names: {sorted(_VALID_OUTPUT_TYPE_NAMES)}"
+            )
+        return v
 
     model_config = {"frozen": True}
 
