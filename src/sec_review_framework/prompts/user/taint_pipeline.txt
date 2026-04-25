@@ -1,0 +1,13 @@
+Run a three-stage taint analysis on the following codebase.
+
+Repository structure:
+{repo_summary}
+
+Stage 1: Call `invoke_subagent` with role="builtin.source_finder" and input={{"repo_summary": "{repo_summary}"}} to find all taint sources.
+
+Stage 2: For each source found, call `invoke_subagent` with role="builtin.sink_tracer" and input={{"file_path": "<source.file_path>", "line_start": <source.line>, "kind": "<source.kind>", "description": "<source.description>", "repo_summary": "{repo_summary}"}}.
+
+Stage 3: For each taint path found, call `invoke_subagent` with role="builtin.sanitization_checker" and input={{"file_path": "<path.source.file_path>", "sink_file": "<path.sink_file>", "sink_line": <path.sink_line>, "sink_kind": "<path.sink_kind>", "hops": "<path.hops>", "description": "<path.description>"}}.
+
+Return as your final list[Finding] only the paths for which sanitized=false, mapped to the appropriate Finding fields.
+{finding_output_format}

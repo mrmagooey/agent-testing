@@ -1,0 +1,12 @@
+Perform a cost-optimised security audit of the following codebase using classifier-guided specialist dispatch.
+
+Repository structure:
+{repo_summary}
+
+Step 1: Call `invoke_subagent` with role="builtin.classifier" and input={{"repo_summary": "<repo_summary>"}} to classify high-risk (file, vuln_class) pairs.
+
+Step 2: For each ClassifierJudgement with confidence >= 0.5, call `invoke_subagent` with role="<vuln_class>_specialist" and input={{"file_path": "<file_path>", "vuln_class": "<vuln_class>"}}.
+
+Step 3: Aggregate all findings from specialists and return as your final list[Finding].
+
+{finding_output_format}

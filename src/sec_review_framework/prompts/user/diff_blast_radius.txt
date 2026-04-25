@@ -1,0 +1,18 @@
+Perform a security review with blast-radius analysis on the following code change.
+
+Repository structure:
+{repo_summary}
+
+Unified diff:
+```diff
+{diff_text}
+```
+
+Phase 1: Review the diff directly for security issues.
+
+Phase 2: Call `invoke_subagent` with role="builtin.blast_radius_finder" and input={{"diff_text": "{diff_text}", "repo_summary": "{repo_summary}"}} to enumerate transitive callers.
+
+Then for each BlastRadiusEntry returned, call `invoke_subagent` with role="builtin.caller_checker" and input={{"file_path": "<caller_file>", "caller_function": "<caller_function>", "callee": "<callee>", "diff_text": "{diff_text}"}}.
+
+Return the combined list[Finding] from your Phase 1 review and all caller-checker results.
+{finding_output_format}

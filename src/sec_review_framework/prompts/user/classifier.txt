@@ -1,0 +1,8 @@
+Classify the following repository for likely security vulnerabilities.
+
+Repository structure:
+{repo_summary}
+
+Review the file listing and use `read_file` on suspicious files. For each (file, vulnerability class) pair you believe warrants specialist review, emit a ClassifierJudgement with a confidence score.
+
+Return a list of ClassifierJudgement objects. Only include pairs with confidence >= 0.3.

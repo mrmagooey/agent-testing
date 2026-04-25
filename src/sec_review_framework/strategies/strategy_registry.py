@@ -76,10 +76,16 @@ def _read(path: Path) -> str:
 
 
 def seed_builtins(registry: StrategyRegistry) -> None:
-    """Construct the 5 builtin UserStrategy objects and register them.
+    """Construct the builtin UserStrategy objects and register them.
 
-    All five strategies use the pydantic-ai runner (runner.py). The legacy
+    All strategies use the pydantic-ai runner (runner.py). The legacy
     ScanStrategy subclasses were removed in Phase 4.
+
+    Phase 5 adds four new capability strategies that exploit subagents:
+    - ``builtin.single_agent_with_verifier`` — verifier wrapping
+    - ``builtin.classifier_dispatch`` — classifier-guided specialist dispatch
+    - ``builtin.taint_pipeline`` — multi-stage taint analysis
+    - ``builtin.diff_blast_radius`` — diff review with blast-radius analysis
 
     ID migration (Phase 4): ``builtin.<shape>`` IDs now refer to the v2
     (pydantic-ai) implementations. Legacy ScanStrategy-based implementations
@@ -313,6 +319,307 @@ def seed_builtins(registry: StrategyRegistry) -> None:
                 max_turns=25,
                 tool_extensions=_DEFAULT_TOOL_EXTENSIONS,
                 subagents=["builtin.triage_agent"],
+            ),
+            overrides=[],
+            created_at=_CREATED_AT,
+            is_builtin=True,
+        )
+    )
+
+    # ==================================================================
+    # Phase 5 capability strategies
+    # ==================================================================
+
+    # ------------------------------------------------------------------
+    # builtin.verifier — subagent invoked by builtin.single_agent_with_verifier
+    # ------------------------------------------------------------------
+    registry.register(
+        UserStrategy(
+            id="builtin.verifier",
+            name="Verifier subagent (builtin)",
+            parent_strategy_id="builtin.single_agent_with_verifier",
+            orchestration_shape=OrchestrationShape.SINGLE_AGENT,
+            default=StrategyBundleDefault(
+                system_prompt=_read(_SYSTEM_DIR / "verifier.txt"),
+                user_prompt_template=_read(_USER_DIR / "verifier.txt"),
+                profile_modifier="",
+                model_id=_DEFAULT_MODEL_ID,
+                tools=_DEFAULT_TOOLS,
+                verification=_DEFAULT_VERIFICATION,
+                max_turns=10,
+                tool_extensions=_DEFAULT_TOOL_EXTENSIONS,
+            ),
+            overrides=[],
+            created_at=_CREATED_AT,
+            is_builtin=True,
+        )
+    )
+
+    # ------------------------------------------------------------------
+    # builtin.single_agent_with_verifier — verifier wrapping (Phase 5)
+    # ------------------------------------------------------------------
+    registry.register(
+        UserStrategy(
+            id="builtin.single_agent_with_verifier",
+            name="Single Agent with Verifier (builtin)",
+            parent_strategy_id=None,
+            orchestration_shape=OrchestrationShape.SINGLE_AGENT_WITH_VERIFIER,
+            default=StrategyBundleDefault(
+                system_prompt=_read(_SYSTEM_DIR / "single_agent_with_verifier.txt"),
+                user_prompt_template=_read(_USER_DIR / "single_agent_with_verifier.txt"),
+                profile_modifier="",
+                model_id=_DEFAULT_MODEL_ID,
+                tools=_DEFAULT_TOOLS,
+                verification=_DEFAULT_VERIFICATION,
+                max_turns=100,
+                tool_extensions=_DEFAULT_TOOL_EXTENSIONS,
+                subagents=["builtin.verifier"],
+                dispatch_fallback="reprompt",
+            ),
+            overrides=[],
+            created_at=_CREATED_AT,
+            is_builtin=True,
+        )
+    )
+
+    # ------------------------------------------------------------------
+    # builtin.classifier — subagent invoked by builtin.classifier_dispatch
+    # ------------------------------------------------------------------
+    registry.register(
+        UserStrategy(
+            id="builtin.classifier",
+            name="Classifier subagent (builtin)",
+            parent_strategy_id="builtin.classifier_dispatch",
+            orchestration_shape=OrchestrationShape.SINGLE_AGENT,
+            default=StrategyBundleDefault(
+                system_prompt=_read(_SYSTEM_DIR / "classifier.txt"),
+                user_prompt_template=_read(_USER_DIR / "classifier.txt"),
+                profile_modifier="",
+                model_id=_DEFAULT_MODEL_ID,
+                tools=_DEFAULT_TOOLS,
+                verification=_DEFAULT_VERIFICATION,
+                max_turns=20,
+                tool_extensions=_DEFAULT_TOOL_EXTENSIONS,
+            ),
+            overrides=[],
+            created_at=_CREATED_AT,
+            is_builtin=True,
+        )
+    )
+
+    # ------------------------------------------------------------------
+    # builtin.classifier_dispatch — classifier-guided dispatch (Phase 5)
+    #
+    # Subagents: builtin.classifier + all 16 specialists from per_vuln_class.
+    # dispatch_fallback="reprompt": the classifier intentionally skips classes;
+    # programmatic fallback would defeat the cost optimisation.
+    # ------------------------------------------------------------------
+    _cd_specialist_ids = [
+        f"builtin.{vc.value}_specialist" for vc in VulnClass
+    ]
+    registry.register(
+        UserStrategy(
+            id="builtin.classifier_dispatch",
+            name="Classifier Dispatch (builtin)",
+            parent_strategy_id=None,
+            orchestration_shape=OrchestrationShape.CLASSIFIER_DISPATCH,
+            default=StrategyBundleDefault(
+                system_prompt=_read(_SYSTEM_DIR / "classifier_dispatch.txt"),
+                user_prompt_template=_read(_USER_DIR / "classifier_dispatch.txt"),
+                profile_modifier="",
+                model_id=_DEFAULT_MODEL_ID,
+                tools=_DEFAULT_TOOLS,
+                verification=_DEFAULT_VERIFICATION,
+                max_turns=60,
+                tool_extensions=_DEFAULT_TOOL_EXTENSIONS,
+                subagents=["builtin.classifier"] + _cd_specialist_ids,
+                dispatch_fallback="reprompt",
+            ),
+            overrides=[],
+            created_at=_CREATED_AT,
+            is_builtin=True,
+        )
+    )
+
+    # ------------------------------------------------------------------
+    # builtin.source_finder — Stage 1 subagent for builtin.taint_pipeline
+    # ------------------------------------------------------------------
+    registry.register(
+        UserStrategy(
+            id="builtin.source_finder",
+            name="Source Finder subagent (builtin)",
+            parent_strategy_id="builtin.taint_pipeline",
+            orchestration_shape=OrchestrationShape.SINGLE_AGENT,
+            default=StrategyBundleDefault(
+                system_prompt=_read(_SYSTEM_DIR / "source_finder.txt"),
+                user_prompt_template=_read(_USER_DIR / "source_finder.txt"),
+                profile_modifier="",
+                model_id=_DEFAULT_MODEL_ID,
+                tools=_DEFAULT_TOOLS,
+                verification=_DEFAULT_VERIFICATION,
+                max_turns=30,
+                tool_extensions=_DEFAULT_TOOL_EXTENSIONS,
+            ),
+            overrides=[],
+            created_at=_CREATED_AT,
+            is_builtin=True,
+        )
+    )
+
+    # ------------------------------------------------------------------
+    # builtin.sink_tracer — Stage 2 subagent for builtin.taint_pipeline
+    # ------------------------------------------------------------------
+    registry.register(
+        UserStrategy(
+            id="builtin.sink_tracer",
+            name="Sink Tracer subagent (builtin)",
+            parent_strategy_id="builtin.taint_pipeline",
+            orchestration_shape=OrchestrationShape.SINGLE_AGENT,
+            default=StrategyBundleDefault(
+                system_prompt=_read(_SYSTEM_DIR / "sink_tracer.txt"),
+                user_prompt_template=_read(_USER_DIR / "sink_tracer.txt"),
+                profile_modifier="",
+                model_id=_DEFAULT_MODEL_ID,
+                tools=_DEFAULT_TOOLS,
+                verification=_DEFAULT_VERIFICATION,
+                max_turns=20,
+                tool_extensions=_DEFAULT_TOOL_EXTENSIONS,
+            ),
+            overrides=[],
+            created_at=_CREATED_AT,
+            is_builtin=True,
+        )
+    )
+
+    # ------------------------------------------------------------------
+    # builtin.sanitization_checker — Stage 3 subagent for builtin.taint_pipeline
+    # ------------------------------------------------------------------
+    registry.register(
+        UserStrategy(
+            id="builtin.sanitization_checker",
+            name="Sanitization Checker subagent (builtin)",
+            parent_strategy_id="builtin.taint_pipeline",
+            orchestration_shape=OrchestrationShape.SINGLE_AGENT,
+            default=StrategyBundleDefault(
+                system_prompt=_read(_SYSTEM_DIR / "sanitization_checker.txt"),
+                user_prompt_template=_read(_USER_DIR / "sanitization_checker.txt"),
+                profile_modifier="",
+                model_id=_DEFAULT_MODEL_ID,
+                tools=_DEFAULT_TOOLS,
+                verification=_DEFAULT_VERIFICATION,
+                max_turns=15,
+                tool_extensions=_DEFAULT_TOOL_EXTENSIONS,
+            ),
+            overrides=[],
+            created_at=_CREATED_AT,
+            is_builtin=True,
+        )
+    )
+
+    # ------------------------------------------------------------------
+    # builtin.taint_pipeline — 3-stage taint analysis (Phase 5)
+    # ------------------------------------------------------------------
+    registry.register(
+        UserStrategy(
+            id="builtin.taint_pipeline",
+            name="Taint Pipeline (builtin)",
+            parent_strategy_id=None,
+            orchestration_shape=OrchestrationShape.TAINT_PIPELINE,
+            default=StrategyBundleDefault(
+                system_prompt=_read(_SYSTEM_DIR / "taint_pipeline.txt"),
+                user_prompt_template=_read(_USER_DIR / "taint_pipeline.txt"),
+                profile_modifier="",
+                model_id=_DEFAULT_MODEL_ID,
+                tools=_DEFAULT_TOOLS,
+                verification=_DEFAULT_VERIFICATION,
+                max_turns=80,
+                tool_extensions=_DEFAULT_TOOL_EXTENSIONS,
+                subagents=[
+                    "builtin.source_finder",
+                    "builtin.sink_tracer",
+                    "builtin.sanitization_checker",
+                ],
+                dispatch_fallback="reprompt",
+            ),
+            overrides=[],
+            created_at=_CREATED_AT,
+            is_builtin=True,
+        )
+    )
+
+    # ------------------------------------------------------------------
+    # builtin.blast_radius_finder — subagent invoked by builtin.diff_blast_radius
+    # ------------------------------------------------------------------
+    registry.register(
+        UserStrategy(
+            id="builtin.blast_radius_finder",
+            name="Blast Radius Finder subagent (builtin)",
+            parent_strategy_id="builtin.diff_blast_radius",
+            orchestration_shape=OrchestrationShape.SINGLE_AGENT,
+            default=StrategyBundleDefault(
+                system_prompt=_read(_SYSTEM_DIR / "blast_radius_finder.txt"),
+                user_prompt_template=_read(_USER_DIR / "blast_radius_finder.txt"),
+                profile_modifier="",
+                model_id=_DEFAULT_MODEL_ID,
+                tools=_DEFAULT_TOOLS,
+                verification=_DEFAULT_VERIFICATION,
+                max_turns=30,
+                tool_extensions=_DEFAULT_TOOL_EXTENSIONS,
+            ),
+            overrides=[],
+            created_at=_CREATED_AT,
+            is_builtin=True,
+        )
+    )
+
+    # ------------------------------------------------------------------
+    # builtin.caller_checker — per-caller subagent for builtin.diff_blast_radius
+    # ------------------------------------------------------------------
+    registry.register(
+        UserStrategy(
+            id="builtin.caller_checker",
+            name="Caller Checker subagent (builtin)",
+            parent_strategy_id="builtin.diff_blast_radius",
+            orchestration_shape=OrchestrationShape.SINGLE_AGENT,
+            default=StrategyBundleDefault(
+                system_prompt=_read(_SYSTEM_DIR / "caller_checker.txt"),
+                user_prompt_template=_read(_USER_DIR / "caller_checker.txt"),
+                profile_modifier="",
+                model_id=_DEFAULT_MODEL_ID,
+                tools=_DEFAULT_TOOLS,
+                verification=_DEFAULT_VERIFICATION,
+                max_turns=20,
+                tool_extensions=_DEFAULT_TOOL_EXTENSIONS,
+            ),
+            overrides=[],
+            created_at=_CREATED_AT,
+            is_builtin=True,
+        )
+    )
+
+    # ------------------------------------------------------------------
+    # builtin.diff_blast_radius — diff review + blast-radius analysis (Phase 5)
+    # ------------------------------------------------------------------
+    registry.register(
+        UserStrategy(
+            id="builtin.diff_blast_radius",
+            name="Diff Blast Radius (builtin)",
+            parent_strategy_id=None,
+            orchestration_shape=OrchestrationShape.DIFF_BLAST_RADIUS,
+            default=StrategyBundleDefault(
+                system_prompt=_read(_SYSTEM_DIR / "diff_blast_radius.txt"),
+                user_prompt_template=_read(_USER_DIR / "diff_blast_radius.txt"),
+                profile_modifier="",
+                model_id=_DEFAULT_MODEL_ID,
+                tools=_DEFAULT_TOOLS,
+                verification=_DEFAULT_VERIFICATION,
+                max_turns=80,
+                tool_extensions=_DEFAULT_TOOL_EXTENSIONS,
+                subagents=[
+                    "builtin.blast_radius_finder",
+                    "builtin.caller_checker",
+                ],
+                dispatch_fallback="reprompt",
             ),
             overrides=[],
             created_at=_CREATED_AT,

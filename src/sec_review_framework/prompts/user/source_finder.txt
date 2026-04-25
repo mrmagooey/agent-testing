@@ -1,0 +1,6 @@
+Find all taint sources in the following codebase.
+
+Repository structure:
+{repo_summary}
+
+Use `read_file` to examine files. Return a list of Source objects representing all locations where untrusted external data enters the application.

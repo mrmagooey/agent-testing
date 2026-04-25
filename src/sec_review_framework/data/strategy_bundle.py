@@ -37,6 +37,11 @@ class OrchestrationShape(str, Enum):
     PER_VULN_CLASS = "per_vuln_class"
     SAST_FIRST = "sast_first"
     DIFF_REVIEW = "diff_review"
+    # Phase 5 capability strategies
+    SINGLE_AGENT_WITH_VERIFIER = "single_agent_with_verifier"
+    CLASSIFIER_DISPATCH = "classifier_dispatch"
+    TAINT_PIPELINE = "taint_pipeline"
+    DIFF_BLAST_RADIUS = "diff_blast_radius"
 
 
 # ---------------------------------------------------------------------------
@@ -137,7 +142,14 @@ class UserStrategy(BaseModel):
         shape = self.orchestration_shape
 
         # Shapes that must have no overrides
-        if shape in (OrchestrationShape.SINGLE_AGENT, OrchestrationShape.DIFF_REVIEW):
+        if shape in (
+            OrchestrationShape.SINGLE_AGENT,
+            OrchestrationShape.DIFF_REVIEW,
+            OrchestrationShape.SINGLE_AGENT_WITH_VERIFIER,
+            OrchestrationShape.CLASSIFIER_DISPATCH,
+            OrchestrationShape.TAINT_PIPELINE,
+            OrchestrationShape.DIFF_BLAST_RADIUS,
+        ):
             if self.overrides:
                 raise ValueError(
                     f"orchestration_shape={shape.value!r} must have no overrides, "
@@ -204,7 +216,14 @@ def resolve_bundle(strategy: UserStrategy, key: str | None) -> ResolvedBundle:
     shape = strategy.orchestration_shape
     default = strategy.default
 
-    if shape in (OrchestrationShape.SINGLE_AGENT, OrchestrationShape.DIFF_REVIEW):
+    if shape in (
+        OrchestrationShape.SINGLE_AGENT,
+        OrchestrationShape.DIFF_REVIEW,
+        OrchestrationShape.SINGLE_AGENT_WITH_VERIFIER,
+        OrchestrationShape.CLASSIFIER_DISPATCH,
+        OrchestrationShape.TAINT_PIPELINE,
+        OrchestrationShape.DIFF_BLAST_RADIUS,
+    ):
         if key is not None:
             raise ValueError(
                 f"orchestration_shape={shape.value!r} does not accept a key, "

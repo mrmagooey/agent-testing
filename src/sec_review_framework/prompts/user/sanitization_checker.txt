@@ -1,0 +1,10 @@
+Check whether the following taint path is properly sanitized.
+
+Source file: {file_path}
+Sink file: {sink_file}
+Sink line: {sink_line}
+Sink kind: {sink_kind}
+Intermediate hops: {hops}
+Flow description: {description}
+
+Use `read_file` to inspect the code along this path. Determine whether sanitization is present. Return a SanitizationVerdict.

@@ -1,0 +1,11 @@
+Find all transitive callers of the functions changed in the following diff.
+
+Diff:
+```diff
+{diff_text}
+```
+
+Repository structure:
+{repo_summary}
+
+Use `read_file` and `grep` to identify which functions changed and trace all callers. Return a list of BlastRadiusEntry objects.

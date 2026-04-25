@@ -1,0 +1,11 @@
+Perform a verified security audit of the following codebase.
+
+Repository structure:
+{repo_summary}
+
+Step 1: Use your tools to read files and identify all candidate security vulnerabilities.
+
+Step 2: For each candidate, call `invoke_subagent` with role="builtin.verifier" to verify the finding before reporting it.
+
+Return only confirmed and inconclusive findings as your final list[Finding].
+{finding_output_format}

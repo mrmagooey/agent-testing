@@ -196,18 +196,29 @@ def test_specialists_have_non_empty_system_prompts():
 
 
 def test_total_builtin_count():
-    """Registry must have exactly 23 builtin entries after Phase 4.
+    """Registry must have exactly 34 builtin entries after Phase 5.
 
-    5 top-level strategies: single_agent, diff_review, per_file, sast_first, per_vuln_class
-    2 top-level subagents: file_reviewer (for per_file), triage_agent (for sast_first)
-    16 per-vuln-class specialist subagents (one per VulnClass)
-    Total: 5 + 2 + 16 = 23
+    Phase 4 baseline (23):
+      5 top-level strategies: single_agent, diff_review, per_file, sast_first, per_vuln_class
+      2 top-level subagents: file_reviewer (for per_file), triage_agent (for sast_first)
+      16 per-vuln-class specialist subagents (one per VulnClass)
+
+    Phase 5 additions (11):
+      4 top-level strategies: single_agent_with_verifier, classifier_dispatch,
+                               taint_pipeline, diff_blast_radius
+      7 subagents: verifier, classifier, source_finder, sink_tracer,
+                   sanitization_checker, blast_radius_finder, caller_checker
+    Total: 23 + 11 = 34
     """
     from sec_review_framework.data.findings import VulnClass
 
     registry = load_default_registry()
     all_strategies = registry.list_all()
-    expected_count = 5 + 2 + len(VulnClass)
+    # Phase 4 base: 5 top-level + 2 subagents + 16 specialists
+    phase4_count = 5 + 2 + len(VulnClass)
+    # Phase 5 additions: 4 top-level + 7 subagents
+    phase5_count = 4 + 7
+    expected_count = phase4_count + phase5_count
     assert len(all_strategies) == expected_count, (
         f"Expected {expected_count} builtin entries, got {len(all_strategies)}: "
         + str(sorted(s.id for s in all_strategies))

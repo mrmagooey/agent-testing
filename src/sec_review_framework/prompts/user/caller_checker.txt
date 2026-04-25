@@ -1,0 +1,13 @@
+Check whether this caller's security assumptions still hold after the code change.
+
+Caller file: {file_path}
+Caller function: {caller_function}
+Changed function: {callee}
+
+Diff of the changed function:
+```diff
+{diff_text}
+```
+
+Use `read_file` to inspect the caller and understand what it assumes about the changed function's behaviour. Return a list[Finding] for any violated security assumptions.
+{finding_output_format}

@@ -1,0 +1,12 @@
+Trace all taint paths from the following source to dangerous sinks.
+
+Source:
+  file_path: {file_path}
+  line: {line_start}
+  kind: {kind}
+  description: {description}
+
+Repository structure:
+{repo_summary}
+
+Use `read_file` to follow the data flow. Return a list of TaintPath objects — one per distinct source→sink path found.
