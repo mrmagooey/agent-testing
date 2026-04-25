@@ -330,6 +330,85 @@ def seed_builtins(registry: StrategyRegistry) -> None:
     )
 
     # ------------------------------------------------------------------
+    # builtin_v2.*_specialist — 16 specialist subagents for per_vuln_class
+    #
+    # One per VulnClass enum value.  Each specialist:
+    #   - uses the existing per-class system prompt from
+    #     prompts/system/per_vuln_class/{vuln_class}.txt
+    #   - uses a shared user prompt template from
+    #     prompts/user/per_vuln_class/specialist.txt
+    #   - has parent_strategy_id="builtin_v2.per_vuln_class"
+    #   - has no use_new_runner flag (dispatched via _run_child_sync)
+    # ------------------------------------------------------------------
+    from sec_review_framework.data.findings import VulnClass  # local import to avoid circular
+
+    _pvc_user_template = _read(
+        _USER_DIR / "per_vuln_class" / "specialist.txt"
+    )
+
+    for _vc in VulnClass:
+        _specialist_id = f"builtin_v2.{_vc.value}_specialist"
+        _system_prompt = _read(_SYSTEM_DIR / "per_vuln_class" / f"{_vc.value}.txt")
+        registry.register(
+            UserStrategy(
+                id=_specialist_id,
+                name=f"{_vc.value.replace('_', ' ').title()} Specialist subagent (builtin)",
+                parent_strategy_id="builtin_v2.per_vuln_class",
+                orchestration_shape=OrchestrationShape.SINGLE_AGENT,
+                default=StrategyBundleDefault(
+                    system_prompt=_system_prompt,
+                    user_prompt_template=_pvc_user_template,
+                    profile_modifier="",
+                    model_id=_DEFAULT_MODEL_ID,
+                    tools=_DEFAULT_TOOLS,
+                    verification=_DEFAULT_VERIFICATION,
+                    max_turns=40,
+                    tool_extensions=_DEFAULT_TOOL_EXTENSIONS,
+                ),
+                overrides=[],
+                created_at=_CREATED_AT,
+                is_builtin=True,
+                # subagent — dispatched via _run_child_sync, not worker.py
+            )
+        )
+
+    # ------------------------------------------------------------------
+    # builtin_v2.per_vuln_class — parent-agent runner (Phase 3c)
+    #
+    # Dispatches all 16 specialists via invoke_subagent (one call per role).
+    # dispatch_fallback="programmatic" ensures missing specialists are invoked
+    # directly, bypassing the supervisor LLM — the Phase 3c reproducibility
+    # lifeline for benchmarking.
+    # ------------------------------------------------------------------
+    _pvc_specialist_ids = [
+        f"builtin_v2.{vc.value}_specialist" for vc in VulnClass
+    ]
+    registry.register(
+        UserStrategy(
+            id="builtin_v2.per_vuln_class",
+            name="Per Vuln Class v2 (builtin)",
+            parent_strategy_id=None,
+            orchestration_shape=OrchestrationShape.PER_VULN_CLASS,
+            default=StrategyBundleDefault(
+                system_prompt=_read(_SYSTEM_DIR / "per_vuln_class_v2.txt"),
+                user_prompt_template=_read(_USER_DIR / "per_vuln_class_v2.txt"),
+                profile_modifier="",
+                model_id=_DEFAULT_MODEL_ID,
+                tools=_DEFAULT_TOOLS,
+                verification=_DEFAULT_VERIFICATION,
+                max_turns=40,
+                tool_extensions=_DEFAULT_TOOL_EXTENSIONS,
+                subagents=_pvc_specialist_ids,
+                dispatch_fallback="programmatic",
+            ),
+            overrides=[],
+            created_at=_CREATED_AT,
+            is_builtin=True,
+            use_new_runner=True,
+        )
+    )
+
+    # ------------------------------------------------------------------
     # builtin_v2.triage_agent — subagent invoked by builtin_v2.sast_first
     # ------------------------------------------------------------------
     registry.register(
