@@ -5065,3 +5065,30 @@ HTTP POST /experiments → ExperimentCoordinator
         → Update Prometheus metrics
     → [optional] FeedbackTracker.compare_experiments(experiment_a, experiment_b)
 ```
+
+## 21. Phase 2 — Unified pydantic-ai Runner (feature flag)
+
+Phase 2 introduces `src/sec_review_framework/strategies/runner.py` with a
+single entry-point `run_strategy(strategy, target, model, tools)` that builds a
+pydantic-ai `Agent` from a `UserStrategy` and runs it to completion.
+
+### Feature-flag mechanism
+
+`UserStrategy` carries a `use_new_runner: bool = False` field with
+`exclude=True` (not persisted, not included in the content-hash ID).
+In `worker.py`, `_should_use_new_runner(user_strategy)` reads this flag:
+
+```python
+if _should_use_new_runner(user_strategy):
+    from sec_review_framework.strategies.runner import run_strategy
+    strategy_output = run_strategy(user_strategy, target, model, tools)
+else:
+    # legacy _SHAPE_TO_STRATEGY dispatch
+```
+
+The `runner` import is deferred inside the if-branch so workers without the
+`agent` extra (which conflicts with the `worker` extra due to opentelemetry/mcp
+version requirements) can import `worker.py` cleanly.
+
+Phase 4 will remove `_should_use_new_runner`, `_SHAPE_TO_STRATEGY`, and all
+legacy strategy `run()` methods once all five built-in shapes pass parity tests.

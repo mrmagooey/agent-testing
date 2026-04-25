@@ -13,7 +13,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from sec_review_framework.data.findings import VulnClass
 
@@ -47,6 +47,16 @@ class StrategyBundleDefault(BaseModel):
     verification: str  # VerificationVariant value (e.g. "none" / "with_verification")
     max_turns: int
     tool_extensions: frozenset[str]
+
+    # Phase 2: subagent role IDs this strategy may dispatch to.
+    # Each ID must resolve in the StrategyRegistry at expand time.
+    # Empty list = no subagent dispatch (all current built-in strategies).
+    # Phase 4 will add validation (no self-reference, cap fields, etc.).
+    subagents: list[str] = Field(default_factory=list)
+    # Per-subagent invocation caps — enforced by SubagentDeps at runtime.
+    max_subagent_depth: int = 3
+    max_subagent_invocations: int = 100
+    max_subagent_batch_size: int = 32
 
     model_config = {"frozen": True}
 
@@ -101,6 +111,12 @@ class UserStrategy(BaseModel):
     overrides: list[OverrideRule] = []
     created_at: datetime
     is_builtin: bool = False
+
+    # Phase-2 temporary toggle: opt this strategy into the new pydantic-ai
+    # runner (``run_strategy()`` in ``strategies/runner.py``).  This field is
+    # NOT persisted to the DB (``exclude=True``) and does NOT affect the
+    # content-hash ID.  Phase 4 removes it once all strategies migrate.
+    use_new_runner: bool = Field(default=False, exclude=True)
 
     @model_validator(mode="after")
     def _validate_overrides(self) -> "UserStrategy":
