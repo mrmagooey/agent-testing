@@ -73,6 +73,7 @@ from pydantic_ai.exceptions import UnexpectedModelBehavior
 from sec_review_framework.agent.litellm_model import LiteLLMModel
 from sec_review_framework.agent.subagent import (
     SubagentDeps,
+    _run_child_sync,
     make_invoke_subagent_batch_tool,
     make_invoke_subagent_tool,
 )
@@ -234,35 +235,58 @@ def run_strategy(
     findings: list[Finding] = result.output or []
 
     # ------------------------------------------------------------------
-    # 7. Dispatch validator (optional, bounded to 1 re-prompt)
+    # 7. Dispatch validator (optional)
+    #
+    # Fallback behaviour is controlled by strategy.default.dispatch_fallback:
+    #   "reprompt"      — re-ask the supervisor LLM once (Phase 3b default).
+    #   "programmatic"  — bypass the supervisor; directly invoke missing
+    #                     specialists via _run_child_sync (Phase 3c).
+    #   "none"          — no fallback; missing dispatches are silently dropped.
     # ------------------------------------------------------------------
-    if expected_dispatch and deps is not None:
+    fallback_mode = bundle.dispatch_fallback
+    if expected_dispatch and deps is not None and fallback_mode != "none":
+        # Combine single and batch call logs to detect dispatched roles
+        all_actual_calls = list(deps.batch_call_log) + [
+            (role, [inp]) for role, inp in deps.single_call_log
+        ]
         missing = _validate_dispatch(
             strategy.id,
             expected_dispatch,
-            deps.batch_call_log,
+            all_actual_calls,
             dispatch_match_key,
         )
         if missing:
-            re_prompt = (
-                "You missed dispatching the following inputs. "
-                "Please call invoke_subagent_batch now for these missing items:\n"
-                + "\n".join(str(m) for m in missing)
-            )
-            try:
-                retry_result = agent.run_sync(
-                    re_prompt,
-                    message_history=result.all_messages(),
-                    deps=deps,
-                )
-                extra_findings: list[Finding] = retry_result.output or []
-                findings = findings + extra_findings
-            except UnexpectedModelBehavior as exc:
-                logging.warning(
-                    "run_strategy: re-prompt for strategy %r failed: %s",
+            if fallback_mode == "programmatic":
+                # Phase 3c: programmatic fallback — bypass the supervisor LLM
+                # entirely for missing roles and call specialists directly.
+                extra_findings = _programmatic_fallback(
                     strategy.id,
-                    exc,
+                    missing,
+                    dispatch_match_key,
+                    deps,
                 )
+                findings = findings + extra_findings
+            else:
+                # Phase 3b default: re-prompt the supervisor (bounded to 1)
+                re_prompt = (
+                    "You missed dispatching the following inputs. "
+                    "Please call invoke_subagent now for these missing items:\n"
+                    + "\n".join(str(m) for m in missing)
+                )
+                try:
+                    retry_result = agent.run_sync(
+                        re_prompt,
+                        message_history=result.all_messages(),
+                        deps=deps,
+                    )
+                    extra_findings_reprompt: list[Finding] = retry_result.output or []
+                    findings = findings + extra_findings_reprompt
+                except UnexpectedModelBehavior as exc:
+                    logging.warning(
+                        "run_strategy: re-prompt for strategy %r failed: %s",
+                        strategy.id,
+                        exc,
+                    )
 
     # Stamp required fields that pydantic-ai's structured output does not
     # populate automatically (id, raw_llm_output, produced_by, experiment_id).
@@ -419,6 +443,111 @@ def _validate_dispatch(
         )
 
     return missing
+
+
+def _programmatic_fallback(
+    strategy_id: str,
+    missing_inputs: list[dict[str, Any]],
+    dispatch_match_key: str,
+    deps: SubagentDeps,
+) -> list[Finding]:
+    """Programmatically invoke missing specialists, bypassing the supervisor LLM.
+
+    Called by :func:`run_strategy` when ``dispatch_fallback="programmatic"``
+    and the supervisor missed some roles.  Each missing input is mapped to its
+    specialist role (``<vuln_class>_specialist``) and invoked directly via
+    :func:`~sec_review_framework.agent.subagent._run_child_sync`.
+
+    This is the Phase 3c reproducibility lifeline for ``per_vuln_class``: with
+    16 specialists, supervisor variance can drop several at random.  Direct
+    programmatic invocation guarantees all 16 run regardless of LLM behaviour.
+
+    Parameters
+    ----------
+    strategy_id:
+        Parent strategy identifier (for logging).
+    missing_inputs:
+        List of input dicts that were not dispatched by the supervisor.  Each
+        dict must contain *dispatch_match_key* (typically ``"vuln_class"``).
+    dispatch_match_key:
+        Key used to derive the specialist role name.  For ``per_vuln_class``
+        this is ``"vuln_class"``; the role is ``{value}_specialist``.
+    deps:
+        The parent's :class:`~sec_review_framework.agent.subagent.SubagentDeps`.
+        Specialist strategies are resolved from ``deps.subagent_strategies``.
+
+    Returns
+    -------
+    list[Finding]
+        Findings from all programmatically-invoked specialists.  Empty list if
+        no missing specialists could be resolved.
+    """
+    import concurrent.futures
+
+    extra_findings: list[Finding] = []
+
+    logging.info(
+        "_programmatic_fallback: strategy %r programmatically invoking %d missing specialist(s): %s",
+        strategy_id,
+        len(missing_inputs),
+        [inp.get(dispatch_match_key) for inp in missing_inputs],
+    )
+
+    def _invoke_one(inp: dict[str, Any]) -> list[Finding]:
+        match_value = inp.get(dispatch_match_key, "")
+        # Role suffix as emitted by the parent agent (e.g. "sqli_specialist")
+        role_suffix = f"{match_value}_specialist"
+
+        # Resolve the full strategy ID by searching available_roles for a
+        # name that ends with the suffix (handles both bare "sqli_specialist"
+        # and namespaced "builtin_v2.sqli_specialist" role names).
+        role: str | None = None
+        if role_suffix in deps.subagent_strategies:
+            role = role_suffix
+        else:
+            for candidate in deps.subagent_strategies:
+                if candidate.endswith(f".{role_suffix}") or candidate == role_suffix:
+                    role = candidate
+                    break
+
+        if role is None:
+            logging.warning(
+                "_programmatic_fallback: no strategy matching role suffix %r found "
+                "in subagent_strategies; skipping.",
+                role_suffix,
+            )
+            return []
+
+        strategy = deps.subagent_strategies[role]
+        try:
+            sub_output = _run_child_sync(strategy, inp, deps)
+        except Exception as exc:
+            logging.warning(
+                "_programmatic_fallback: role %r raised %s; skipping.",
+                role,
+                exc,
+            )
+            return []
+
+        raw = sub_output.output
+        if raw is None:
+            return []
+        if isinstance(raw, list):
+            return [f for f in raw if isinstance(f, Finding)]
+        return []
+
+    # Fan-out in a thread pool (same pattern as invoke_subagent_batch)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+        futures = [pool.submit(_invoke_one, inp) for inp in missing_inputs]
+        for fut in concurrent.futures.as_completed(futures):
+            try:
+                extra_findings.extend(fut.result())
+            except Exception as exc:
+                logging.warning(
+                    "_programmatic_fallback: unexpected error from worker: %s", exc
+                )
+
+    return extra_findings
 
 
 def _build_default_deps(

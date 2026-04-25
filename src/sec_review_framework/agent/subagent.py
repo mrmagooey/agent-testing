@@ -139,6 +139,10 @@ class SubagentDeps:
     # Populated by the invoke_subagent_batch tool; read by the dispatch validator
     # in runner.py after agent.run_sync() returns.
     batch_call_log: list[tuple[str, list[dict[str, Any]]]] = field(default_factory=list)
+    # Audit log of invoke_subagent (single) calls: list of (role, input) tuples.
+    # Populated by the invoke_subagent tool; read by the programmatic fallback
+    # in runner.py (Phase 3c per_vuln_class dispatch completeness).
+    single_call_log: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
 
     def child_deps(self) -> SubagentDeps:
         """Return a new :class:`SubagentDeps` for a child invocation.
@@ -169,8 +173,9 @@ class SubagentDeps:
             available_roles=set(self.available_roles),
             subagent_strategies=dict(self.subagent_strategies),
             tool_registry=self.tool_registry.clone(),
-            # Child gets its own call log; parent's batch_call_log is not shared.
+            # Child gets its own call logs; parent's logs are not shared.
             batch_call_log=[],
+            single_call_log=[],
         )
 
 
@@ -354,6 +359,9 @@ def make_invoke_subagent_tool(
         # Check caps (count=1 for single dispatch)
         _check_caps(ctx, count=1)
         deps.invocations += 1
+
+        # Record this call for the dispatch validator in runner.py (Phase 3c)
+        deps.single_call_log.append((role, dict(input)))
 
         strategy = deps.subagent_strategies[role]
         return await asyncio.to_thread(_run_child_sync, strategy, input, deps)
