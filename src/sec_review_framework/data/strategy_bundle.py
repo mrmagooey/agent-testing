@@ -58,6 +58,18 @@ class StrategyBundleDefault(BaseModel):
     max_subagent_invocations: int = 100
     max_subagent_batch_size: int = 32
 
+    # Phase 3c: dispatch-completeness fallback behaviour for parent strategies
+    # with large fixed subagent sets (e.g. per_vuln_class with 16 specialists).
+    #
+    # "reprompt"      — re-ask the supervisor LLM once for missing roles
+    #                   (Phase 3b behaviour, default for most strategies).
+    # "programmatic"  — bypass the supervisor entirely; directly invoke missing
+    #                   specialists via _run_child_sync (per_vuln_class only).
+    # "none"          — no fallback; missing dispatches are silently dropped.
+    #
+    # Phase 4 will normalise this across all strategies.
+    dispatch_fallback: str = "reprompt"
+
     model_config = {"frozen": True}
 
 
