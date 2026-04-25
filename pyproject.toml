@@ -59,23 +59,6 @@ dev = [
 spike = [
     "pydantic-ai>=1.87,<2.0",
 ]
-# Phase 1 production agent runner.
-#
-# IMPORTANT — MUTUALLY EXCLUSIVE WITH "worker":
-# pydantic-ai requires opentelemetry-api>=1.28 and mcp>=1.25.0.
-# The "worker" extra pins semgrep, which requires otel<1.26 and mcp<1.25.
-# These two extras CANNOT be installed in the same virtual environment.
-# The agent runner (coordinator-side) and the semgrep worker run in separate
-# pods and separate venvs; this is the intended deployment model.
-#
-# To install for agent development:
-#   uv pip install -e ".[agent,coordinator,dev]"   # in a venv WITHOUT worker
-#
-# Do NOT mix with:
-#   uv pip install -e ".[worker]"                  # conflict — separate venv
-agent = [
-    "pydantic-ai>=1.87,<2.0",
-]
 
 [build-system]
 requires = ["hatchling"]
