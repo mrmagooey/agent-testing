@@ -200,30 +200,28 @@ class TargetCodebase:
 
 
 # ---------------------------------------------------------------------------
-# LabelStore
+# LabelStore (deprecated — labels now persisted in the Database)
 # ---------------------------------------------------------------------------
 
 
 class LabelStore:
-    """Reads and writes ground truth labels from JSONL files."""
+    """No-op stub kept for import compatibility. Labels are persisted via Database.
 
-    def __init__(self, datasets_root: Path) -> None:
-        self.datasets_root = Path(datasets_root)
+    The file-backed (JSONL) implementation has been removed. Any callers that
+    used ``load`` or ``append`` must be updated to call
+    ``Database.list_dataset_labels`` / ``Database.append_dataset_labels``
+    directly.
+    """
 
-    def load(self, dataset_name: str, version: str | None = None) -> list[GroundTruthLabel]:
-        path = self.datasets_root / "targets" / dataset_name / "labels.jsonl"
-        labels = [
-            GroundTruthLabel.model_validate_json(line)
-            for line in path.read_text().splitlines()
-            if line.strip()
-        ]
-        if version:
-            labels = [label for label in labels if label.dataset_version == version]
-        return labels
+    def __init__(self, datasets_root: "Path") -> None:  # noqa: F821
+        pass  # retained for backward-compatible construction
 
-    def append(self, dataset_name: str, labels: list[GroundTruthLabel]) -> None:
-        path = self.datasets_root / "targets" / dataset_name / "labels.jsonl"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a") as f:
-            for label in labels:
-                f.write(label.model_dump_json() + "\n")
+    def load(self, dataset_name: str, version: str | None = None) -> list:  # type: ignore[override]
+        raise NotImplementedError(
+            "LabelStore.load is removed; use Database.list_dataset_labels instead"
+        )
+
+    def append(self, dataset_name: str, labels: list) -> None:  # type: ignore[override]
+        raise NotImplementedError(
+            "LabelStore.append is removed; use Database.append_dataset_labels instead"
+        )

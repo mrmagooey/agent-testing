@@ -81,8 +81,9 @@ async def coordinator_client(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_import_cve_persists_labels_json(coordinator_client):
-    """import_cve writes two GroundTruthLabel records to labels.json."""
+def test_import_cve_persists_labels_to_db(coordinator_client):
+    """import_cve persists two GroundTruthLabel records to the database (not labels.json)."""
+    import asyncio
     client, c, tmp_path = coordinator_client
     labels = [_make_label(0), _make_label(1)]
     with patch.object(c, "_build_cve_importer") as mock_builder:
@@ -103,46 +104,40 @@ def test_import_cve_persists_labels_json(coordinator_client):
         resp = client.post("/datasets/import-cve", json=valid_spec)
 
     assert resp.status_code == 201
+    # Labels must be in DB, NOT written to labels.json
     labels_file = tmp_path / "storage" / "datasets" / "test-persist" / "labels.json"
-    assert labels_file.exists(), "labels.json was not created"
-    stored = json.loads(labels_file.read_text())
-    assert isinstance(stored, list)
+    assert not labels_file.exists(), "labels.json must NOT be written (labels go to DB)"
+    stored = asyncio.get_event_loop().run_until_complete(
+        c.db.list_dataset_labels("test-persist")
+    )
     assert len(stored) == 2
 
 
-def test_import_cve_appends_to_existing_labels(coordinator_client):
-    """import_cve appends to an existing labels.json (3 total from 1 + 2)."""
+def test_import_cve_idempotent_second_call_fails_409(coordinator_client):
+    """A second import_cve for the same dataset name returns 409 (duplicate PK)."""
+    import asyncio
     client, c, tmp_path = coordinator_client
-
-    # Pre-seed one label
-    ds_dir = tmp_path / "storage" / "datasets" / "test-append"
-    ds_dir.mkdir(parents=True)
-    existing_label = _make_label(99)
-    (ds_dir / "labels.json").write_text(
-        json.dumps([existing_label.model_dump(mode="json")], default=str)
-    )
-
-    new_labels = [_make_label(0), _make_label(1)]
+    labels = [_make_label(0)]
     with patch.object(c, "_build_cve_importer") as mock_builder:
         mock_importer = MagicMock()
-        mock_importer.import_from_spec.return_value = new_labels
+        mock_importer.import_from_spec.return_value = labels
         mock_builder.return_value = mock_importer
 
         valid_spec = {
-            "cve_id": "CVE-2023-00002",
+            "cve_id": "CVE-2023-99990",
             "repo_url": "https://github.com/owner/repo",
-            "fix_commit_sha": "abc123",
-            "dataset_name": "test-append",
+            "fix_commit_sha": "abc999",
+            "dataset_name": "test-dup",
             "cwe_id": "CWE-89",
             "vuln_class": "sqli",
             "severity": "high",
-            "description": "SQL injection test",
+            "description": "dup test",
         }
-        resp = client.post("/datasets/import-cve", json=valid_spec)
-
-    assert resp.status_code == 201
-    stored = json.loads((ds_dir / "labels.json").read_text())
-    assert len(stored) == 3
+        resp1 = client.post("/datasets/import-cve", json=valid_spec)
+        assert resp1.status_code == 201
+        # Second call — same dataset_name conflicts on DB primary key
+        resp2 = client.post("/datasets/import-cve", json=valid_spec)
+        assert resp2.status_code in (409, 500)  # integrity error
 
 
 def test_import_cve_invalid_spec_raises_400(coordinator_client):

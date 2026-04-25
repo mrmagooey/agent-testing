@@ -290,11 +290,18 @@ def test_list_datasets_empty(coordinator_client):
 
 
 def test_list_datasets_returns_dataset_when_present(coordinator_client):
-    client, _, tmp_path = coordinator_client
-    storage = tmp_path / "storage"
-    ds_dir = storage / "datasets" / "my-dataset"
-    ds_dir.mkdir(parents=True)
-    (ds_dir / "labels.json").write_text(json.dumps([{"id": "lbl-1"}]))
+    import asyncio
+    client, c, tmp_path = coordinator_client
+    # Seed dataset in DB (new DB-backed approach)
+    asyncio.get_event_loop().run_until_complete(
+        c.db.create_dataset({
+            "name": "my-dataset",
+            "kind": "git",
+            "origin_url": "https://github.com/test/repo",
+            "origin_commit": "abc123",
+            "created_at": "2026-01-01T00:00:00",
+        })
+    )
 
     resp = client.get("/datasets")
     assert resp.status_code == 200
@@ -314,12 +321,36 @@ def test_get_labels_empty_for_unknown_dataset(coordinator_client):
 
 
 def test_get_labels_returns_labels_when_present(coordinator_client):
-    client, _, tmp_path = coordinator_client
-    storage = tmp_path / "storage"
-    ds_dir = storage / "datasets" / "vuln-dataset"
-    ds_dir.mkdir(parents=True)
-    labels = [{"id": "lbl-a", "file_path": "main.py"}]
-    (ds_dir / "labels.json").write_text(json.dumps(labels))
+    import asyncio
+    from datetime import datetime, timezone
+    client, c, tmp_path = coordinator_client
+    # Seed dataset + label in DB (new DB-backed approach)
+    asyncio.get_event_loop().run_until_complete(
+        c.db.create_dataset({
+            "name": "vuln-dataset",
+            "kind": "git",
+            "origin_url": "https://github.com/test/repo",
+            "origin_commit": "abc123",
+            "created_at": "2026-01-01T00:00:00",
+        })
+    )
+    asyncio.get_event_loop().run_until_complete(
+        c.db.append_dataset_labels([{
+            "id": "lbl-a",
+            "dataset_name": "vuln-dataset",
+            "dataset_version": "v1",
+            "file_path": "main.py",
+            "line_start": 1,
+            "line_end": 1,
+            "cwe_id": "CWE-89",
+            "vuln_class": "sqli",
+            "severity": "high",
+            "description": "SQL injection",
+            "source": "cve_patch",
+            "confidence": "confirmed",
+            "created_at": "2026-01-01T00:00:00",
+        }])
+    )
 
     resp = client.get("/datasets/vuln-dataset/labels")
     assert resp.status_code == 200
