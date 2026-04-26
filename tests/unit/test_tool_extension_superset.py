@@ -195,3 +195,27 @@ class TestSuperset:
             strategy,
             frozenset({ToolExtension.LSP, ToolExtension.TREE_SITTER}),
         )
+
+    def test_unknown_extension_value_raises_with_typo_hint(self):
+        """An unrecognised extension string (typo in strategy bundle) raises RuntimeError."""
+        strategy = _make_strategy(default_extensions=frozenset({"lsp", "not_a_real_ext"}))
+        with pytest.raises(RuntimeError) as exc_info:
+            check_tool_extension_superset(
+                "run-unknown-ext",
+                strategy,
+                frozenset({ToolExtension.LSP}),
+            )
+        msg = str(exc_info.value)
+        assert "not_a_real_ext" in msg, "Error message must name the unknown extension"
+        assert "typo" in msg.lower() or "unknown" in msg.lower()
+
+    def test_multiple_unknown_extension_values_all_listed(self):
+        """Every unknown extension string must appear in the error message."""
+        strategy = _make_strategy(
+            default_extensions=frozenset({"lsp", "bad_one", "bad_two"})
+        )
+        with pytest.raises(RuntimeError) as exc_info:
+            check_tool_extension_superset("run-multi-unknown", strategy, frozenset({ToolExtension.LSP}))
+        msg = str(exc_info.value)
+        assert "bad_one" in msg
+        assert "bad_two" in msg
