@@ -80,7 +80,7 @@ RUN curl -fsSL \
 COPY pyproject.toml .
 RUN mkdir -p src/sec_review_framework \
  && touch src/sec_review_framework/__init__.py \
- && pip install --no-cache-dir ".[worker]" \
+ && pip install --no-cache-dir ".[worker,agent]" \
  && rm -rf src
 
 # Pre-download tree-sitter grammars for offline use at runtime.

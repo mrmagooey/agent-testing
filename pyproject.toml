@@ -38,8 +38,7 @@ worker = [
     "tree-sitter-language-pack>=1.6.0,<1.6.3",
 ]
 agent = [
-    # pydantic-ai is used by agent-mode harnesses (coordinator-side).
-    # mcp>=1.25 is compatible with both worker and agent extras.
+    # pydantic-ai backs the unified strategy runner; required in worker images.
     "pydantic-ai>=1.87,<2.0",
     "mcp>=1.25",
 ]
@@ -47,17 +46,6 @@ dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.25",
     "ruff>=0.11",
-]
-# Phase 0 spike: pydantic-ai integration validation.
-# NOTE: pydantic-ai-slim 1.87+ is incompatible with the worker extra due to
-# two conflicts: (1) pydantic-ai requires opentelemetry-api>=1.28 while
-# semgrep 1.100-1.145 requires otel<1.26; (2) pydantic-ai requires mcp>=1.25.0
-# while no released semgrep version satisfies that bound (semgrep 1.100-1.145
-# requires mcp==1.16.0; semgrep>=1.146 requires mcp==1.23.3).
-# Resolution: use a separate venv (no worker extra) for the agent runner.
-# Install separately with: uv pip install "pydantic-ai>=1.87,<2.0"
-spike = [
-    "pydantic-ai>=1.87,<2.0",
 ]
 
 [build-system]

@@ -17,9 +17,8 @@ Requires the ``agent`` extra::
 
     uv pip install -e ".[agent]"
 
-This extra is MUTUALLY EXCLUSIVE with the ``worker`` extra — they must be
-installed in separate virtual environments.  Attempting to import this module
-without the ``agent`` extra will raise :exc:`ImportError` immediately.
+Attempting to import this module without the ``agent`` extra will raise
+:exc:`ImportError` immediately.
 """
 
 from __future__ import annotations

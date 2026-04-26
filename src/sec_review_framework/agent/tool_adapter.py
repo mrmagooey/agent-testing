@@ -36,9 +36,6 @@ interleave.  Mirror the pattern at ``common.py:268``::
 Requires the ``agent`` extra::
 
     uv pip install -e ".[agent]"
-
-This extra is MUTUALLY EXCLUSIVE with the ``worker`` extra — they must be
-installed in separate virtual environments.
 """
 
 from __future__ import annotations
