@@ -279,7 +279,6 @@ def test_fp_patterns_returns_list_type(coordinator_client):
 def test_fp_patterns_items_have_expected_fields_when_nonempty(coordinator_client):
     """If patterns are returned, each has a pattern-like field."""
     client, c, _ = coordinator_client
-    # Mock get_fp_patterns to return a sample pattern
     with patch.object(c, "get_fp_patterns", return_value=[
         {"pattern": "import os", "count": 3, "severity": "high"},
     ]):
@@ -288,6 +287,56 @@ def test_fp_patterns_items_have_expected_fields_when_nonempty(coordinator_client
     data = resp.json()
     assert len(data) == 1
     assert "pattern" in data[0]
+
+
+def test_fp_patterns_full_schema_contract(coordinator_client):
+    client, c, _ = coordinator_client
+    sample = {
+        "model_id": "gpt-4o",
+        "vuln_class": "sqli",
+        "pattern_description": "User input passed directly to SQL query",
+        "occurrence_count": 5,
+        "example_finding_ids": ["f-001", "f-002"],
+        "suggested_action": "Use parameterized queries",
+    }
+    with patch.object(c, "get_fp_patterns", return_value=[sample]):
+        resp = client.get("/feedback/patterns/exp-schema-test")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 1
+    item = data[0]
+    for field in ("model_id", "vuln_class", "pattern_description",
+                  "occurrence_count", "example_finding_ids", "suggested_action"):
+        assert field in item, f"Missing schema field: {field}"
+    assert item["model_id"] == "gpt-4o"
+    assert item["vuln_class"] == "sqli"
+    assert isinstance(item["occurrence_count"], int)
+    assert isinstance(item["example_finding_ids"], list)
+
+
+def test_fp_patterns_multiple_items_returned(coordinator_client):
+    client, c, _ = coordinator_client
+    patterns = [
+        {"model_id": "gpt-4o", "vuln_class": "sqli", "pattern_description": "p1",
+         "occurrence_count": 2, "example_finding_ids": [], "suggested_action": "a1"},
+        {"model_id": "claude-3-sonnet", "vuln_class": "xss", "pattern_description": "p2",
+         "occurrence_count": 1, "example_finding_ids": ["f-x"], "suggested_action": "a2"},
+    ]
+    with patch.object(c, "get_fp_patterns", return_value=patterns):
+        resp = client.get("/feedback/patterns/multi-pattern-exp")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 2
+    vuln_classes = {item["vuln_class"] for item in data}
+    assert "sqli" in vuln_classes
+    assert "xss" in vuln_classes
+
+
+def test_fp_patterns_always_200_even_for_unknown_experiment(coordinator_client):
+    client, *_ = coordinator_client
+    resp = client.get("/feedback/patterns/experiment-that-does-not-exist-xyz")
+    assert resp.status_code == 200
+    assert isinstance(resp.json(), list)
 
 
 # ---------------------------------------------------------------------------

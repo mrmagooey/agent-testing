@@ -6,6 +6,8 @@ Routes covered:
   - POST /datasets/{name}/inject/preview (no real template → graceful)
   - POST /datasets/{name}/inject    (no real template → graceful)
   - POST /datasets/import-cve       (empty spec → labels_created=0 or error shape)
+  - GET  /datasets/resolve-cve      (happy path, 404, 422 missing param, schema)
+  - POST /datasets/{name}/rematerialize  (happy path, 404, 409, 403, 502, schema)
 """
 
 from __future__ import annotations
@@ -15,10 +17,13 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch, MagicMock
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import sec_review_framework.coordinator as coord_module
-from sec_review_framework.coordinator import app
+from sec_review_framework.coordinator import CVECandidateResponse, app
+from sec_review_framework.data.findings import Severity, VulnClass
+from sec_review_framework.ground_truth.cve_importer import CVECandidate as _CVECandidate, ResolvedCVE
 
 from tests.integration.test_coordinator_api import _make_coordinator
 from sec_review_framework.db import Database
@@ -185,3 +190,158 @@ def test_import_cve_mocked_labels_count(coordinator_client):
         resp = client.post("/datasets/import-cve", json={"cve_id": "CVE-2024-99999"})
     assert resp.status_code == 201
     assert resp.json()["labels_created"] == 2
+
+
+# ---------------------------------------------------------------------------
+# GET /datasets/resolve-cve
+# ---------------------------------------------------------------------------
+
+def _make_resolved_cve(cve_id: str = "CVE-2024-10001") -> ResolvedCVE:
+    return ResolvedCVE(
+        cve_id=cve_id,
+        ghsa_id=None,
+        description="Remote code execution via deserialization",
+        cwe_ids=["CWE-502"],
+        vuln_class=VulnClass.SQLI,
+        severity=Severity.CRITICAL,
+        cvss_score=9.8,
+        repo_url="https://github.com/example/rce-repo",
+        fix_commit_sha="cafebabe1234",
+        affected_files=["src/deserialize.py"],
+        lines_changed=8,
+        language="python",
+        repo_kloc=5.0,
+        published_date="2024-06-01",
+        source="osv",
+    )
+
+
+def _make_candidate(resolved: ResolvedCVE | None = None) -> _CVECandidate:
+    r = resolved or _make_resolved_cve()
+    return _CVECandidate(
+        resolved=r,
+        score=0.9,
+        score_breakdown={"patch_size": 0.9, "severity": 1.0},
+        importable=bool(r.fix_commit_sha),
+    )
+
+
+def test_resolve_cve_happy_path_returns_200(coordinator_client):
+    client, c, _ = coordinator_client
+    r = _make_resolved_cve("CVE-2024-10001")
+    with patch.object(c, "resolve_cve", return_value=CVECandidateResponse.from_candidate(_make_candidate(r))):
+        resp = client.get("/datasets/resolve-cve?id=CVE-2024-10001")
+    assert resp.status_code == 200
+
+
+def test_resolve_cve_happy_path_response_schema(coordinator_client):
+    client, c, _ = coordinator_client
+    r = _make_resolved_cve("CVE-2024-10001")
+    with patch.object(c, "resolve_cve", return_value=CVECandidateResponse.from_candidate(_make_candidate(r))):
+        resp = client.get("/datasets/resolve-cve?id=CVE-2024-10001")
+    assert resp.status_code == 200
+    data = resp.json()
+    for field in ("cve_id", "score", "vuln_class", "severity", "language", "repo",
+                  "files_changed", "lines_changed", "importable"):
+        assert field in data, f"Missing required field: {field}"
+    assert data["cve_id"] == "CVE-2024-10001"
+    assert isinstance(data["score"], float)
+    assert isinstance(data["importable"], bool)
+    assert isinstance(data["files_changed"], int)
+    assert isinstance(data["lines_changed"], int)
+
+
+def test_resolve_cve_not_found_returns_404(coordinator_client):
+    client, c, _ = coordinator_client
+    with patch.object(c, "resolve_cve", side_effect=HTTPException(status_code=404, detail="not found")):
+        resp = client.get("/datasets/resolve-cve?id=CVE-9999-00000")
+    assert resp.status_code == 404
+    data = resp.json()
+    assert "detail" in data
+
+
+def test_resolve_cve_missing_id_param_returns_422(coordinator_client):
+    client, _, _ = coordinator_client
+    resp = client.get("/datasets/resolve-cve")
+    assert resp.status_code == 422
+    data = resp.json()
+    assert "detail" in data
+
+
+def test_resolve_cve_advisory_url_synthesized(coordinator_client):
+    client, c, _ = coordinator_client
+    r = _make_resolved_cve("CVE-2024-20002")
+    with patch.object(c, "resolve_cve", return_value=CVECandidateResponse.from_candidate(_make_candidate(r))):
+        resp = client.get("/datasets/resolve-cve?id=CVE-2024-20002")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data.get("advisory_url") == "https://github.com/example/rce-repo/commit/cafebabe1234"
+    assert data.get("fix_commit") == "cafebabe1234"
+
+
+# ---------------------------------------------------------------------------
+# POST /datasets/{name}/rematerialize
+# ---------------------------------------------------------------------------
+
+
+def test_rematerialize_happy_path_returns_200(coordinator_client):
+    client, c, _ = coordinator_client
+    with patch.object(c, "rematerialize_dataset", new=AsyncMock(
+        return_value={"materialized_at": "2026-04-26T00:00:00+00:00"}
+    )):
+        resp = client.post("/datasets/some-dataset/rematerialize")
+    assert resp.status_code == 200
+
+
+def test_rematerialize_happy_path_response_schema(coordinator_client):
+    client, c, _ = coordinator_client
+    ts = "2026-04-26T12:00:00+00:00"
+    with patch.object(c, "rematerialize_dataset", new=AsyncMock(return_value={"materialized_at": ts})):
+        resp = client.post("/datasets/some-dataset/rematerialize")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "materialized_at" in data
+    assert data["materialized_at"] == ts
+
+
+def test_rematerialize_unknown_dataset_returns_404(coordinator_client):
+    client, c, _ = coordinator_client
+    with patch.object(c, "rematerialize_dataset", new=AsyncMock(
+        side_effect=HTTPException(status_code=404, detail="unknown dataset no-such-ds")
+    )):
+        resp = client.post("/datasets/no-such-ds/rematerialize")
+    assert resp.status_code == 404
+    data = resp.json()
+    assert "detail" in data
+
+
+def test_rematerialize_conflict_returns_409(coordinator_client):
+    client, c, _ = coordinator_client
+    with patch.object(c, "rematerialize_dataset", new=AsyncMock(
+        side_effect=HTTPException(status_code=409, detail="templates_version mismatch")
+    )):
+        resp = client.post("/datasets/derived-ds/rematerialize")
+    assert resp.status_code == 409
+    data = resp.json()
+    assert "detail" in data
+
+
+def test_rematerialize_disabled_returns_403(coordinator_client):
+    client, _, _ = coordinator_client
+    with patch.object(coord_module, "IMPORT_ENABLED", False):
+        resp = client.post("/datasets/any-dataset/rematerialize")
+    assert resp.status_code == 403
+    data = resp.json()
+    assert "detail" in data
+    assert "disabled" in data["detail"].lower() or "import" in data["detail"].lower()
+
+
+def test_rematerialize_clone_failure_returns_502(coordinator_client):
+    client, c, _ = coordinator_client
+    with patch.object(c, "rematerialize_dataset", new=AsyncMock(
+        side_effect=HTTPException(status_code=502, detail="git clone or checkout failed")
+    )):
+        resp = client.post("/datasets/clone-fail-ds/rematerialize")
+    assert resp.status_code == 502
+    data = resp.json()
+    assert "detail" in data
