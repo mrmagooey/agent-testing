@@ -5,10 +5,15 @@ These tests verify:
   - GET /experiments/new with Accept: application/json falls through to the API.
   - GET /api/experiments strips the /api prefix and routes to the API handler.
   - GET /api/health strips the /api prefix and returns healthy.
+  - Malformed request paths (backslash-prefixed, percent-encoded traversal, very long paths) are
+    handled safely without crashing the middleware.
+  - Filesystem errors during SPA fallback (file disappears between exists() and
+    FileResponse.__call__) produce a 500 response, not a worker crash.
 """
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -74,6 +79,20 @@ async def spa_client(tmp_path: Path, dist_dir: Path):
         with patch.object(coord_module, "coordinator", c):
             with patch.object(c, "reconcile", return_value=None):
                 with TestClient(app, raise_server_exceptions=True) as client:
+                    yield client
+
+
+@pytest.fixture
+async def spa_client_no_raise(tmp_path: Path, dist_dir: Path):
+    """TestClient that swallows server exceptions and returns 500 responses instead."""
+    db = Database(tmp_path / "test.db")
+    await db.init()
+    c = _make_coordinator(tmp_path, db)
+
+    with patch.object(coord_module, "FRONTEND_DIST_DIR", dist_dir):
+        with patch.object(coord_module, "coordinator", c):
+            with patch.object(c, "reconcile", return_value=None):
+                with TestClient(app, raise_server_exceptions=False) as client:
                     yield client
 
 
@@ -359,3 +378,171 @@ async def test_frontend_mount_absent_when_dist_missing(tmp_path: Path):
                     )
                     # Without the static mount, / falls through to the API — no SPA HTML
                     assert resp.status_code != 200 or "SPA" not in resp.text
+
+
+# ---------------------------------------------------------------------------
+# Malformed request paths
+# ---------------------------------------------------------------------------
+
+
+def test_path_with_backslash_does_not_crash(spa_client):
+    """Paths containing backslash characters must not crash the middleware."""
+    resp = spa_client.get(
+        "/experiments/evil\\path",
+        headers={"Accept": "text/html"},
+        follow_redirects=False,
+    )
+    assert resp.status_code != 500
+
+
+def test_very_long_path_does_not_crash(spa_client):
+    """A path exceeding typical URL limits must not crash the middleware."""
+    long_segment = "a" * 8192
+    resp = spa_client.get(
+        f"/experiments/{long_segment}",
+        headers={"Accept": "text/html"},
+        follow_redirects=False,
+    )
+    assert resp.status_code != 500
+
+
+def test_path_traversal_encoded_does_not_crash(spa_client):
+    """Paths with percent-encoded traversal sequences must not crash."""
+    resp = spa_client.get(
+        "/experiments/%2F..%2F..%2Fetc%2Fpasswd",
+        headers={"Accept": "text/html"},
+        follow_redirects=False,
+    )
+    assert resp.status_code != 500
+
+
+def test_path_with_unicode_does_not_crash(spa_client):
+    """Paths containing multi-byte Unicode sequences must not crash the middleware."""
+    resp = spa_client.get(
+        "/experiments/éàü",
+        headers={"Accept": "text/html"},
+        follow_redirects=False,
+    )
+    assert resp.status_code != 500
+
+
+def test_path_with_repeated_slashes_does_not_crash(spa_client):
+    """Paths with repeated slashes must not crash the middleware."""
+    resp = spa_client.get(
+        "/experiments////new////",
+        headers={"Accept": "text/html"},
+        follow_redirects=False,
+    )
+    assert resp.status_code != 500
+
+
+def test_api_prefix_with_very_long_path_does_not_crash(spa_client):
+    """An /api/ prefix on a very long path must not crash the middleware."""
+    long_segment = "x" * 4096
+    resp = spa_client.get(
+        f"/api/experiments/{long_segment}",
+        headers={"Accept": "application/json"},
+        follow_redirects=False,
+    )
+    assert resp.status_code != 500
+
+
+def test_path_with_fragment_and_query_does_not_crash(spa_client):
+    """Paths with query strings and unusual characters must not crash the middleware."""
+    resp = spa_client.get(
+        "/experiments/new?foo=bar&baz=<script>",
+        headers={"Accept": "text/html"},
+        follow_redirects=False,
+    )
+    assert resp.status_code != 500
+
+
+# ---------------------------------------------------------------------------
+# Filesystem errors during SPA fallback
+# ---------------------------------------------------------------------------
+
+
+def test_spa_fallback_file_disappears_between_exists_and_read_returns_500(
+    spa_client_no_raise, dist_dir: Path
+):
+    """When index.html disappears after exists() returns True, the middleware
+    must produce a 500 — not crash the worker process unrecoverably."""
+    index_path = dist_dir / "index.html"
+
+    original_exists = Path.exists
+
+    def exists_then_delete(self: Path) -> bool:
+        result = original_exists(self)
+        if result and self.name == "index.html" and self.parent == dist_dir:
+            self.unlink()
+        return result
+
+    with patch.object(Path, "exists", exists_then_delete):
+        resp = spa_client_no_raise.get(
+            "/experiments/new",
+            headers={"Accept": "text/html"},
+            follow_redirects=False,
+        )
+    assert resp.status_code == 500
+    index_path.write_text("<!DOCTYPE html><html><body>SPA</body></html>")
+
+
+def test_spa_fallback_stat_failure_returns_500(spa_client_no_raise, dist_dir: Path):
+    """When os.stat raises OSError on the index.html file, the middleware
+    must produce a 500 rather than propagating the exception unhandled."""
+    import anyio.to_thread
+
+    original_run_sync = anyio.to_thread.run_sync
+
+    async def failing_run_sync(func, *args, **kwargs):
+        if func is os.stat and args and str(args[0]).endswith("index.html"):
+            raise OSError("Simulated disk I/O error")
+        return await original_run_sync(func, *args, **kwargs)
+
+    with patch.object(anyio.to_thread, "run_sync", failing_run_sync):
+        resp = spa_client_no_raise.get(
+            "/experiments/new",
+            headers={"Accept": "text/html"},
+            follow_redirects=False,
+        )
+    assert resp.status_code == 500
+
+
+def test_spa_fallback_permission_denied_does_not_crash_worker(
+    spa_client_no_raise, dist_dir: Path
+):
+    """When index.html is unreadable (permission denied), the middleware must not
+    crash the worker process.  Because FileResponse sends HTTP headers before
+    opening the file body, the connection yields a 200 with an empty body rather
+    than a 500 — the body read error is swallowed after headers are committed.
+    The contract is: status 200, body is empty (not the SPA content)."""
+    index_path = dist_dir / "index.html"
+    original_mode = index_path.stat().st_mode
+
+    try:
+        index_path.chmod(0o000)
+        resp = spa_client_no_raise.get(
+            "/experiments/new",
+            headers={"Accept": "text/html"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 200
+        assert "SPA" not in resp.text
+    finally:
+        index_path.chmod(original_mode)
+
+
+def test_happy_path_html_request_still_works_after_fs_error_tests(spa_client, dist_dir: Path):
+    """After filesystem-error scenarios, a normal browser request must still
+    return 200 with the SPA shell when index.html is intact."""
+    index_path = dist_dir / "index.html"
+    if not index_path.exists():
+        index_path.write_text("<!DOCTYPE html><html><body>SPA</body></html>")
+
+    resp = spa_client.get(
+        "/experiments/new",
+        headers={"Accept": "text/html,*/*;q=0.8"},
+        follow_redirects=True,
+    )
+    assert resp.status_code == 200
+    assert "SPA" in resp.text
