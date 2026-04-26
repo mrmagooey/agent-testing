@@ -179,3 +179,137 @@ def test_experiment_file_config_from_yaml_loads(tmp_path: Path):
     assert len(cfg.strategies) == 1
 
 
+# ---------------------------------------------------------------------------
+# _validate_auth — additional error paths
+# ---------------------------------------------------------------------------
+
+
+def test_model_provider_config_invalid_auth_literal_raises():
+    with pytest.raises(ValidationError, match="'api_key' or 'aws'"):
+        ModelProviderConfig(id="m-bad", model_name="gpt-4o", auth="oauth")  # type: ignore[arg-type]
+
+
+def test_model_provider_config_aws_auth_empty_region_raises():
+    with pytest.raises(ValidationError, match="region required"):
+        ModelProviderConfig(id="m-empty-region", model_name="bedrock-model", auth="aws", region=None)
+
+
+def test_model_provider_config_api_key_no_env_no_base_raises():
+    with pytest.raises(ValidationError, match="api_key_env required"):
+        ModelProviderConfig(id="m-nok", model_name="gpt-4o", auth="api_key", api_key_env=None, api_base=None)
+
+
+# ---------------------------------------------------------------------------
+# RetryConfig — error paths
+# ---------------------------------------------------------------------------
+
+
+def test_retry_config_invalid_max_retries_type_raises(tmp_path: Path):
+    cfg_path = _write_yaml(
+        tmp_path / "retry.yaml",
+        {"defaults": {"max_retries": "not-an-int", "base_delay": 1.0, "max_delay": 60.0}},
+    )
+    with pytest.raises(ValidationError, match="valid integer"):
+        RetryConfig.from_yaml(cfg_path)
+
+
+def test_retry_config_providers_not_a_dict_raises(tmp_path: Path):
+    cfg_path = _write_yaml(
+        tmp_path / "retry.yaml",
+        {"providers": "should-be-a-dict"},
+    )
+    with pytest.raises(ValidationError, match="valid dictionary"):
+        RetryConfig.from_yaml(cfg_path)
+
+
+def test_retry_config_provider_policy_invalid_base_delay_raises(tmp_path: Path):
+    cfg_path = _write_yaml(
+        tmp_path / "retry.yaml",
+        {"providers": {"openai": {"max_retries": 3, "base_delay": "bad", "max_delay": 30.0}}},
+    )
+    with pytest.raises(ValidationError, match="valid number"):
+        RetryConfig.from_yaml(cfg_path)
+
+
+# ---------------------------------------------------------------------------
+# ConcurrencyConfig — error paths
+# ---------------------------------------------------------------------------
+
+
+def test_concurrency_config_invalid_default_cap_type_raises(tmp_path: Path):
+    cfg_path = _write_yaml(
+        tmp_path / "concurrency.yaml",
+        {"default_cap": "not-an-int"},
+    )
+    with pytest.raises(ValidationError, match="valid integer"):
+        ConcurrencyConfig.from_yaml(cfg_path)
+
+
+def test_concurrency_config_invalid_per_model_cap_type_raises(tmp_path: Path):
+    cfg_path = _write_yaml(
+        tmp_path / "concurrency.yaml",
+        {"default_cap": 4, "per_model": {"gpt-4o": "bad-value"}},
+    )
+    with pytest.raises(ValidationError, match="valid integer"):
+        ConcurrencyConfig.from_yaml(cfg_path)
+
+
+def test_concurrency_config_per_model_not_a_dict_raises(tmp_path: Path):
+    cfg_path = _write_yaml(
+        tmp_path / "concurrency.yaml",
+        {"default_cap": 4, "per_model": "not-a-dict"},
+    )
+    with pytest.raises(ValidationError, match="valid dictionary"):
+        ConcurrencyConfig.from_yaml(cfg_path)
+
+
+# ---------------------------------------------------------------------------
+# PricingConfig — error paths
+# ---------------------------------------------------------------------------
+
+
+def test_pricing_config_missing_models_key_raises(tmp_path: Path):
+    cfg_path = _write_yaml(
+        tmp_path / "pricing.yaml",
+        {"not_models": {}},
+    )
+    with pytest.raises(ValidationError, match="Field required"):
+        PricingConfig.from_yaml(cfg_path)
+
+
+def test_pricing_config_model_entry_missing_output_raises(tmp_path: Path):
+    cfg_path = _write_yaml(
+        tmp_path / "pricing.yaml",
+        {"models": {"gpt-4o": {"input_per_million": 5.0}}},
+    )
+    with pytest.raises(ValidationError, match="Field required"):
+        PricingConfig.from_yaml(cfg_path)
+
+
+def test_pricing_config_model_entry_missing_input_raises(tmp_path: Path):
+    cfg_path = _write_yaml(
+        tmp_path / "pricing.yaml",
+        {"models": {"gpt-4o": {"output_per_million": 15.0}}},
+    )
+    with pytest.raises(ValidationError, match="Field required"):
+        PricingConfig.from_yaml(cfg_path)
+
+
+def test_pricing_config_non_numeric_price_raises(tmp_path: Path):
+    cfg_path = _write_yaml(
+        tmp_path / "pricing.yaml",
+        {"models": {"gpt-4o": {"input_per_million": "bad", "output_per_million": 15.0}}},
+    )
+    with pytest.raises(ValidationError, match="valid number"):
+        PricingConfig.from_yaml(cfg_path)
+
+
+def test_pricing_config_models_not_a_dict_raises(tmp_path: Path):
+    cfg_path = _write_yaml(
+        tmp_path / "pricing.yaml",
+        {"models": ["gpt-4o", "claude"]},
+    )
+    with pytest.raises(ValidationError, match="valid dictionary"):
+        PricingConfig.from_yaml(cfg_path)
+
+
