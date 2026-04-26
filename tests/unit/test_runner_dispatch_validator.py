@@ -260,22 +260,49 @@ class TestValidateDispatch:
 class TestRunStrategyDispatchValidator:
     """Integration tests for the dispatch validator within run_strategy."""
 
-    def test_no_reprompt_when_no_expected_dispatch(self) -> None:
-        """Without expected_dispatch, run_strategy finishes in 1 turn."""
+    def test_no_reprompt_when_dispatch_fallback_none(self) -> None:
+        """With dispatch_fallback='none', validator is disabled and run finishes in 1 turn.
+
+        PER_FILE strategies auto-derive expected_dispatch since fix #2, so the
+        old 'no expected_dispatch → no validator' assumption no longer holds.
+        Setting dispatch_fallback='none' is the correct way to opt out.
+        """
         finding = _make_finding_data()
         provider = _scripted_provider([finding])
         mock_deps = _make_mock_deps()
 
+        strategy = UserStrategy(
+            id="test.dispatch.none",
+            name="Test dispatch strategy (fallback=none)",
+            parent_strategy_id=None,
+            orchestration_shape=OrchestrationShape.PER_FILE,
+            default=StrategyBundleDefault(
+                system_prompt="Review files.",
+                user_prompt_template="Review: {repo_summary}\n{finding_output_format}",
+                model_id="fake/test",
+                tools=frozenset(),
+                verification="none",
+                max_turns=5,
+                tool_extensions=frozenset(),
+                subagents=["test.file_reviewer"],
+                dispatch_fallback="none",
+            ),
+            overrides=[],
+            created_at=datetime(2026, 1, 1),
+            is_builtin=False,
+        )
+
         output = run_strategy(
-            _make_strategy(),
+            strategy,
             FakeTarget(),
             provider,
             ToolRegistry(),
             deps_factory=lambda: mock_deps,
-            # No expected_dispatch — validator is disabled
         )
         assert isinstance(output, StrategyOutput)
         assert len(output.findings) == 1
+        # Validator did not run — dispatch_completeness stays None
+        assert output.dispatch_completeness is None
 
     def test_no_reprompt_when_all_dispatched(self) -> None:
         """When all expected inputs are in batch_call_log, no re-prompt occurs."""
@@ -621,3 +648,408 @@ class TestProgrammaticFallbackRoleResolution:
             assert mock_run.called
             assert len(results) == 1
             assert results[0].vuln_class == "xss"
+
+
+# ---------------------------------------------------------------------------
+# Regression tests: Bug #2 — dispatch validator auto-derivation
+# ---------------------------------------------------------------------------
+
+
+def _make_per_vuln_class_strategy(dispatch_fallback: str = "programmatic") -> UserStrategy:
+    """Build a minimal PER_VULN_CLASS strategy with 16 specialists."""
+    from sec_review_framework.data.findings import VulnClass
+
+    specialist_ids = [f"test.{vc.value}_specialist" for vc in VulnClass]
+    return UserStrategy(
+        id="test.per_vuln_class",
+        name="Test per_vuln_class",
+        parent_strategy_id=None,
+        orchestration_shape=OrchestrationShape.PER_VULN_CLASS,
+        default=StrategyBundleDefault(
+            system_prompt="Dispatch specialists.",
+            user_prompt_template="Repo: {repo_summary}\n{finding_output_format}",
+            model_id="fake/test",
+            tools=frozenset(),
+            verification="none",
+            max_turns=10,
+            tool_extensions=frozenset(),
+            subagents=specialist_ids,
+            dispatch_fallback=dispatch_fallback,
+        ),
+        overrides=[],
+        created_at=datetime(2026, 1, 1),
+        is_builtin=False,
+    )
+
+
+class TestBug2AutoDerivePERVULN:
+    """Regression for bug #2: PER_VULN_CLASS auto-derives expected_dispatch.
+
+    Simulates a supervisor that dispatches only 8/16 specialists; asserts that
+    programmatic fallback fires and the remaining 8 are invoked.
+    """
+
+    def test_programmatic_fallback_fires_for_missed_specialists(self) -> None:
+        """8/16 dispatched by supervisor → programmatic fallback covers remaining 8."""
+        from sec_review_framework.data.findings import Finding, Severity, VulnClass
+        from unittest.mock import patch, Mock
+
+        strategy = _make_per_vuln_class_strategy(dispatch_fallback="programmatic")
+
+        # Script the parent to return an empty findings list immediately
+        provider = ScriptedLiteLLMProvider(
+            responses=[
+                {
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "name": "final_result",
+                            "id": "tc_pvc_1",
+                            "input": {"response": []},
+                        }
+                    ],
+                    "input_tokens": 100,
+                    "output_tokens": 10,
+                }
+            ]
+        )
+
+        all_vuln_classes = list(VulnClass)
+        dispatched_8 = all_vuln_classes[:8]
+        missed_8 = all_vuln_classes[8:]
+
+        # Deps pre-populated with 8 dispatched — 8 are missing
+        dispatched_calls = [
+            (f"test.{vc.value}_specialist", [{"vuln_class": vc.value}])
+            for vc in dispatched_8
+        ]
+        deps = SubagentDeps(
+            depth=0,
+            max_depth=3,
+            invocations=0,
+            max_invocations=200,
+            max_batch_size=32,
+            available_roles={f"test.{vc.value}_specialist" for vc in all_vuln_classes},
+            subagent_strategies={},
+            tool_registry=ToolRegistry(),
+        )
+        deps.batch_call_log = dispatched_calls
+
+        def make_finding(vc_value: str) -> Finding:
+            return Finding(
+                id=str(uuid.uuid4()),
+                file_path="test.py",
+                line_start=1,
+                vuln_class=vc_value,
+                severity=Severity.HIGH,
+                title=f"{vc_value} issue",
+                description="Test finding",
+                confidence=0.8,
+                raw_llm_output="",
+                produced_by=f"{vc_value}_specialist",
+                experiment_id="test_pvc",
+            )
+
+        # _run_child_sync returns one finding per specialist
+        def fake_run_child(strategy_obj, inp, parent_deps):
+            vc = inp.get("vuln_class", "sqli")
+            return Mock(output=[make_finding(vc)])
+
+        with patch("sec_review_framework.strategies.runner._run_child_sync", side_effect=fake_run_child):
+            # Register specialist strategies in deps so resolution works
+            for vc in missed_8:
+                specialist_id = f"test.{vc.value}_specialist"
+                deps.subagent_strategies[specialist_id] = UserStrategy(
+                    id=specialist_id,
+                    name=f"{vc.value} specialist",
+                    parent_strategy_id="test.per_vuln_class",
+                    orchestration_shape=OrchestrationShape.SINGLE_AGENT,
+                    default=StrategyBundleDefault(
+                        system_prompt="Find vulnerabilities.",
+                        user_prompt_template="{vuln_class}: {repo_summary}",
+                        model_id="fake/test",
+                        tools=frozenset(),
+                        verification="none",
+                        max_turns=5,
+                        tool_extensions=frozenset(),
+                    ),
+                    overrides=[],
+                    created_at=datetime(2026, 1, 1),
+                )
+
+            output = run_strategy(
+                strategy,
+                FakeTarget(),
+                provider,
+                ToolRegistry(),
+                deps_factory=lambda: deps,
+            )
+
+        # Programmatic fallback must have covered the 8 missed specialists
+        assert len(output.findings) == 8, (
+            f"Expected 8 findings from programmatic fallback, got {len(output.findings)}"
+        )
+        # dispatch_completeness is 1.0 after programmatic fill
+        assert output.dispatch_completeness == 1.0
+
+
+class TestBug2AutoDerivePERFILE:
+    """Regression for bug #2: PER_FILE auto-derives expected_dispatch from target files.
+
+    Supervisor dispatches 1/3 files; validator catches the miss and re-prompts.
+    """
+
+    def test_reprompt_fires_when_supervisor_misses_files(self) -> None:
+        """Supervisor dispatches 1/3 files → reprompt fires for the 2 missed files."""
+
+        class ThreeFileTarget:
+            def get_file_tree(self) -> str:
+                return "a.py\nb.py\nc.py"
+
+            def list_source_files(self) -> list[str]:
+                return ["a.py", "b.py", "c.py"]
+
+        strategy = UserStrategy(
+            id="test.per_file_reprompt",
+            name="Test per_file reprompt",
+            parent_strategy_id=None,
+            orchestration_shape=OrchestrationShape.PER_FILE,
+            default=StrategyBundleDefault(
+                system_prompt="Dispatch file reviewers.",
+                user_prompt_template="Repo: {repo_summary}\n{finding_output_format}",
+                model_id="fake/test",
+                tools=frozenset(),
+                verification="none",
+                max_turns=5,
+                tool_extensions=frozenset(),
+                subagents=["test.file_reviewer"],
+                dispatch_fallback="reprompt",
+            ),
+            overrides=[],
+            created_at=datetime(2026, 1, 1),
+        )
+
+        finding_a = _make_finding_data(file_path="a.py", vuln_class="sqli")
+        finding_b = _make_finding_data(file_path="b.py", vuln_class="xss")
+
+        # Two responses: initial turn (1 finding) + re-prompt turn (1 finding)
+        provider = ScriptedLiteLLMProvider(
+            responses=[
+                {
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "name": "final_result",
+                            "id": "tc_pf_1",
+                            "input": {"response": [finding_a]},
+                        }
+                    ],
+                    "input_tokens": 100,
+                    "output_tokens": 30,
+                },
+                {
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "name": "final_result",
+                            "id": "tc_pf_2",
+                            "input": {"response": [finding_b]},
+                        }
+                    ],
+                    "input_tokens": 80,
+                    "output_tokens": 20,
+                },
+            ]
+        )
+
+        # Deps: only a.py was dispatched by the supervisor
+        deps = SubagentDeps(
+            depth=0,
+            max_depth=3,
+            invocations=0,
+            max_invocations=100,
+            max_batch_size=32,
+            available_roles={"test.file_reviewer"},
+            subagent_strategies={},
+            tool_registry=ToolRegistry(),
+        )
+        deps.batch_call_log = [("test.file_reviewer", [{"file_path": "a.py"}])]
+
+        output = run_strategy(
+            strategy,
+            ThreeFileTarget(),
+            provider,
+            ToolRegistry(),
+            deps_factory=lambda: deps,
+        )
+
+        # Both scripted responses consumed — re-prompt fired
+        assert not provider._responses, "Both responses should have been consumed"
+        # Combined findings from both turns (deduplicated — no overlap here)
+        assert len(output.findings) == 2
+
+
+# ---------------------------------------------------------------------------
+# Regression tests: Bug #5 — output_type_name honoured on parent strategy
+# ---------------------------------------------------------------------------
+
+
+class TestBug5OutputTypeName:
+    """Regression for bug #5: parent strategy with non-finding output_type_name."""
+
+    def test_verifier_verdict_output_goes_to_non_finding_output(self) -> None:
+        """Strategy with output_type_name='verifier_verdict' populates non_finding_output."""
+        from sec_review_framework.data.verification import VerifierVerdict
+
+        strategy = UserStrategy(
+            id="test.verifier_parent",
+            name="Test verifier parent",
+            parent_strategy_id=None,
+            orchestration_shape=OrchestrationShape.SINGLE_AGENT,
+            default=StrategyBundleDefault(
+                system_prompt="Verify findings.",
+                user_prompt_template="Repo: {repo_summary}",
+                model_id="fake/test",
+                tools=frozenset(),
+                verification="none",
+                max_turns=5,
+                tool_extensions=frozenset(),
+                output_type_name="verifier_verdict",
+            ),
+            overrides=[],
+            created_at=datetime(2026, 1, 1),
+        )
+
+        # For Pydantic BaseModel output_type, pydantic-ai expects the model's
+        # fields directly as the tool call input (not wrapped in {"response": ...}).
+        verdict_data = {
+            "status": "confirmed",
+            "evidence": "The code is definitely vulnerable on line 42.",
+        }
+
+        provider = ScriptedLiteLLMProvider(
+            responses=[
+                {
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "name": "final_result",
+                            "id": "tc_vv_1",
+                            "input": verdict_data,
+                        }
+                    ],
+                    "input_tokens": 100,
+                    "output_tokens": 20,
+                }
+            ]
+        )
+
+        output = run_strategy(strategy, FakeTarget(), provider, ToolRegistry())
+
+        # findings must be empty — this is a non-finding strategy
+        assert output.findings == []
+        # non_finding_output must contain the verdict
+        assert output.non_finding_output is not None
+        assert isinstance(output.non_finding_output, VerifierVerdict)
+        assert output.non_finding_output.status == "confirmed"
+
+
+# ---------------------------------------------------------------------------
+# Regression tests: Bug #8 — re-prompt deduplication
+# ---------------------------------------------------------------------------
+
+
+class TestBug8RepromptDeduplication:
+    """Regression for bug #8: re-prompt findings are deduplicated."""
+
+    def test_duplicate_finding_on_reprompt_collapses_to_one(self) -> None:
+        """If supervisor re-emits a previously-dispatched finding, dedup collapses it."""
+
+        # Finding that will appear in BOTH initial and re-prompt turns
+        dup_finding = _make_finding_data(
+            id=str(uuid.uuid4()),
+            file_path="app/views.py",
+            line_start=42,
+            line_end=42,
+            vuln_class="sqli",
+        )
+
+        # Two responses: initial turn returns the finding, re-prompt also returns it
+        provider = ScriptedLiteLLMProvider(
+            responses=[
+                {
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "name": "final_result",
+                            "id": "tc_dup_1",
+                            "input": {"response": [dup_finding]},
+                        }
+                    ],
+                    "input_tokens": 100,
+                    "output_tokens": 30,
+                },
+                {
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "name": "final_result",
+                            "id": "tc_dup_2",
+                            # Supervisor re-emits the SAME finding on re-prompt
+                            "input": {"response": [dup_finding]},
+                        }
+                    ],
+                    "input_tokens": 80,
+                    "output_tokens": 20,
+                },
+            ]
+        )
+
+        # Deps: only a.py dispatched; b.py was missed → triggers re-prompt
+        deps = SubagentDeps(
+            depth=0,
+            max_depth=3,
+            invocations=0,
+            max_invocations=100,
+            max_batch_size=32,
+            available_roles={"test.file_reviewer"},
+            subagent_strategies={},
+            tool_registry=ToolRegistry(),
+        )
+        deps.batch_call_log = [("test.file_reviewer", [{"file_path": "app/views.py"}])]
+
+        strategy = UserStrategy(
+            id="test.dedup_reprompt",
+            name="Test dedup reprompt",
+            parent_strategy_id=None,
+            orchestration_shape=OrchestrationShape.PER_FILE,
+            default=StrategyBundleDefault(
+                system_prompt="Review.",
+                user_prompt_template="Repo: {repo_summary}\n{finding_output_format}",
+                model_id="fake/test",
+                tools=frozenset(),
+                verification="none",
+                max_turns=5,
+                tool_extensions=frozenset(),
+                subagents=["test.file_reviewer"],
+                dispatch_fallback="reprompt",
+            ),
+            overrides=[],
+            created_at=datetime(2026, 1, 1),
+        )
+
+        output = run_strategy(
+            strategy,
+            FakeTarget(),
+            provider,
+            ToolRegistry(),
+            deps_factory=lambda: deps,
+        )
+
+        # Both responses consumed (re-prompt fired)
+        assert not provider._responses
+        # The duplicate finding was deduplicated — only 1 finding in output
+        assert len(output.findings) == 1, (
+            f"Duplicate finding from re-prompt should have been deduplicated, "
+            f"got {len(output.findings)} findings"
+        )
