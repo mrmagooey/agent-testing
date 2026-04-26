@@ -171,6 +171,10 @@ class ModelProviderCache:
     def __contains__(self, model_id: str) -> bool:
         return model_id in self._cache
 
+    def providers(self) -> list[ModelProvider]:
+        """Return all cached providers, in insertion order."""
+        return list(self._cache.values())
+
 
 # Type alias kept for forward compatibility
 ModelProviderFactory = None  # noqa: F841 — used only in annotations above

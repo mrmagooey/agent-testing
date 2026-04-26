@@ -1144,3 +1144,28 @@ class TestRunChildAsync:
 
 # Import needed for TestRunChildAsync tests
 from sec_review_framework.agent.subagent import _run_child  # noqa: E402
+
+
+class TestModelProviderCacheProviders:
+    """Regression tests for ModelProviderCache.providers() public iterator."""
+
+    def test_providers_returns_all_cached_in_insertion_order(self) -> None:
+        from sec_review_framework.strategies.common import ModelProviderCache
+
+        cache = ModelProviderCache()
+        a = ScriptedLiteLLMProvider(responses=[], model_name="fake/a")
+        b = ScriptedLiteLLMProvider(responses=[], model_name="fake/b")
+        cache.put("fake/a", a)
+        cache.put("fake/b", b)
+        assert cache.providers() == [a, b]
+
+    def test_providers_returns_independent_list(self) -> None:
+        """Mutating the returned list must not affect the cache."""
+        from sec_review_framework.strategies.common import ModelProviderCache
+
+        cache = ModelProviderCache()
+        p = ScriptedLiteLLMProvider(responses=[], model_name="fake/x")
+        cache.put("fake/x", p)
+        snapshot = cache.providers()
+        snapshot.clear()
+        assert cache.providers() == [p]

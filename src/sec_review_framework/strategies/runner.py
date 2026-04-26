@@ -362,8 +362,7 @@ def run_strategy(
     child_token_log: list[object] = []
     child_conversation_log: list[object] = []
     if deps is not None and deps.model_provider_cache is not None:
-        # pylint: disable=protected-access
-        for provider in deps.model_provider_cache._cache.values():
+        for provider in deps.model_provider_cache.providers():
             child_token_log.extend(provider.token_log)
             child_conversation_log.extend(provider.conversation_log)
 
