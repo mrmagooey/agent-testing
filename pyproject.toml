@@ -67,7 +67,7 @@ select = ["E", "F", "I", "UP"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 pythonpath = ["src"]
-addopts = "--cov=sec_review_framework --cov-report=term-missing"
+addopts = "--cov=sec_review_framework --cov-report=term-missing --cov-fail-under=73"
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "integration: requires temp database or mock services",
