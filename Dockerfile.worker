@@ -5,6 +5,23 @@
 FROM golang:1.24-alpine AS gopls-builder
 RUN go install golang.org/x/tools/gopls@v0.16.2
 
+# ---------------------------------------------------------------------------
+# Build stage: install semgrep via pipx against Python 3.12.
+# semgrep's transitive deps (protobuf, via opentelemetry) ship no Python 3.14
+# wheels — installing under 3.14 succeeds but raises
+# `TypeError: Metaclasses with custom tp_new are not supported` on import.
+# We build the venv on 3.12 here and copy it (plus a side-by-side python3.12
+# runtime) into the 3.14 final image below.
+# ---------------------------------------------------------------------------
+FROM python:3.12-slim AS semgrep-builder
+ARG SEMGREP_VERSION=1.113.0
+# setuptools is downgraded because opentelemetry-instrumentation imports
+# pkg_resources, which setuptools 81+ removed. Pin to <80 to keep it available.
+RUN pip install --no-cache-dir pipx \
+ && pipx install "semgrep==${SEMGREP_VERSION}" \
+ && pipx runpip semgrep install --no-cache-dir --force-reinstall 'setuptools<80' \
+ && /root/.local/bin/semgrep --version
+
 FROM python:3.14-slim
 
 WORKDIR /app
@@ -71,15 +88,20 @@ RUN curl -fsSL \
  && rm /tmp/rust-analyzer.gz
 
 # ---------------------------------------------------------------------------
-# semgrep — installed via pipx to isolate its mcp/opentelemetry-api deps from
-# the worker venv (semgrep pins mcp<2 which conflicts with pydantic-ai's mcp>=1).
-# The pipx venv lives at /root/.local/pipx/venvs/semgrep; the binary is
-# symlinked to /root/.local/bin/semgrep which is added to PATH below.
+# semgrep — pipx venv built against Python 3.12 in the semgrep-builder stage
+# (see top of file for why 3.14 won't work). We bring in:
+#   1. python3.12 binary + stdlib + libpython.so, side-by-side with 3.14.
+#      The python3.12-named files don't collide with /usr/local's 3.14 layout.
+#   2. The pipx venv under /root/.local — its bin/python3.12 symlink targets
+#      /usr/local/bin/python3.12 which we just installed, so it resolves.
+# This isolates semgrep's mcp<2 / opentelemetry deps from the 3.14 worker venv
+# (semgrep's mcp pin would otherwise conflict with pydantic-ai's mcp>=1).
 # ---------------------------------------------------------------------------
-ARG SEMGREP_VERSION=1.113.0
-RUN pip install --no-cache-dir pipx \
- && pipx install "semgrep==${SEMGREP_VERSION}" \
- && /root/.local/bin/semgrep --version
+COPY --from=semgrep-builder /usr/local/bin/python3.12 /usr/local/bin/python3.12
+COPY --from=semgrep-builder /usr/local/lib/python3.12 /usr/local/lib/python3.12
+COPY --from=semgrep-builder /usr/local/lib/libpython3.12.so.1.0 /usr/local/lib/libpython3.12.so.1.0
+COPY --from=semgrep-builder /root/.local /root/.local
+RUN ldconfig && /root/.local/bin/semgrep --version
 
 ENV PATH="/root/.local/bin:${PATH}"
 

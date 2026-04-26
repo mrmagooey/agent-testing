@@ -57,11 +57,18 @@ helm-template:
 	helm template $(RELEASE) $(CHART_DIR) --namespace $(NAMESPACE) --values $(CHART_DIR)/values-minikube.yaml
 
 helm-install-minikube:
+	@if [ ! -f config/secrets/encryption.key ]; then \
+	  echo "config/secrets/encryption.key missing — generate with:"; \
+	  echo "  python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())' > config/secrets/encryption.key"; \
+	  exit 1; \
+	fi
 	DIGEST=$$(eval $$(minikube -p agent-testing docker-env) && docker image inspect sec-review-coordinator:latest --format '{{.Id}}' 2>/dev/null || true); \
+	ENCRYPTION_KEY=$$(cat config/secrets/encryption.key); \
 	helm upgrade --install $(RELEASE) $(CHART_DIR) \
 		--namespace $(NAMESPACE) --create-namespace \
 		--values $(CHART_DIR)/values-minikube.yaml \
 		--set-string coordinator.imageDigest=$$DIGEST \
+		--set-string secrets.encryptionKey=$$ENCRYPTION_KEY \
 		--kube-context agent-testing
 
 helm-upgrade-minikube: helm-install-minikube
