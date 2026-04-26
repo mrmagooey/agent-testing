@@ -41,6 +41,19 @@ def _seed_coordinator_prerequisites(tmp_path: Path, coordinator) -> None:
     })
 
 
+async def _register_smoke_dataset(db: Database, name: str = "smoke-test-dataset") -> None:
+    """Insert a minimal git-kind dataset row so list_datasets() is non-empty."""
+    await db.create_dataset({
+        "name": name,
+        "kind": "git",
+        "origin_url": "https://example.invalid/smoke.git",
+        "origin_commit": "0" * 40,
+        "origin_ref": "refs/heads/main",
+        "cve_id": "CVE-0000-0000",
+        "created_at": "2026-01-01T00:00:00",
+    })
+
+
 @pytest.fixture
 async def coordinator_client(tmp_path: Path):
     db = Database(tmp_path / "test.db")
@@ -55,6 +68,7 @@ async def coordinator_client(tmp_path: Path):
     })
     _seed_coordinator_prerequisites(tmp_path, c)
 
+    await _register_smoke_dataset(db)
     dataset_dir = tmp_path / "storage" / "datasets" / "smoke-test-dataset"
     dataset_dir.mkdir(parents=True, exist_ok=True)
     (dataset_dir / "labels.json").write_text("[]")
@@ -215,6 +229,7 @@ async def test_smoke_test_allows_new_after_previous_completes(tmp_path: Path):
         )
     })
     _seed_coordinator_prerequisites(tmp_path, c)
+    await _register_smoke_dataset(db)
     dataset_dir = tmp_path / "storage" / "datasets" / "smoke-test-dataset"
     dataset_dir.mkdir(parents=True, exist_ok=True)
     (dataset_dir / "labels.json").write_text("[]")

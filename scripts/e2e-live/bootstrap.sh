@@ -43,6 +43,17 @@ else
   exit 1
 fi
 
+# Fernet key for the LLM_PROVIDER_ENCRYPTION_KEY secret. The chart refuses to
+# render without it. Kind clusters are torn down per run, so a fresh ephemeral
+# key is safe — there are no persisted ciphertexts to decrypt across runs.
+# Override with LLM_PROVIDER_ENCRYPTION_KEY=<key> to pin a stable value.
+if [[ -n "${LLM_PROVIDER_ENCRYPTION_KEY:-}" ]]; then
+  ENCRYPTION_KEY="${LLM_PROVIDER_ENCRYPTION_KEY}"
+else
+  ENCRYPTION_KEY="$(uv run python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')"
+fi
+HELM_BACKEND_ARGS+=(--set-string "secrets.encryptionKey=${ENCRYPTION_KEY}")
+
 # ---------------------------------------------------------------------------
 # 2. Create kind cluster if not already present
 # ---------------------------------------------------------------------------

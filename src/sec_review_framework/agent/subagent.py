@@ -28,8 +28,7 @@ Design notes
   same tools injected with ``depth+1``.  The ``max_depth`` cap prevents runaway
   recursion.
 
-This module is built but NOT WIRED in Phase 1.  No existing code imports it.
-Wiring happens in Phase 2 (``src/sec_review_framework/strategies/runner.py``).
+Subagent dispatch is wired in :mod:`sec_review_framework.strategies.runner`.
 
 Requires the ``agent`` extra::
 
@@ -302,8 +301,6 @@ def _run_child_sync(
     bundle = resolve_bundle(strategy, None)
 
     # Build a fresh LiteLLMProvider + LiteLLMModel for this child invocation.
-    # In Phase 2 the provider will come from a shared ModelProviderCache; for
-    # Phase 1 we build it directly from the bundle's model_id.
     provider = LiteLLMProvider(model_name=bundle.model_id)
     model = LiteLLMModel(provider)
 
@@ -384,8 +381,8 @@ def make_invoke_subagent_tool(
     Parameters
     ----------
     deps_factory:
-        Unused in Phase 1 (reserved for Phase 2 when the runner injects a
-        custom factory).  Pass ``None`` or omit.
+        Optional factory (reserved for future use when custom factories are needed).
+        Pass ``None`` or omit.
 
     Returns
     -------
@@ -453,7 +450,7 @@ def make_invoke_subagent_batch_tool(
     Parameters
     ----------
     deps_factory:
-        Unused in Phase 1 (reserved for Phase 2).
+        Optional factory (reserved for future use).
 
     Returns
     -------

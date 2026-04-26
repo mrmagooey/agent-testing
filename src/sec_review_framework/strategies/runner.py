@@ -1,18 +1,17 @@
 """Unified parent-agent runner for pydantic-ai–backed strategies.
 
-This module is the **Phase 4** implementation of the unified runner described
-in ``plan_subagents_pydantic_ai.md`` § 7.  It provides a single entry-point,
-:func:`run_strategy`, that builds a pydantic-ai :class:`~pydantic_ai.Agent`
-from a :class:`~sec_review_framework.data.strategy_bundle.UserStrategy` and
-runs it to completion.
+Provides a single entry-point :func:`run_strategy` that builds a
+pydantic-ai :class:`~pydantic_ai.Agent` from a
+:class:`~sec_review_framework.data.strategy_bundle.UserStrategy` and runs it
+to completion.
 
 Contract
 --------
 - Requires the ``agent`` extra (pydantic-ai).  Workers that run without the
   ``agent`` extra must NOT import this module at top-level.  The import is
   deferred lazily inside :mod:`~sec_review_framework.worker`.
-- This is the ONLY dispatch path since Phase 4; the legacy ``ScanStrategy``
-  subclasses and ``_SHAPE_TO_STRATEGY`` dispatch have been deleted.
+- This is the only dispatch path; legacy ``ScanStrategy`` subclasses and
+  ``_SHAPE_TO_STRATEGY`` dispatch have been deleted.
 - ``output_type`` is ``list[Finding]``.
 
 Subagent injection
@@ -58,6 +57,7 @@ from pydantic_ai import Agent
 from pydantic_ai.exceptions import UnexpectedModelBehavior
 
 from sec_review_framework.agent.litellm_model import LiteLLMModel
+from sec_review_framework.agent.output_types import resolve_output_type
 from sec_review_framework.agent.subagent import (
     SubagentDeps,
     _run_child_sync,
@@ -66,6 +66,7 @@ from sec_review_framework.agent.subagent import (
 )
 from sec_review_framework.agent.tool_adapter import make_tool_callables
 from sec_review_framework.data.findings import Finding, StrategyOutput
+from sec_review_framework.data.strategy_bundle import OrchestrationShape
 
 if TYPE_CHECKING:
     from sec_review_framework.data.strategy_bundle import UserStrategy
@@ -140,9 +141,8 @@ def run_strategy(
     Returns
     -------
     StrategyOutput
-        Findings list with dedup metadata.  In Phase 2/3b ``pre_dedup_count``
-        and ``post_dedup_count`` are both equal to ``len(findings)`` (no
-        deduplication — single agent, no overlap).
+        Findings list with dedup metadata. ``pre_dedup_count`` and
+        ``post_dedup_count`` are equal (no deduplication when no subagent overlap).
 
     Raises
     ------
@@ -152,7 +152,6 @@ def run_strategy(
 
     Notes
     -----
-    - This is the only dispatch path since Phase 4.
     - ``output_type=list[Finding]`` is used for all strategies.
     """
     bundle = strategy.default
@@ -221,9 +220,9 @@ def run_strategy(
     # 7. Dispatch validator (optional)
     #
     # Fallback behaviour is controlled by strategy.default.dispatch_fallback:
-    #   "reprompt"      — re-ask the supervisor LLM once (Phase 3b default).
+    #   "reprompt"      — re-ask the supervisor LLM once (default).
     #   "programmatic"  — bypass the supervisor; directly invoke missing
-    #                     specialists via _run_child_sync (Phase 3c).
+    #                     specialists via _run_child_sync.
     #   "none"          — no fallback; missing dispatches are silently dropped.
     # ------------------------------------------------------------------
     fallback_mode = bundle.dispatch_fallback
@@ -240,8 +239,8 @@ def run_strategy(
         )
         if missing:
             if fallback_mode == "programmatic":
-                # Phase 3c: programmatic fallback — bypass the supervisor LLM
-                # entirely for missing roles and call specialists directly.
+                # Programmatic fallback — bypass the supervisor LLM entirely for
+                # missing roles and call specialists directly.
                 extra_findings = _programmatic_fallback(
                     strategy.id,
                     missing,
@@ -250,7 +249,7 @@ def run_strategy(
                 )
                 findings = findings + extra_findings
             else:
-                # Phase 3b default: re-prompt the supervisor (bounded to 1)
+                # Re-prompt the supervisor (bounded to 1 attempt)
                 re_prompt = (
                     "You missed dispatching the following inputs. "
                     "Please call invoke_subagent now for these missing items:\n"
@@ -441,9 +440,8 @@ def _programmatic_fallback(
     specialist role (``<vuln_class>_specialist``) and invoked directly via
     :func:`~sec_review_framework.agent.subagent._run_child_sync`.
 
-    This is the Phase 3c reproducibility lifeline for ``per_vuln_class``: with
-    16 specialists, supervisor variance can drop several at random.  Direct
-    programmatic invocation guarantees all 16 run regardless of LLM behaviour.
+    Direct programmatic invocation guarantees all specialists run regardless of
+    LLM behaviour, providing reproducibility for per_vuln_class strategies.
 
     Parameters
     ----------

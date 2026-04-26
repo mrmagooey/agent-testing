@@ -98,3 +98,9 @@ class StrategyOutput(BaseModel):
     dedup_log: list[DedupEntry]
     system_prompt: str | None = None
     user_message: str | None = None
+    # Populated when the parent strategy declares output_type_name != "finding_list".
+    # In that case `findings` is empty and the structured output lives here.
+    non_finding_output: object | None = None
+    # Fraction of expected subagent dispatches that actually occurred (0.0–1.0).
+    # None when the dispatch validator did not run for this strategy.
+    dispatch_completeness: float | None = None

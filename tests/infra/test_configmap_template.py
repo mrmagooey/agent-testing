@@ -28,6 +28,10 @@ def _render_chart(values_file: str | None = None) -> list[dict]:
     cmd = [
         "helm", "template", "sec-review", str(CHART_DIR),
         "--namespace", "sec-review",
+        # Test-only Fernet key so the chart can render. The chart `required`s
+        # this when secrets.create=true; profiles that disable secret creation
+        # ignore the override.
+        "--set", "secrets.encryptionKey=dGVzdC1mZXJuZXQta2V5LWZvci1oZWxtLXJlbmRlcg==",
     ]
     if values_file is not None:
         cmd.extend(["--values", str(CHART_DIR / values_file)])

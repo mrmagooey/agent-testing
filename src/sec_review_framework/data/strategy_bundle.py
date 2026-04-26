@@ -60,29 +60,25 @@ class StrategyBundleDefault(BaseModel):
     max_turns: int
     tool_extensions: frozenset[str]
 
-    # Phase 2: subagent role IDs this strategy may dispatch to.
+    # Subagent role IDs this strategy may dispatch to.
     # Each ID must resolve in the StrategyRegistry at expand time.
     # Empty list = no subagent dispatch (all current built-in strategies).
-    # Phase 4 will add validation (no self-reference, cap fields, etc.).
     subagents: list[str] = Field(default_factory=list)
     # Per-subagent invocation caps — enforced by SubagentDeps at runtime.
     max_subagent_depth: int = 3
     max_subagent_invocations: int = 100
     max_subagent_batch_size: int = 32
 
-    # Phase 3c: dispatch-completeness fallback behaviour for parent strategies
-    # with large fixed subagent sets (e.g. per_vuln_class with 16 specialists).
+    # Dispatch-completeness fallback behaviour for parent strategies with large
+    # fixed subagent sets (e.g. per_vuln_class with 16 specialists).
     #
-    # "reprompt"      — re-ask the supervisor LLM once for missing roles
-    #                   (Phase 3b behaviour, default for most strategies).
+    # "reprompt"      — re-ask the supervisor LLM once for missing roles (default).
     # "programmatic"  — bypass the supervisor entirely; directly invoke missing
     #                   specialists via _run_child_sync (per_vuln_class only).
     # "none"          — no fallback; missing dispatches are silently dropped.
-    #
-    # Phase 4 will normalise this across all strategies.
     dispatch_fallback: Literal["reprompt", "programmatic", "none"] = "reprompt"
 
-    # Phase 5: structured output type name for subagent output.
+    # Structured output type name for subagent output.
     # When set, _run_child_sync resolves the type and passes output_type=...
     # to the child Agent so pydantic-ai validates/coerces the LLM response into
     # the declared Pydantic model.  None means free-form text (legacy behaviour).

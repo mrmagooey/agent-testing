@@ -44,7 +44,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.models import Model, ModelRequestParameters, RequestUsage
 from pydantic_ai.settings import ModelSettings
 
-from sec_review_framework.models.base import Message, ToolDefinition
+from sec_review_framework.models.base import Message, ModelProvider, ToolDefinition
 from sec_review_framework.models.litellm_provider import LiteLLMProvider
 
 # ---------------------------------------------------------------------------
@@ -97,27 +97,31 @@ def _provider_from_model_name(model_name: str) -> str:
 
 
 class LiteLLMModel(Model):
-    """pydantic-ai ``Model`` adapter backed by :class:`LiteLLMProvider`.
+    """pydantic-ai ``Model`` adapter backed by :class:`~sec_review_framework.models.base.ModelProvider`.
 
     Translates between pydantic-ai's message/tool types and the framework's
     existing :class:`~sec_review_framework.models.base.ModelProvider` interface.
-    All LiteLLM routing, authentication, and retry logic stays inside
-    :class:`LiteLLMProvider`; this adapter only converts message formats.
+    All LiteLLM routing, authentication, and retry logic stays inside the
+    provider; this adapter only converts message formats.
 
     Design notes
     ------------
     - Only :meth:`request` is implemented (no streaming); streaming is
       deferred to a later phase.
-    - The synchronous :meth:`~LiteLLMProvider.complete` call is dispatched via
-      :func:`asyncio.to_thread` so the async ``request()`` method does not
-      block the event loop under a running asyncio loop.
-    - Retry logic is delegated entirely to :class:`LiteLLMProvider` (exponential
-      back-off is already built in).  This adapter adds no additional retry loop.
+    - The synchronous :meth:`~sec_review_framework.models.base.ModelProvider.complete`
+      call is dispatched via :func:`asyncio.to_thread` so the async ``request()``
+      method does not block the event loop under a running asyncio loop.
+    - Retry logic is delegated entirely to the provider (exponential back-off is
+      already built in).  This adapter adds no additional retry loop.
+    - The constructor accepts any :class:`~sec_review_framework.models.base.ModelProvider`
+      (not just :class:`LiteLLMProvider`) so tests can inject fakes without
+      subclassing the concrete provider.  The provider identifier is obtained
+      via ``provider.model_id()`` — the abstract method on the base class.
 
     Parameters
     ----------
     provider:
-        A pre-constructed :class:`LiteLLMProvider`.
+        Any :class:`~sec_review_framework.models.base.ModelProvider`.
     max_tokens:
         Maximum tokens per call (default 8192).
     temperature:
@@ -127,13 +131,13 @@ class LiteLLMModel(Model):
         pydantic-ai :class:`~pydantic_ai.models.Model` base class.
     """
 
-    _provider_instance: LiteLLMProvider
+    _provider_instance: ModelProvider
     _max_tokens: int
     _temperature: float
 
     def __init__(
         self,
-        provider: LiteLLMProvider,
+        provider: ModelProvider,
         *,
         max_tokens: int = 8192,
         temperature: float = 0.2,
@@ -150,8 +154,8 @@ class LiteLLMModel(Model):
 
     @property
     def model_name(self) -> str:
-        """The LiteLLM model string (e.g. ``"anthropic/claude-3-5-sonnet-20241022"``)."""
-        return self._provider_instance.model_name
+        """The model identifier string (e.g. ``"anthropic/claude-3-5-sonnet-20241022"``)."""
+        return self._provider_instance.model_id()
 
     @property
     def system(self) -> str:
@@ -161,7 +165,7 @@ class LiteLLMModel(Model):
         (e.g. ``"anthropic"``).  Falls back to ``"litellm"`` for unknown
         prefixes so OTel spans are always populated.
         """
-        return _provider_from_model_name(self._provider_instance.model_name)
+        return _provider_from_model_name(self._provider_instance.model_id())
 
     # ------------------------------------------------------------------
     # Core request method

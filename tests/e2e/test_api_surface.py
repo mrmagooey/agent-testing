@@ -224,6 +224,18 @@ def _minimal_matrix(experiment_id: str, dataset_name: str = DATASET_NAME) -> Exp
     )
 
 
+def _load_disk_labels(datasets_dir: Path, dataset_name: str) -> list[GroundTruthLabel]:
+    """Read labels.jsonl from the test datasets directory."""
+    labels_path = datasets_dir / "targets" / dataset_name / "labels.jsonl"
+    if not labels_path.exists():
+        return []
+    labels: list[GroundTruthLabel] = []
+    for line in labels_path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            labels.append(GroundTruthLabel.model_validate_json(line))
+    return labels
+
+
 def _run_workers(
     coord: ExperimentCoordinator,
     datasets_dir: Path,
@@ -242,13 +254,20 @@ def _run_workers(
         return
     from sec_review_framework.data.experiment import ExperimentRun
 
+    # The worker normally fetches labels from the coordinator over HTTP.
+    # In-process tests can't reach the coordinator that way, so load labels
+    # straight off disk (where _make_dataset wrote them).
+    def _disk_fetch_labels(self, run, _datasets_dir):  # noqa: ANN001
+        return _load_disk_labels(_datasets_dir, run.dataset_name)
+
     for config_file in config_dir.glob("*.json"):
         run = ExperimentRun.model_validate_json(config_file.read_text())
         if experiment_id is not None and run.experiment_id != experiment_id:
             continue
         output_dir = coord.storage_root / "outputs" / run.experiment_id / run.id
         with patch.object(ModelProviderFactory, "create", return_value=provider):
-            ExperimentWorker().run(run, output_dir, datasets_dir)
+            with patch.object(ExperimentWorker, "_fetch_labels", _disk_fetch_labels):
+                ExperimentWorker().run(run, output_dir, datasets_dir)
 
 
 # ---------------------------------------------------------------------------

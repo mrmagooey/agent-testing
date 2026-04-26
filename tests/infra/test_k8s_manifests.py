@@ -31,6 +31,10 @@ def _render_chart(values_file: str | None = None) -> list[dict]:
     cmd = [
         "helm", "template", "sec-review", str(CHART_DIR),
         "--namespace", "sec-review",
+        # Test-only Fernet key so the chart can render. The chart `required`s
+        # this when secrets.create=true; profiles that disable secret creation
+        # ignore the override.
+        "--set", "secrets.encryptionKey=dGVzdC1mZXJuZXQta2V5LWZvci1oZWxtLXJlbmRlcg==",
     ]
     if values_file is not None:
         cmd.extend(["--values", str(CHART_DIR / values_file)])
@@ -132,7 +136,7 @@ def test_coordinator_worker_image_env_matches_values() -> None:
     assert deployments, "No Deployment rendered"
 
     container = deployments[0]["spec"]["template"]["spec"]["containers"][0]
-    env = {e["name"]: e["value"] for e in container["env"]}
+    env = {e["name"]: e["value"] for e in container["env"] if "value" in e}
     assert env["WORKER_IMAGE"] == "ghcr.io/myorg/sec-review/worker:v1.0.0", (
         f"Unexpected WORKER_IMAGE: {env.get('WORKER_IMAGE')!r}"
     )

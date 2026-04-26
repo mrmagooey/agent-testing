@@ -34,6 +34,12 @@ the primary working directory as shared state that must not be left in a
 half-modified condition. When a worktree's work is done, merge or discard
 it deliberately — do not leave stale branches lying around.
 
+Before creating a worktree, always check the current HEAD commit by
+running `git rev-parse HEAD` (or equivalent) — do not rely on conversation
+history or remembered state. The worktree branches off whatever HEAD
+points to right now, so verifying it directly avoids basing work on a
+stale assumption about where the checkout is.
+
 ## Test coverage
 
 Any change must be covered by tests. New behavior needs new tests; modified
