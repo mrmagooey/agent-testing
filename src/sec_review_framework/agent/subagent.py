@@ -222,7 +222,7 @@ def _resolve_role(role: str, available_roles: set[str]) -> str | None:
 
     # 2. Suffix match
     suffix = "." + role
-    matches = [r for r in available_roles if r.endswith(suffix) or r == role]
+    matches = [r for r in available_roles if r.endswith(suffix)]
 
     if len(matches) == 1:
         return matches[0]
