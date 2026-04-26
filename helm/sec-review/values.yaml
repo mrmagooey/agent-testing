@@ -278,6 +278,8 @@ workerTools:
       - typescript-language-server
       - rust-analyzer
       - clangd
+  semgrep:
+    enabled: true
   devdocs:
     enabled: true
     # Path where docsets are mounted from the shared PVC.

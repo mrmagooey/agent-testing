@@ -160,7 +160,7 @@
 
 **Post-hoc merging only.** No coordinating agent runs during strategy execution. All strategies emit a flat `list[Finding]` when complete. The evaluator and reporter operate identically regardless of which strategy produced those findings.
 
-**Tool access as a dimension, not a feature flag.** The `tool_variant` field is part of the experiment identity. Strategies receive a `ToolRegistry` that either contains `SemgrepTool` or does not, based on the variant. No strategy-level branching on this.
+**Tool access as a dimension, not a feature flag.** The `tool_variant` field is part of the experiment identity. Strategies receive a `ToolRegistry` populated from core tools plus any enabled extensions. The `tool_extensions` field controls opt-in tools (SEMGREP, TREE_SITTER, LSP, DEVDOCS). No strategy-level branching on this.
 
 **Ground truth is mutable but versioned.** Labels are stored in JSONL with a dataset version identifier. CVE imports and injected vulns both land in the same label format. The "unlabeled real vuln" bucket is a first-class output field.
 
@@ -609,10 +609,11 @@ agent-testing-framework/
 │       │   ├── registry.py       # ToolRegistry, ToolCallAuditLog, ToolRegistryFactory
 │       │   ├── mcp_bridge.py     # MCPClient — bridges async MCP SDK onto sync Tool interface
 │       │   ├── repo_access.py    # file read, directory list, grep
-│       │   ├── semgrep.py        # Semgrep wrapper
+│       │   ├── semgrep.py        # SemgrepTool, SASTMatch (used by semgrep_ext)
 │       │   ├── doc_lookup.py     # documentation retrieval
-│       │   └── extensions/       # optional MCP-backed tool extensions
+│       │   └── extensions/       # optional tool extensions (SEMGREP in-process; others MCP-backed)
 │       │       ├── __init__.py
+│       │       ├── semgrep_ext.py       # SEMGREP extension builder + registration
 │       │       ├── tree_sitter_ext.py   # TREE_SITTER extension builder + registration
 │       │       ├── tree_sitter_server.py
 │       │       ├── lsp_ext.py           # LSP extension builder + registration
@@ -3888,7 +3889,7 @@ Three images, all built from the same codebase. All runtime stages use `python:3
 **Dockerfile.worker** — two-stage build with LSP toolchain support.
 
 - Stage 1 (`golang:1.24-alpine AS gopls-builder`): compiles gopls from source; the Go toolchain is not carried forward.
-- Stage 2 (`python:3.14-slim`): installs system packages for the LSP extension (gcc/g++/make for C extensions, clangd, nodejs/npm), then npm-installs pyright, typescript-language-server, and typescript at pinned versions. Copies the `gopls` binary from stage 1. Downloads the `rust-analyzer` pre-compiled binary with SHA-256 verification. Installs the `.[worker]` Python extras (semgrep, tree-sitter, etc.) using the same stub-source caching pattern.
+- Stage 2 (`python:3.14-slim`): installs system packages for the LSP extension (gcc/g++/make for C extensions, clangd, nodejs/npm), then npm-installs pyright, typescript-language-server, and typescript at pinned versions. Copies the `gopls` binary from stage 1. Downloads the `rust-analyzer` pre-compiled binary with SHA-256 verification. Installs `semgrep` via `pipx` (isolated venv — its `mcp<2` pin conflicts with `pydantic-ai`); the binary lands on `PATH` at `/root/.local/bin/semgrep`. Installs the `.[worker]` Python extras (tree-sitter, mcp, etc. — semgrep Python package excluded) using the same stub-source caching pattern.
   - Estimated additional image size from LSP tooling: ~400–600 MB.
   - Entrypoint: `python -m sec_review_framework.worker`
 

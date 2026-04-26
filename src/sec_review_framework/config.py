@@ -179,21 +179,24 @@ class ToolExtensionAvailability:
     it as JSON — no further wiring required.
 
     Environment variables:
-      TOOL_EXT_LSP_AVAILABLE          "true"|"false"  (default: "false")
-      TOOL_EXT_TREE_SITTER_AVAILABLE  "true"|"false"  (default: "false")
       TOOL_EXT_DEVDOCS_AVAILABLE      "true"|"false"  (default: "false")
+      TOOL_EXT_LSP_AVAILABLE          "true"|"false"  (default: "false")
+      TOOL_EXT_SEMGREP_AVAILABLE      "true"|"false"  (default: "false")
+      TOOL_EXT_TREE_SITTER_AVAILABLE  "true"|"false"  (default: "false")
     """
 
     def __init__(self) -> None:
-        self.lsp: bool = os.environ.get("TOOL_EXT_LSP_AVAILABLE", "false").lower() == "true"
-        self.tree_sitter: bool = os.environ.get("TOOL_EXT_TREE_SITTER_AVAILABLE", "false").lower() == "true"
         self.devdocs: bool = os.environ.get("TOOL_EXT_DEVDOCS_AVAILABLE", "false").lower() == "true"
+        self.lsp: bool = os.environ.get("TOOL_EXT_LSP_AVAILABLE", "false").lower() == "true"
+        self.semgrep: bool = os.environ.get("TOOL_EXT_SEMGREP_AVAILABLE", "false").lower() == "true"
+        self.tree_sitter: bool = os.environ.get("TOOL_EXT_TREE_SITTER_AVAILABLE", "false").lower() == "true"
 
     def as_dict(self) -> dict[str, bool]:
         return {
-            "lsp": self.lsp,
-            "tree_sitter": self.tree_sitter,
             "devdocs": self.devdocs,
+            "lsp": self.lsp,
+            "semgrep": self.semgrep,
+            "tree_sitter": self.tree_sitter,
         }
 
 

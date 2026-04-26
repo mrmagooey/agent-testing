@@ -115,3 +115,31 @@ def test_experiment_configmap_e2e_values() -> None:
     assert "models.yaml" not in data, (
         "models.yaml was deleted; it must not appear in the ConfigMap with e2e values"
     )
+
+
+@requires_helm
+def test_semgrep_enabled_flag_flows_through_deployment() -> None:
+    """workerTools.semgrep.enabled flows into TOOL_EXT_SEMGREP_AVAILABLE on the coordinator."""
+    import subprocess as _sp
+    import yaml as _yaml
+
+    chart_dir = str(REPO_ROOT / "helm" / "sec-review")
+    # Use values-prod.yaml (secrets.create=false) to avoid the encryptionKey requirement.
+    cmd = [
+        "helm", "template", "sec-review", chart_dir,
+        "--namespace", "sec-review",
+        "--values", str(CHART_DIR / "values-prod.yaml"),
+        "--set", "workerTools.semgrep.enabled=false",
+    ]
+    result = _sp.run(cmd, capture_output=True, text=True, check=True)
+    docs = [d for d in _yaml.safe_load_all(result.stdout) if d is not None]
+
+    deployments = [d for d in docs if d.get("kind") == "Deployment"]
+    assert deployments, "No Deployment rendered"
+
+    container = deployments[0]["spec"]["template"]["spec"]["containers"][0]
+    # Some entries use valueFrom instead of value — filter to plain string values.
+    env = {e["name"]: e["value"] for e in container["env"] if "value" in e}
+    assert env.get("TOOL_EXT_SEMGREP_AVAILABLE") == "false", (
+        "Setting workerTools.semgrep.enabled=false must propagate to TOOL_EXT_SEMGREP_AVAILABLE=false"
+    )

@@ -70,13 +70,24 @@ RUN curl -fsSL \
  && chmod +x /usr/local/bin/rust-analyzer \
  && rm /tmp/rust-analyzer.gz
 
+# ---------------------------------------------------------------------------
+# semgrep — installed via pipx to isolate its mcp/opentelemetry-api deps from
+# the worker venv (semgrep pins mcp<2 which conflicts with pydantic-ai's mcp>=1).
+# The pipx venv lives at /root/.local/pipx/venvs/semgrep; the binary is
+# symlinked to /root/.local/bin/semgrep which is added to PATH below.
+# ---------------------------------------------------------------------------
+ARG SEMGREP_VERSION=1.113.0
+RUN pip install --no-cache-dir pipx \
+ && pipx install "semgrep==${SEMGREP_VERSION}" \
+ && /root/.local/bin/semgrep --version
+
+ENV PATH="/root/.local/bin:${PATH}"
+
+# Verify the binary is reachable on PATH after the ENV update.
+RUN semgrep --version
+
 # Install framework with worker extras against a stub source tree so this
 # heavy layer (tree-sitter deps) is cached unless pyproject.toml changes.
-#
-# NOTE: semgrep is NOT installed by this step.  The semgrep binary must be
-# supplied by a separate SAST runtime sidecar container (or a pre-baked image
-# layer) and made available on PATH before workers start.  This image does NOT
-# include semgrep — wire it externally.
 COPY pyproject.toml .
 RUN mkdir -p src/sec_review_framework \
  && touch src/sec_review_framework/__init__.py \

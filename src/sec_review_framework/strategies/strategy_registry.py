@@ -61,7 +61,7 @@ _USER_DIR = Path(__file__).parent.parent / "prompts" / "user"
 # Default values mirrored from worker.py + strategy files
 _DEFAULT_MODEL_ID = "claude-opus-4-5"
 _DEFAULT_TOOLS: frozenset[str] = frozenset(
-    ["read_file", "list_directory", "grep", "semgrep", "doc_lookup"]
+    ["read_file", "list_directory", "grep", "doc_lookup"]
 )
 _DEFAULT_VERIFICATION = "none"
 _DEFAULT_TOOL_EXTENSIONS: frozenset[str] = frozenset()
@@ -320,7 +320,7 @@ def seed_builtins(registry: StrategyRegistry) -> None:
                 tools=_DEFAULT_TOOLS,
                 verification=_DEFAULT_VERIFICATION,
                 max_turns=25,
-                tool_extensions=_DEFAULT_TOOL_EXTENSIONS,
+                tool_extensions=frozenset(["semgrep"]),
                 subagents=["builtin.triage_agent"],
             ),
             overrides=[],

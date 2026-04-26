@@ -525,3 +525,50 @@ class TestBuildUserPrompt:
         assert "app/views.py" in prompt
 
 
+# ---------------------------------------------------------------------------
+# Tests: SAST_FIRST preflight
+# ---------------------------------------------------------------------------
+
+
+def _make_sast_first_strategy(strategy_id: str = "unit.sast_first") -> UserStrategy:
+    return UserStrategy(
+        id=strategy_id,
+        name="SAST First unit test",
+        parent_strategy_id=None,
+        orchestration_shape=OrchestrationShape.SAST_FIRST,
+        default=StrategyBundleDefault(
+            system_prompt="Review for security issues.",
+            user_prompt_template="Repo:\n{repo_summary}\n\n{finding_output_format}",
+            model_id="fake/test",
+            tools=frozenset(),
+            verification="none",
+            max_turns=5,
+            tool_extensions=frozenset(["semgrep"]),
+            subagents=[],
+        ),
+        overrides=[],
+        created_at=datetime(2026, 1, 1),
+        is_builtin=False,
+    )
+
+
+class TestSASTFirstPreflight:
+    """run_strategy raises RuntimeError for SAST_FIRST when run_semgrep is absent."""
+
+    def test_raises_if_run_semgrep_absent(self) -> None:
+        provider = _scripted_provider([])
+        strategy = _make_sast_first_strategy()
+        empty_registry = ToolRegistry()
+
+        with pytest.raises(RuntimeError, match="SAST_FIRST"):
+            run_strategy(strategy, FakeTarget(), provider, empty_registry)
+
+    def test_error_message_names_strategy(self) -> None:
+        provider = _scripted_provider([])
+        strategy = _make_sast_first_strategy(strategy_id="myorg.sast_test")
+        empty_registry = ToolRegistry()
+
+        with pytest.raises(RuntimeError, match="myorg.sast_test"):
+            run_strategy(strategy, FakeTarget(), provider, empty_registry)
+
+

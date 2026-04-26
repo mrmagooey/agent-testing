@@ -154,6 +154,19 @@ def run_strategy(
         When pydantic-ai raises
         :exc:`~pydantic_ai.exceptions.UnexpectedModelBehavior`.
     """
+    # ------------------------------------------------------------------
+    # 0. SAST_FIRST preflight: fail fast if SEMGREP extension is absent.
+    #    The registry only contains run_semgrep when ToolExtension.SEMGREP
+    #    was activated for this run; the absence means the operator disabled
+    #    it or the caller forgot to declare it in tool_extensions.
+    # ------------------------------------------------------------------
+    if strategy.orchestration_shape == OrchestrationShape.SAST_FIRST:
+        if tools.tools.get("run_semgrep") is None:
+            raise RuntimeError(
+                f"Strategy {strategy.id!r} (SAST_FIRST shape) requires ToolExtension.SEMGREP "
+                "to be enabled for this run. Add 'semgrep' to the strategy's tool_extensions."
+            )
+
     bundle = strategy.default
 
     # ------------------------------------------------------------------

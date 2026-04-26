@@ -98,9 +98,10 @@ logger = logging.getLogger(__name__)
 AUDIT_URL_CHECK_EXEMPT_PREFIXES = ("doc_", "ts_", "lsp_")
 
 _TOOL_EXTENSION_LABELS: dict[ToolExtension, str] = {
-    ToolExtension.TREE_SITTER: "Tree-sitter",
-    ToolExtension.LSP: "LSP",
     ToolExtension.DEVDOCS: "DevDocs",
+    ToolExtension.LSP: "LSP",
+    ToolExtension.SEMGREP: "Semgrep",
+    ToolExtension.TREE_SITTER: "Tree-sitter",
 }
 
 # ---------------------------------------------------------------------------
@@ -3325,6 +3326,9 @@ async def submit_experiment(matrix: ExperimentMatrix) -> dict:
 
     Rejects unavailable models (key_missing, not_listed, probe_failed, unknown)
     unless the request body contains ``allow_unavailable_models: true``.
+
+    Also rejects experiments that request a tool extension that the cluster
+    operator has disabled via ``workerTools.*.enabled`` in the Helm values.
     """
     if not matrix.allow_unavailable_models:
         # Derive the set of model IDs from the strategies so we can validate them.
@@ -3341,6 +3345,29 @@ async def submit_experiment(matrix: ExperimentMatrix) -> dict:
                     "models": problems,
                 },
             )
+
+    # Gate on operator-controlled extension availability.  If the cluster
+    # operator has disabled an extension via workerTools.*.enabled=false,
+    # refuse any run that requests it regardless of experiment config.
+    from sec_review_framework.strategies.strategy_registry import build_registry_from_db
+    avail_map = ToolExtensionAvailability().as_dict()
+    registry = await build_registry_from_db(coordinator.db)
+    runs_preview = matrix.expand(registry=registry)
+    disabled_extensions: list[str] = []
+    for run in runs_preview:
+        for ext in run.tool_extensions:
+            if not avail_map.get(ext.value, False):
+                if ext.value not in disabled_extensions:
+                    disabled_extensions.append(ext.value)
+    if disabled_extensions:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "disabled_extensions",
+                "extensions": sorted(disabled_extensions),
+            },
+        )
+
     await coordinator.enrich_model_configs(matrix)
     experiment_id = await coordinator.submit_experiment(matrix)
     # total_runs = one run per strategy × num_repetitions (no cross-product axes).

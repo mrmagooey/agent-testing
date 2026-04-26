@@ -16,8 +16,9 @@ from sec_review_framework.tools.registry import (
     register_extension_builder,
 )
 
-# Snapshot of core tool names produced by WITH_TOOLS (verified by reading factory).
-_CORE_TOOL_NAMES = {"read_file", "list_directory", "grep", "run_semgrep", "lookup_docs"}
+# Snapshot of core tool names produced by WITH_TOOLS (no extensions).
+# run_semgrep is now a SEMGREP extension tool, not a core tool.
+_CORE_TOOL_NAMES = {"read_file", "list_directory", "grep", "lookup_docs"}
 
 
 def _make_mock_target(tmp_path: Path) -> Any:
@@ -210,3 +211,63 @@ class TestDocLookupStubSuppression:
             _EXTENSION_BUILDERS.pop(ToolExtension.DEVDOCS, None)
             if saved is not None:
                 _EXTENSION_BUILDERS[ToolExtension.DEVDOCS] = saved
+
+
+# ---------------------------------------------------------------------------
+# SEMGREP extension behaviour
+# ---------------------------------------------------------------------------
+
+
+class TestSemgrepExtension:
+    """run_semgrep must NOT appear in core WITH_TOOLS; only with SEMGREP extension."""
+
+    def test_run_semgrep_absent_from_core_tools(self, tmp_path: Path) -> None:
+        target = _make_mock_target(tmp_path)
+        registry = ToolRegistryFactory.create(
+            ToolVariant.WITH_TOOLS, target, tool_extensions=frozenset()
+        )
+        assert "run_semgrep" not in registry.tools, (
+            "SemgrepTool must NOT be in core tools — it is now a SEMGREP extension"
+        )
+
+    def test_run_semgrep_present_when_semgrep_extension_active(self, tmp_path: Path) -> None:
+        saved = _EXTENSION_BUILDERS.pop(ToolExtension.SEMGREP, None)
+        try:
+            register_extension_builder(
+                ToolExtension.SEMGREP,
+                lambda r, t: r.tools.__setitem__("run_semgrep", object()),
+            )
+            target = _make_mock_target(tmp_path)
+            registry = ToolRegistryFactory.create(
+                ToolVariant.WITH_TOOLS,
+                target,
+                tool_extensions=frozenset([ToolExtension.SEMGREP]),
+            )
+            assert "run_semgrep" in registry.tools
+        finally:
+            _EXTENSION_BUILDERS.pop(ToolExtension.SEMGREP, None)
+            if saved is not None:
+                _EXTENSION_BUILDERS[ToolExtension.SEMGREP] = saved
+
+    def test_run_semgrep_present_without_tools_variant_when_semgrep_extension_active(
+        self, tmp_path: Path
+    ) -> None:
+        saved = _EXTENSION_BUILDERS.pop(ToolExtension.SEMGREP, None)
+        added: list[str] = []
+
+        def tracking_builder(registry, target):
+            added.append("called")
+
+        try:
+            register_extension_builder(ToolExtension.SEMGREP, tracking_builder)
+            target = _make_mock_target(tmp_path)
+            ToolRegistryFactory.create(
+                ToolVariant.WITHOUT_TOOLS,
+                target,
+                tool_extensions=frozenset([ToolExtension.SEMGREP]),
+            )
+            assert added == ["called"]
+        finally:
+            _EXTENSION_BUILDERS.pop(ToolExtension.SEMGREP, None)
+            if saved is not None:
+                _EXTENSION_BUILDERS[ToolExtension.SEMGREP] = saved

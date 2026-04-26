@@ -21,6 +21,7 @@ from sec_review_framework.data.experiment import (
     ReviewProfileName,
     RunStatus,
     StrategyName,
+    ToolExtension,
     ToolVariant,
     VerificationVariant,
 )
@@ -610,3 +611,62 @@ def test_worker_http_upload_memory_bounded(base_run, datasets_dir, tmp_path):
         "Check that file handles are passed to httpx (streaming) rather than buffering contents."
     )
     assert upload_calls[0] == 1
+
+
+# ---------------------------------------------------------------------------
+# Test: builtin.sast_first uses SEMGREP extension → registry contains run_semgrep
+# ---------------------------------------------------------------------------
+
+def test_worker_sast_first_strategy_includes_semgrep_tool(datasets_dir, tmp_path):
+    """builtin.sast_first declares ToolExtension.SEMGREP → ToolRegistry gets run_semgrep.
+
+    The semgrep binary is mocked (subprocess.run returns empty results) so this
+    test works without semgrep installed in the CI environment.
+
+    Asserts by patching run_strategy to capture the ToolRegistry passed in,
+    which is the stable approach since SASTFirstStrategy was merged into the
+    unified runner.py (no longer a separate class).
+    """
+    from unittest.mock import patch
+    from sec_review_framework.worker import ModelProviderFactory
+    from sec_review_framework.data.findings import StrategyOutput
+
+    run = ExperimentRun(
+        id="test-sast-ext",
+        experiment_id="test-sast",
+        strategy_id="builtin.sast_first",
+        model_id="fake-model",
+        strategy=StrategyName.SINGLE_AGENT,
+        tool_variant=ToolVariant.WITH_TOOLS,
+        tool_extensions=frozenset([ToolExtension.SEMGREP]),
+        dataset_name="test-dataset",
+        dataset_version="1.0.0",
+    )
+
+    captured_registries: list = []
+
+    def spy_run_strategy(strategy, target, model, tools, **kwargs):
+        captured_registries.append(tools)
+        return StrategyOutput(
+            findings=[], pre_dedup_count=0, post_dedup_count=0, dedup_log=[]
+        )
+
+    fake = FakeModelProvider(
+        [],
+        retry_policy=RetryPolicy(max_retries=0),
+    )
+
+    output_dir = tmp_path / "output" / run.id
+
+    with patch.dict("os.environ", {"TOOL_EXT_SEMGREP_AVAILABLE": "true"}):
+        with patch.object(ModelProviderFactory, "create", lambda self, mid, mkw: fake):
+            with patch("sec_review_framework.strategies.runner.run_strategy", spy_run_strategy):
+                with patch("subprocess.run"):
+                    worker = ExperimentWorker()
+                    worker.run(run, output_dir, datasets_dir)
+
+    assert captured_registries, "run_strategy was not called"
+    registry = captured_registries[0]
+    assert "run_semgrep" in registry.tools, (
+        "SEMGREP extension must add run_semgrep to the ToolRegistry when builtin.sast_first is used"
+    )

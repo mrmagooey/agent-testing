@@ -46,12 +46,14 @@ def get_enabled_extensions() -> frozenset[ToolExtension]:
     coordinator Helm template (see config.py ``ToolExtensionAvailability``).
     """
     enabled: set[ToolExtension] = set()
-    if os.environ.get("TOOL_EXT_LSP_AVAILABLE", "false").lower() == "true":
-        enabled.add(ToolExtension.LSP)
-    if os.environ.get("TOOL_EXT_TREE_SITTER_AVAILABLE", "false").lower() == "true":
-        enabled.add(ToolExtension.TREE_SITTER)
     if os.environ.get("TOOL_EXT_DEVDOCS_AVAILABLE", "false").lower() == "true":
         enabled.add(ToolExtension.DEVDOCS)
+    if os.environ.get("TOOL_EXT_LSP_AVAILABLE", "false").lower() == "true":
+        enabled.add(ToolExtension.LSP)
+    if os.environ.get("TOOL_EXT_SEMGREP_AVAILABLE", "false").lower() == "true":
+        enabled.add(ToolExtension.SEMGREP)
+    if os.environ.get("TOOL_EXT_TREE_SITTER_AVAILABLE", "false").lower() == "true":
+        enabled.add(ToolExtension.TREE_SITTER)
     return frozenset(enabled)
 
 

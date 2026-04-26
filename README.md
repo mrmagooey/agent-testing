@@ -144,7 +144,7 @@ src/sec_review_framework/
   db.py                 SQLite experiment/run tracking
   models/               LiteLLM provider + retry logic
   strategies/           single_agent, per_file, per_vuln_class, sast_first, diff_review
-  tools/                repo_access, semgrep, doc_lookup, registry with audit log
+  tools/                repo_access, semgrep, doc_lookup, registry with audit log; extensions/ for opt-in tools
   ground_truth/         TargetCodebase, LabelStore, CVE importer, vuln injector
   evaluation/           Bipartite matcher, metrics, evidence quality
   verification/         Optional LLM verifier pass

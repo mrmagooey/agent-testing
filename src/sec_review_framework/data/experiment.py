@@ -16,9 +16,10 @@ class ToolVariant(str, Enum):
 
 
 class ToolExtension(str, Enum):
-    TREE_SITTER = "tree_sitter"
-    LSP = "lsp"
     DEVDOCS = "devdocs"
+    LSP = "lsp"
+    SEMGREP = "semgrep"
+    TREE_SITTER = "tree_sitter"
 
 
 class VerificationVariant(str, Enum):

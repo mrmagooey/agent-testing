@@ -179,9 +179,10 @@ def _import_extension(module_name: str, ext_label: str) -> None:
         )
 
 
-_import_extension("lsp_ext", "LSP")
-_import_extension("tree_sitter_ext", "TREE_SITTER")
 _import_extension("devdocs_ext", "DEVDOCS")
+_import_extension("lsp_ext", "LSP")
+_import_extension("semgrep_ext", "SEMGREP")
+_import_extension("tree_sitter_ext", "TREE_SITTER")
 
 
 class ToolRegistryFactory:
@@ -229,7 +230,6 @@ class ToolRegistryFactory:
                 ListDirectoryTool,
                 ReadFileTool,
             )
-            from sec_review_framework.tools.semgrep import SemgrepTool
 
             repo_path: Path = getattr(target, "repo_path", Path(str(target)))
 
@@ -237,7 +237,6 @@ class ToolRegistryFactory:
                 ReadFileTool(repo_root=repo_path),
                 ListDirectoryTool(repo_root=repo_path),
                 GrepTool(repo_root=repo_path),
-                SemgrepTool(repo_path=repo_path),
             ]
 
             # When DEVDOCS is active the MCP-backed doc_* tools replace the stub.

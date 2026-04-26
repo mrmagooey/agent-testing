@@ -143,6 +143,24 @@ def test_coordinator_worker_image_env_matches_values() -> None:
 
 
 @requires_helm
+def test_semgrep_available_env_var_present() -> None:
+    """TOOL_EXT_SEMGREP_AVAILABLE env var is set from workerTools.semgrep.enabled."""
+    docs = _render_chart(values_file="values-prod.yaml")
+    deployments = _by_kind(docs, "Deployment")
+    assert deployments, "No Deployment rendered"
+
+    container = deployments[0]["spec"]["template"]["spec"]["containers"][0]
+    # Some entries use valueFrom instead of value — filter to plain string values.
+    env = {e["name"]: e["value"] for e in container["env"] if "value" in e}
+    assert "TOOL_EXT_SEMGREP_AVAILABLE" in env, (
+        "TOOL_EXT_SEMGREP_AVAILABLE must be injected into the coordinator container"
+    )
+    assert env["TOOL_EXT_SEMGREP_AVAILABLE"] == "true", (
+        "workerTools.semgrep.enabled defaults to true in values.yaml"
+    )
+
+
+@requires_helm
 def test_minikube_image_pull_policy_is_never() -> None:
     """Minikube must not pull images (they're built locally)."""
     docs = _render_chart(values_file="values-minikube.yaml")

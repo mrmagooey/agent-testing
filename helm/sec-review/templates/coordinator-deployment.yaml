@@ -63,12 +63,14 @@ spec:
             # Tool-extension availability flags — consumed by the coordinator's
             # /api/tool-extensions endpoint (Chunk 6).  Set from workerTools values
             # so operators can disable an extension in one place without rebuilding.
-            - name: TOOL_EXT_LSP_AVAILABLE
-              value: {{ .Values.workerTools.lsp.enabled | toString | quote }}
-            - name: TOOL_EXT_TREE_SITTER_AVAILABLE
-              value: {{ .Values.workerTools.treeSitter.enabled | toString | quote }}
             - name: TOOL_EXT_DEVDOCS_AVAILABLE
               value: {{ .Values.workerTools.devdocs.enabled | toString | quote }}
+            - name: TOOL_EXT_LSP_AVAILABLE
+              value: {{ .Values.workerTools.lsp.enabled | toString | quote }}
+            - name: TOOL_EXT_SEMGREP_AVAILABLE
+              value: {{ .Values.workerTools.semgrep.enabled | toString | quote }}
+            - name: TOOL_EXT_TREE_SITTER_AVAILABLE
+              value: {{ .Values.workerTools.treeSitter.enabled | toString | quote }}
             # Provider-probe flags — consumed by the coordinator's catalog probing logic.
             - name: PROVIDER_PROBE_ENABLED
               value: {{ .Values.providerProbe.enabled | toString | quote }}

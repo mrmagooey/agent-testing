@@ -24,9 +24,10 @@ coordinator = [
     "cryptography>=42.0",
 ]
 worker = [
-    # semgrep is NOT a Python dependency — it is invoked as an external binary
-    # via subprocess.  Install the semgrep binary separately (e.g. via the SAST
-    # runtime sidecar) and ensure it is available on PATH at runtime.
+    # semgrep is intentionally absent: its mcp<2 pin conflicts with pydantic-ai's
+    # mcp>=1 requirement. The binary is provisioned in the worker image via pipx
+    # (see Dockerfile.worker ARG SEMGREP_VERSION); the Python package is excluded
+    # from this venv.
     "mcp>=1.25",
     # Tree-sitter extension (ToolExtension.TREE_SITTER)
     # tree-sitter>=0.25 uses the new binding API (Language.query, etc.)
