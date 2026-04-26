@@ -67,6 +67,7 @@ select = ["E", "F", "I", "UP"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 pythonpath = ["src"]
+addopts = "--cov=sec_review_framework --cov-report=term-missing"
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "integration: requires temp database or mock services",
@@ -82,6 +83,21 @@ markers = [
 filterwarnings = [
     "ignore:Exception in thread Thread-\\d+ \\(_connection_worker_thread\\):pytest.PytestUnhandledThreadExceptionWarning",
 ]
+
+[tool.coverage.run]
+source = ["sec_review_framework"]
+branch = true
+omit = [
+    "*/tests/*",
+    "*/scripts/*",
+    "*/migrations/*",
+    "*/__pycache__/*",
+]
+
+[tool.coverage.report]
+fail_under = 73
+show_missing = true
+skip_covered = false
 
 [dependency-groups]
 dev = [
