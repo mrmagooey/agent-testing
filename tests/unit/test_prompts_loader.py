@@ -188,13 +188,22 @@ class TestLoadUserPromptSubstitution:
         rendered = template.format(**kwargs)
         assert isinstance(rendered, str)
 
-    def test_double_braces_not_treated_as_placeholders(self):
-        template = load_user_prompt("per_vuln_class.txt")
-        placeholders = set(re.findall(r"\{(\w+)\}", template))
-        kwargs = {p: f"<{p}>" for p in placeholders}
-        rendered = template.format(**kwargs)
-        assert "{" in rendered
-        assert "}" in rendered
+    def test_double_braces_not_treated_as_placeholders(self, tmp_path):
+        prompt_dir = tmp_path / "user"
+        prompt_dir.mkdir()
+        (prompt_dir / "double_brace.txt").write_text(
+            "Template with {{escaped}} and {real} placeholder.", encoding="utf-8"
+        )
+
+        import sec_review_framework.prompts.loader as loader
+        original = loader._USER_DIR
+        loader._USER_DIR = prompt_dir
+        try:
+            template = load_user_prompt("double_brace.txt")
+        finally:
+            loader._USER_DIR = original
+
+        assert "{{escaped}}" in template
 
     def test_per_vuln_class_specialist_substitution(self):
         template = load_user_prompt("per_vuln_class", "specialist.txt")
