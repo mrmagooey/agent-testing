@@ -1,5 +1,8 @@
 """Unit tests for CostCalculator."""
 
+import textwrap
+from pathlib import Path
+
 import litellm
 import pytest
 
@@ -244,3 +247,100 @@ class TestDynamicPricingTier:
 
         assert result == (0.0, 0.0)
         assert any("ghost-model" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# CostCalculator.from_config()
+# ---------------------------------------------------------------------------
+
+_MINIMAL_PRICING_YAML = textwrap.dedent(
+    """\
+    models:
+      test-model-a:
+        input_per_million: 2.00
+        output_per_million: 8.00
+      test-model-b:
+        input_per_million: 10.00
+        output_per_million: 30.00
+    """
+)
+
+
+class TestFromConfig:
+    def test_valid_config_returns_cost_calculator(self, tmp_path):
+        (tmp_path / "pricing.yaml").write_text(_MINIMAL_PRICING_YAML)
+        calc = CostCalculator.from_config(config_dir=tmp_path)
+        assert isinstance(calc, CostCalculator)
+
+    def test_valid_config_produces_expected_pricing(self, tmp_path):
+        (tmp_path / "pricing.yaml").write_text(_MINIMAL_PRICING_YAML)
+        calc = CostCalculator.from_config(config_dir=tmp_path)
+        assert set(calc.pricing.keys()) == {"test-model-a", "test-model-b"}
+        assert calc.pricing["test-model-a"].input_per_million == pytest.approx(2.00)
+        assert calc.pricing["test-model-a"].output_per_million == pytest.approx(8.00)
+        assert calc.pricing["test-model-b"].input_per_million == pytest.approx(10.00)
+        assert calc.pricing["test-model-b"].output_per_million == pytest.approx(30.00)
+
+    def test_valid_config_computes_cost_correctly(self, tmp_path):
+        (tmp_path / "pricing.yaml").write_text(_MINIMAL_PRICING_YAML)
+        calc = CostCalculator.from_config(config_dir=tmp_path)
+        cost = calc.compute("test-model-a", input_tokens=1_000_000, output_tokens=1_000_000)
+        assert cost == pytest.approx(10.00)
+
+    def test_missing_pricing_yaml_raises_file_not_found(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            CostCalculator.from_config(config_dir=tmp_path)
+
+    def test_missing_config_dir_raises_file_not_found(self, tmp_path):
+        absent = tmp_path / "no-such-dir"
+        with pytest.raises(FileNotFoundError):
+            CostCalculator.from_config(config_dir=absent)
+
+    def test_malformed_yaml_raises_without_silent_fallback(self, tmp_path):
+        (tmp_path / "pricing.yaml").write_text(": invalid: {{{ yaml")
+        import yaml
+
+        with pytest.raises(yaml.YAMLError):
+            CostCalculator.from_config(config_dir=tmp_path)
+
+    def test_valid_yaml_wrong_structure_raises_validation_error(self, tmp_path):
+        (tmp_path / "pricing.yaml").write_text("totally_wrong_key: 42\n")
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            CostCalculator.from_config(config_dir=tmp_path)
+
+    def test_explicit_config_dir_overrides_default(self, tmp_path):
+        (tmp_path / "pricing.yaml").write_text(_MINIMAL_PRICING_YAML)
+        calc = CostCalculator.from_config(config_dir=tmp_path)
+        assert "test-model-a" in calc.pricing
+
+    def test_config_dir_none_uses_project_config(self):
+        calc = CostCalculator.from_config(config_dir=None)
+        assert isinstance(calc, CostCalculator)
+        assert len(calc.pricing) > 0
+
+    def test_config_dir_from_env_var_used_when_passed(self, tmp_path, monkeypatch):
+        (tmp_path / "pricing.yaml").write_text(_MINIMAL_PRICING_YAML)
+        monkeypatch.setenv("CONFIG_DIR", str(tmp_path))
+        import os
+
+        config_dir = Path(os.environ["CONFIG_DIR"])
+        calc = CostCalculator.from_config(config_dir=config_dir)
+        assert "test-model-a" in calc.pricing
+
+    def test_config_dir_env_var_unset_falls_back_to_default(self, monkeypatch):
+        monkeypatch.delenv("CONFIG_DIR", raising=False)
+        calc = CostCalculator.from_config(config_dir=None)
+        assert isinstance(calc, CostCalculator)
+        assert len(calc.pricing) > 0
+
+    def test_empty_models_dict_is_accepted(self, tmp_path):
+        (tmp_path / "pricing.yaml").write_text("models: {}\n")
+        calc = CostCalculator.from_config(config_dir=tmp_path)
+        assert calc.pricing == {}
+
+    def test_pricing_view_not_set_by_from_config(self, tmp_path):
+        (tmp_path / "pricing.yaml").write_text(_MINIMAL_PRICING_YAML)
+        calc = CostCalculator.from_config(config_dir=tmp_path)
+        assert calc._pricing_view is None
