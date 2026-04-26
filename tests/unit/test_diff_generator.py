@@ -405,13 +405,16 @@ def test_generate_post_injection_commit_failure(clean_repo, datasets_root):
     mock_injector.inject.return_value = injection_result
     mock_injector.build_label.return_value = _make_label()
 
-    call_count = [0]
+    commit_count = [0]
 
     def _run_side_effect(*args, **kwargs):
-        call_count[0] += 1
-        if call_count[0] >= 4:
-            raise subprocess.CalledProcessError(1, args[0])
-        return subprocess.CompletedProcess(args=args[0], returncode=0, stdout=b"", stderr=b"")
+        cmd_args = args[0]
+        # Trigger failure on the second git commit call (post-injection commit)
+        if isinstance(cmd_args, list) and len(cmd_args) > 0 and cmd_args[0] == "git" and len(cmd_args) > 1 and cmd_args[1] == "commit":
+            commit_count[0] += 1
+            if commit_count[0] >= 2:
+                raise subprocess.CalledProcessError(1, cmd_args)
+        return subprocess.CompletedProcess(args=cmd_args, returncode=0, stdout=b"", stderr=b"")
 
     with (
         patch("sec_review_framework.ground_truth.diff_generator.shutil.copytree"),
