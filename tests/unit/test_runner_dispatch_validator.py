@@ -34,6 +34,7 @@ from sec_review_framework.models.base import Message, ModelResponse, ToolDefinit
 from sec_review_framework.models.litellm_provider import LiteLLMProvider  # noqa: E402
 from sec_review_framework.strategies.runner import (  # noqa: E402
     RunnerError,
+    _programmatic_fallback,
     _validate_dispatch,
     run_strategy,
 )
@@ -506,3 +507,117 @@ class TestValidateDispatchLogging:
         with mock.patch("sec_review_framework.strategies.runner.logging") as mock_logging:
             _validate_dispatch("my.strategy", expected, actual_calls, "file_path")
             mock_logging.warning.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Tests: _programmatic_fallback role resolution
+# ---------------------------------------------------------------------------
+
+
+class TestProgrammaticFallbackRoleResolution:
+    """Test _programmatic_fallback resolves both bare and namespaced roles via shared helper."""
+
+    def test_resolve_bare_suffix_role(self) -> None:
+        """_programmatic_fallback must resolve bare role suffix (e.g. 'sqli_specialist')."""
+        from sec_review_framework.data.findings import Finding, Severity
+
+        # Create a fake specialist strategy
+        specialist_strategy = _make_strategy(
+            strategy_id="builtin_v2.sqli_specialist",
+            subagents=[],
+        )
+
+        # Create deps with the specialist registered
+        deps = SubagentDeps(
+            depth=0,
+            max_depth=3,
+            invocations=0,
+            max_invocations=100,
+            max_batch_size=32,
+            available_roles={"builtin_v2.sqli_specialist"},
+            subagent_strategies={"builtin_v2.sqli_specialist": specialist_strategy},
+            tool_registry=ToolRegistry(),
+        )
+
+        # Create a proper Finding instance that will be returned by _run_child_sync
+        finding = Finding(
+            id=str(uuid.uuid4()),
+            file_path="test.py",
+            vuln_class="sqli",
+            severity=Severity.HIGH,
+            title="SQL injection",
+            description="Test finding",
+            confidence=0.9,
+            raw_llm_output="",
+            produced_by="sqli_specialist",
+            experiment_id="test_001",
+        )
+
+        with mock.patch(
+            "sec_review_framework.strategies.runner._run_child_sync"
+        ) as mock_run:
+            mock_run.return_value = mock.Mock(output=[finding])
+
+            # Call with bare suffix (no namespace) — role resolution should handle it
+            missing_inputs = [{"vuln_class": "sqli"}]
+            results = _programmatic_fallback(
+                "test.strategy",
+                missing_inputs,
+                "vuln_class",
+                deps,
+            )
+
+            # Should find and invoke the specialist
+            assert mock_run.called
+            assert len(results) == 1
+            assert results[0].vuln_class == "sqli"
+
+    def test_resolve_namespaced_role(self) -> None:
+        """_programmatic_fallback must correctly resolve fully-namespaced roles."""
+        from sec_review_framework.data.findings import Finding, Severity
+
+        specialist_strategy = _make_strategy(
+            strategy_id="builtin_v2.xss_specialist",
+            subagents=[],
+        )
+
+        deps = SubagentDeps(
+            depth=0,
+            max_depth=3,
+            invocations=0,
+            max_invocations=100,
+            max_batch_size=32,
+            available_roles={"builtin_v2.xss_specialist"},
+            subagent_strategies={"builtin_v2.xss_specialist": specialist_strategy},
+            tool_registry=ToolRegistry(),
+        )
+
+        finding = Finding(
+            id=str(uuid.uuid4()),
+            file_path="test.py",
+            vuln_class="xss",
+            severity=Severity.MEDIUM,
+            title="XSS vulnerability",
+            description="Test finding",
+            confidence=0.8,
+            raw_llm_output="",
+            produced_by="xss_specialist",
+            experiment_id="test_001",
+        )
+
+        with mock.patch(
+            "sec_review_framework.strategies.runner._run_child_sync"
+        ) as mock_run:
+            mock_run.return_value = mock.Mock(output=[finding])
+
+            missing_inputs = [{"vuln_class": "xss"}]
+            results = _programmatic_fallback(
+                "test.strategy",
+                missing_inputs,
+                "vuln_class",
+                deps,
+            )
+
+            assert mock_run.called
+            assert len(results) == 1
+            assert results[0].vuln_class == "xss"

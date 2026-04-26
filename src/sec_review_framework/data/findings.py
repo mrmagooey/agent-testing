@@ -92,6 +92,8 @@ class DedupEntry(BaseModel):
 class StrategyOutput(BaseModel):
     """Returned by strategies — captures both findings and dedup metadata."""
 
+    model_config = {"arbitrary_types_allowed": True}
+
     findings: list[Finding]
     pre_dedup_count: int
     post_dedup_count: int
@@ -104,3 +106,9 @@ class StrategyOutput(BaseModel):
     # Fraction of expected subagent dispatches that actually occurred (0.0–1.0).
     # None when the dispatch validator did not run for this strategy.
     dispatch_completeness: float | None = None
+    # Aggregated token and conversation logs from child (subagent) providers.
+    # Each entry comes from a provider in the ModelProviderCache that was used
+    # by a child invocation.  worker.py adds these to the parent's totals so
+    # that child token spend is visible to the cost calculator.
+    child_token_log: list[object] = []
+    child_conversation_log: list[object] = []

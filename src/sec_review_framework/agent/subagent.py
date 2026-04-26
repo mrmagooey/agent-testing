@@ -18,15 +18,20 @@ Design notes
 - Audit logs do not interleave: each child receives a *cloned*
   :class:`~sec_review_framework.tools.registry.ToolRegistry` via
   :meth:`~sec_review_framework.tools.registry.ToolRegistry.clone`.
-- Batch dispatch mirrors the existing ``run_subagents(parallel=True)`` pattern
-  at ``common.py:267-273``: a :class:`~concurrent.futures.ThreadPoolExecutor`
-  with ``max_workers=4``.
+- Batch dispatch uses :func:`asyncio.gather` over async ``_run_child`` coroutines;
+  no thread-pool nesting is required.
 - Cap enforcement raises :class:`~pydantic_ai.ModelRetry` so the parent sees
   the failure and can decide what to do (e.g., retry with a smaller batch or
   give up cleanly).
 - Recursion: a child whose ``subagent_strategies`` is non-empty receives the
   same tools injected with ``depth+1``.  The ``max_depth`` cap prevents runaway
   recursion.
+- Provider sharing: when :attr:`SubagentDeps.model_provider_cache` is set,
+  children with the same ``model_id`` reuse the cached
+  :class:`~sec_review_framework.models.litellm_provider.LiteLLMProvider`.
+  Their ``token_log`` and ``conversation_log`` entries accumulate on the shared
+  provider, making child token usage and conversation history visible to any
+  caller holding a reference to that provider (or to the cache itself).
 
 Subagent dispatch is wired in :mod:`sec_review_framework.strategies.runner`.
 
@@ -40,7 +45,6 @@ MUTUALLY EXCLUSIVE with the ``worker`` extra — separate venvs required.
 from __future__ import annotations
 
 import asyncio
-import concurrent.futures
 import json
 from dataclasses import dataclass, field
 
@@ -62,6 +66,7 @@ from sec_review_framework.tools.registry import ToolRegistry
 
 if TYPE_CHECKING:
     from sec_review_framework.data.strategy_bundle import UserStrategy
+    from sec_review_framework.strategies.common import ModelProviderCache
 
 
 # ---------------------------------------------------------------------------
@@ -124,6 +129,14 @@ class SubagentDeps:
     tool_registry:
         The parent's :class:`~sec_review_framework.tools.registry.ToolRegistry`.
         Children receive a *clone* of this registry so audit logs do not interleave.
+    model_provider_cache:
+        Optional shared provider cache.  When set, ``_run_child`` reads the
+        provider for the child's ``model_id`` from the cache (creating it on
+        first access) rather than constructing a fresh one.  Providers are
+        shared across children with the same ``model_id``, so their
+        ``token_log`` and ``conversation_log`` accumulate on the shared
+        instance — fixing the token-usage and conversation-log fragmentation
+        bugs for multi-specialist runs.
     """
 
     depth: int = 0
@@ -142,6 +155,8 @@ class SubagentDeps:
     # Populated by the invoke_subagent tool; read by the programmatic fallback
     # in runner.py (Phase 3c per_vuln_class dispatch completeness).
     single_call_log: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
+    # Shared model provider cache — None means each child builds a fresh provider.
+    model_provider_cache: ModelProviderCache | None = field(default=None)
 
     def child_deps(self) -> SubagentDeps:
         """Return a new :class:`SubagentDeps` for a child invocation.
@@ -155,13 +170,15 @@ class SubagentDeps:
         - Receives a *cloned* :class:`~sec_review_framework.tools.registry.ToolRegistry`
           so its audit log is independent.
         - Inherits all other caps and strategies.
+        - Inherits the same :attr:`model_provider_cache` by reference so that
+          providers are shared across all children in the same run.
 
         Note: Python ``dataclass`` fields are not automatically shared by
         reference. The invocation counter is snapshotted here (as an immutable
         integer), and the child's subsequent invocations are tracked in the
         child's own ``invocations`` field.  The parent's counter is incremented
         by the parent's invoke_subagent tool (see :func:`_check_caps`) before
-        calling ``_run_child_sync``.
+        calling ``_run_child``.
         """
         return SubagentDeps(
             depth=self.depth + 1,
@@ -175,6 +192,9 @@ class SubagentDeps:
             # Child gets its own call logs; parent's logs are not shared.
             batch_call_log=[],
             single_call_log=[],
+            # Cache is shared by reference so all providers accumulate on the
+            # same instances.
+            model_provider_cache=self.model_provider_cache,
         )
 
 
@@ -183,7 +203,7 @@ class SubagentDeps:
 # ---------------------------------------------------------------------------
 
 
-def _resolve_role(role: str, available_roles: set[str]) -> str | None:
+def resolve_role(role: str, available_roles: set[str]) -> str | None:
     """Resolve *role* to a fully-namespaced role ID in *available_roles*.
 
     Accepts either the full namespaced ID (e.g. ``"builtin_v2.sqli_specialist"``)
@@ -222,7 +242,7 @@ def _resolve_role(role: str, available_roles: set[str]) -> str | None:
 
     # 2. Suffix match
     suffix = "." + role
-    matches = [r for r in available_roles if r.endswith(suffix)]
+    matches = [r for r in available_roles if r.endswith(suffix) or r == role]
 
     if len(matches) == 1:
         return matches[0]
@@ -264,16 +284,27 @@ def _check_caps(ctx: RunContext[SubagentDeps], count: int) -> None:
         )
 
 
-def _run_child_sync(
+async def _run_child(
     strategy: UserStrategy,
     input_data: dict[str, Any],
     parent_deps: SubagentDeps,
 ) -> SubagentOutput:
-    """Run a child agent synchronously in a worker thread.
+    """Run a child agent asynchronously.
 
-    Builds a fresh pydantic-ai :class:`~pydantic_ai.Agent` for *strategy*,
-    runs it with *input_data* as the user message, and returns a
+    Builds a pydantic-ai :class:`~pydantic_ai.Agent` for *strategy*, runs it
+    with *input_data* as the user message, and returns a
     :class:`SubagentOutput`.
+
+    Provider selection
+    ------------------
+    When ``parent_deps.model_provider_cache`` is set the provider for the
+    child's ``model_id`` is fetched from (or created in) the cache so that
+    all children with the same model share one provider instance.  This lets
+    token usage and conversation history accumulate on the shared provider,
+    making child spend visible to the caller that holds the cache.
+
+    When the cache is ``None`` a fresh :class:`LiteLLMProvider` is built for
+    this invocation (original Phase 1 behaviour).
 
     The child receives:
 
@@ -300,9 +331,13 @@ def _run_child_sync(
     # Resolve the bundle (no override key — single-agent shape for subagents)
     bundle = resolve_bundle(strategy, None)
 
-    # Build a fresh LiteLLMProvider + LiteLLMModel for this child invocation.
-    provider = LiteLLMProvider(model_name=bundle.model_id)
-    model = LiteLLMModel(provider)
+    # Resolve the provider: use the shared cache when available so that token
+    # usage and conversation logs accumulate on the shared instance.
+    if parent_deps.model_provider_cache is not None:
+        provider = parent_deps.model_provider_cache.get(bundle.model_id)
+    else:
+        provider = LiteLLMProvider(model_name=bundle.model_id)
+    model = LiteLLMModel(provider)  # type: ignore[arg-type]
 
     # Clone the registry so this child has its own audit log
     child_registry = parent_deps.tool_registry.clone()
@@ -343,8 +378,7 @@ def _run_child_sync(
         # Fallback: JSON-encode the input dict
         user_message = json.dumps(input_data) if isinstance(input_data, dict) else str(input_data)
 
-    # Run synchronously — this is called from a ThreadPoolExecutor worker thread
-    result = asyncio.run(child_agent.run(user_message, deps=child_deps))
+    result = await child_agent.run(user_message, deps=child_deps)
 
     usage_dict = {
         "input_tokens": result.usage().input_tokens or 0,
@@ -357,6 +391,20 @@ def _run_child_sync(
         output=result.output,
         usage=usage_dict,
     )
+
+
+def _run_child_sync(
+    strategy: UserStrategy,
+    input_data: dict[str, Any],
+    parent_deps: SubagentDeps,
+) -> SubagentOutput:
+    """Synchronous wrapper around :func:`_run_child` for thread-pool callers.
+
+    Called from :func:`~sec_review_framework.strategies.runner._programmatic_fallback`
+    which runs inside a :class:`~concurrent.futures.ThreadPoolExecutor` where
+    there is no running event loop, so ``asyncio.run`` is safe.
+    """
+    return asyncio.run(_run_child(strategy, input_data, parent_deps))
 
 
 # ---------------------------------------------------------------------------
@@ -407,7 +455,7 @@ def make_invoke_subagent_tool(
         deps = ctx.deps
 
         # Resolve role — accepts bare suffix OR full namespaced ID
-        resolved_role = _resolve_role(role, deps.available_roles)
+        resolved_role = resolve_role(role, deps.available_roles)
         if resolved_role is None:
             raise ModelRetry(
                 f"Unknown subagent role {role!r}. "
@@ -423,7 +471,8 @@ def make_invoke_subagent_tool(
         deps.single_call_log.append((resolved_role, dict(input)))
 
         strategy = deps.subagent_strategies[resolved_role]
-        return await asyncio.to_thread(_run_child_sync, strategy, input, deps)
+        # Await directly — no to_thread wrapper needed since _run_child is async.
+        return await _run_child(strategy, input, deps)
 
     return invoke_subagent
 
@@ -433,9 +482,8 @@ def make_invoke_subagent_batch_tool(
 ) -> Any:
     """Return a pydantic-ai tool callable for ``invoke_subagent_batch(role, inputs)``.
 
-    The returned tool dispatches multiple child agents in parallel via a
-    :class:`~concurrent.futures.ThreadPoolExecutor` (mirroring the existing
-    ``run_subagents(parallel=True)`` pattern at ``common.py:267-273``).
+    The returned tool dispatches multiple child agents in parallel via
+    :func:`asyncio.gather` over async ``_run_child`` coroutines.
 
     Results are returned in the same order as *inputs*.  Each child receives
     a cloned :class:`~sec_review_framework.tools.registry.ToolRegistry` so
@@ -475,7 +523,7 @@ def make_invoke_subagent_batch_tool(
         deps = ctx.deps
 
         # Resolve role — accepts bare suffix OR full namespaced ID
-        resolved_role = _resolve_role(role, deps.available_roles)
+        resolved_role = resolve_role(role, deps.available_roles)
         if resolved_role is None:
             raise ModelRetry(
                 f"Unknown subagent role {role!r}. "
@@ -498,15 +546,13 @@ def make_invoke_subagent_batch_tool(
 
         strategy = deps.subagent_strategies[resolved_role]
 
-        # Fan-out in a ThreadPoolExecutor, mirroring common.py:267-273
-        def _run_one(inp: dict[str, Any]) -> SubagentOutput:
-            return _run_child_sync(strategy, inp, deps)
-
-        loop = asyncio.get_running_loop()
-        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
-            futures = [loop.run_in_executor(pool, _run_one, inp) for inp in inputs]
-            results = await asyncio.gather(*futures)
+        # Fan-out via asyncio.gather — each coroutine runs in the current event
+        # loop without requiring a thread pool.
+        results = await asyncio.gather(
+            *[_run_child(strategy, inp, deps) for inp in inputs]
+        )
 
         return list(results)
 
     return invoke_subagent_batch
+

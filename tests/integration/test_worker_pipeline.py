@@ -34,6 +34,7 @@ from sec_review_framework.worker import ExperimentWorker
 
 SQLI_FINDING_JSON = json.dumps([
     {
+        "id": "finding-sqli-001",
         "file_path": "myapp/views.py",
         "line_start": 3,
         "line_end": 4,
@@ -44,6 +45,9 @@ SQLI_FINDING_JSON = json.dumps([
         "description": "User input concatenated directly into SQL query.",
         "recommendation": "Use parameterized queries.",
         "confidence": 0.95,
+        "raw_llm_output": "SQL injection detected.",
+        "produced_by": "builtin.single_agent",
+        "experiment_id": "experiment-w",
     }
 ])
 
@@ -51,9 +55,12 @@ EMPTY_FINDINGS_JSON = json.dumps([])
 
 
 def _canned_response(content: str) -> ModelResponse:
+    # pydantic-ai requires structured output via final_result tool call;
+    # plain text responses are rejected when output_type=list[Finding].
+    findings = json.loads(content)
     return ModelResponse(
-        content=f"Analysis complete.\n\n```json\n{content}\n```",
-        tool_calls=[],
+        content="",
+        tool_calls=[{"name": "final_result", "id": "tc-out", "input": {"response": findings}}],
         input_tokens=100,
         output_tokens=50,
         model_id="fake-model",
@@ -63,8 +70,8 @@ def _canned_response(content: str) -> ModelResponse:
 
 def _no_finding_response() -> ModelResponse:
     return ModelResponse(
-        content=f"No issues found.\n\n```json\n{EMPTY_FINDINGS_JSON}\n```",
-        tool_calls=[],
+        content="",
+        tool_calls=[{"name": "final_result", "id": "tc-out", "input": {"response": []}}],
         input_tokens=50,
         output_tokens=20,
         model_id="fake-model",

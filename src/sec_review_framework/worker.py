@@ -280,8 +280,13 @@ class ExperimentWorker:
         verification_tokens = (
             verification_result.verification_tokens if verification_result else 0
         )
-        total_input = sum(t.input_tokens for t in model.token_log)
-        total_output = sum(t.output_tokens for t in model.token_log)
+        # Sum parent tokens plus any child (subagent) tokens collected by the
+        # runner.  strategy_output.child_token_log is non-empty only for
+        # multi-specialist runs; it is empty for single-agent runs so legacy
+        # behaviour is unchanged.
+        all_token_log = list(model.token_log) + list(strategy_output.child_token_log)
+        total_input = sum(t.input_tokens for t in all_token_log)
+        total_output = sum(t.output_tokens for t in all_token_log)
         config_dir = os.environ.get("CONFIG_DIR")
         cost_calculator = CostCalculator.from_config(
             Path(config_dir) if config_dir else None
@@ -352,7 +357,12 @@ class ExperimentWorker:
             self._write_jsonl(local_dir / "findings.jsonl", findings)
             tool_audit_entries = tools.audit_log.entries if tools is not None else []
             self._write_jsonl(local_dir / "tool_calls.jsonl", tool_audit_entries)
-            self._write_jsonl(local_dir / "conversation.jsonl", model.conversation_log)
+            # Combine parent and child conversation logs so the artifact captures
+            # the full run dialogue including subagent turns.
+            full_conversation_log = list(model.conversation_log) + list(
+                strategy_output.child_conversation_log
+            )
+            self._write_jsonl(local_dir / "conversation.jsonl", full_conversation_log)
             if findings_pre_verification:
                 self._write_jsonl(
                     local_dir / "findings_pre_verification.jsonl",

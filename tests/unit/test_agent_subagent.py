@@ -32,7 +32,7 @@ from sec_review_framework.agent.subagent import (  # noqa: E402
     SubagentDeps,
     SubagentOutput,
     _check_caps,
-    _resolve_role,
+    resolve_role,
     _run_child_sync,
     make_invoke_subagent_batch_tool,
     make_invoke_subagent_tool,
@@ -603,43 +603,43 @@ class TestChildIsolation:
 
 
 # ---------------------------------------------------------------------------
-# Tests: _resolve_role helper
+# Tests: resolve_role helper
 # ---------------------------------------------------------------------------
 
 
 class TestResolveRole:
-    """Tests for the _resolve_role helper function."""
+    """Tests for the resolve_role helper function."""
 
     def test_exact_match_returns_role(self) -> None:
         available = {"builtin_v2.sqli_specialist", "builtin_v2.xss_specialist"}
-        assert _resolve_role("builtin_v2.sqli_specialist", available) == "builtin_v2.sqli_specialist"
+        assert resolve_role("builtin_v2.sqli_specialist", available) == "builtin_v2.sqli_specialist"
 
     def test_bare_suffix_resolves_to_namespaced(self) -> None:
         available = {"builtin_v2.sqli_specialist"}
-        assert _resolve_role("sqli_specialist", available) == "builtin_v2.sqli_specialist"
+        assert resolve_role("sqli_specialist", available) == "builtin_v2.sqli_specialist"
 
     def test_ambiguous_bare_raises_model_retry(self) -> None:
         available = {"builtin_v2.sqli_specialist", "experimental.sqli_specialist"}
         with pytest.raises(ModelRetry, match="Ambiguous role"):
-            _resolve_role("sqli_specialist", available)
+            resolve_role("sqli_specialist", available)
 
     def test_unknown_role_returns_none(self) -> None:
         available = {"builtin_v2.sqli_specialist"}
-        assert _resolve_role("nonexistent_role", available) is None
+        assert resolve_role("nonexistent_role", available) is None
 
     def test_empty_available_returns_none(self) -> None:
-        assert _resolve_role("sqli_specialist", set()) is None
+        assert resolve_role("sqli_specialist", set()) is None
 
     def test_exact_match_preferred_over_suffix_match(self) -> None:
         """If the bare name is itself in available_roles, exact match wins."""
         available = {"sqli_specialist", "builtin_v2.sqli_specialist"}
         # "sqli_specialist" is an exact match — should not be ambiguous
-        assert _resolve_role("sqli_specialist", available) == "sqli_specialist"
+        assert resolve_role("sqli_specialist", available) == "sqli_specialist"
 
     def test_multiple_suffix_matches_raises(self) -> None:
         available = {"ns1.foo_role", "ns2.foo_role", "ns3.foo_role"}
         with pytest.raises(ModelRetry, match="Ambiguous role"):
-            _resolve_role("foo_role", available)
+            resolve_role("foo_role", available)
 
 
 # ---------------------------------------------------------------------------

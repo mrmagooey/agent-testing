@@ -63,6 +63,7 @@ from sec_review_framework.agent.subagent import (
     _run_child_sync,
     make_invoke_subagent_batch_tool,
     make_invoke_subagent_tool,
+    resolve_role,
 )
 from sec_review_framework.agent.tool_adapter import make_tool_callables
 from sec_review_framework.data.findings import Finding, StrategyOutput
@@ -104,9 +105,9 @@ def run_strategy(
 ) -> StrategyOutput:
     """Run *strategy* using the pydantic-ai unified runner.
 
-    This is the single entry-point for Phase 2 and beyond.  It builds a
-    pydantic-ai :class:`~pydantic_ai.Agent` from the strategy bundle, registers
-    tools, injects subagent dispatchers when needed, and returns a
+    This is the single entry-point.  It builds a pydantic-ai
+    :class:`~pydantic_ai.Agent` from the strategy bundle, registers tools,
+    injects subagent dispatchers when needed, and returns a
     :class:`~sec_review_framework.data.findings.StrategyOutput`.
 
     Parameters
@@ -130,29 +131,28 @@ def run_strategy(
         tests to inject controlled deps.  When ``None`` and subagents are
         declared, a default ``SubagentDeps`` is built from the strategy caps.
     expected_dispatch:
-        Optional list of input dicts the parent is expected to dispatch via
-        ``invoke_subagent_batch``.  When provided, the dispatch validator runs
-        after the first agent turn; if any inputs were missed the agent is
-        re-prompted with the missing items (one re-prompt only).
+        Caller-supplied override for the expected dispatch list.  For shapes
+        where the expected set is statically known (PER_VULN_CLASS, PER_FILE),
+        it is auto-derived inside this function; the kwarg only needs to be
+        passed to override that derivation.  Ignored for SAST_FIRST (output
+        depends on Semgrep run output, unknown at entry time).
     dispatch_match_key:
         The key used to identify unique inputs in *expected_dispatch* (default
-        ``"file_path"``).
+        ``"file_path"``).  Auto-set to ``"vuln_class"`` for PER_VULN_CLASS.
 
     Returns
     -------
     StrategyOutput
-        Findings list with dedup metadata. ``pre_dedup_count`` and
-        ``post_dedup_count`` are equal (no deduplication when no subagent overlap).
+        Findings list with dedup metadata.  ``dispatch_completeness`` carries
+        the validated dispatch ratio when the validator ran; ``non_finding_output``
+        carries structured output when the strategy's ``output_type_name`` is not
+        ``"finding_list"``.
 
     Raises
     ------
     RunnerError
         When pydantic-ai raises
         :exc:`~pydantic_ai.exceptions.UnexpectedModelBehavior`.
-
-    Notes
-    -----
-    - ``output_type=list[Finding]`` is used for all strategies.
     """
     bundle = strategy.default
 
@@ -194,17 +194,50 @@ def run_strategy(
         ]
 
     # ------------------------------------------------------------------
-    # 5. Build the pydantic-ai Agent
+    # 5. Resolve output type (fix #5: honour bundle.output_type_name)
     # ------------------------------------------------------------------
-    agent: Agent[SubagentDeps | None, list[Finding]] = Agent(
+    output_type: type = resolve_output_type(bundle.output_type_name) or list[Finding]  # type: ignore[assignment]
+
+    # ------------------------------------------------------------------
+    # 6. Auto-derive expected_dispatch for shapes with a static input set
+    #    (fix #2: validator now runs in production without caller changes)
+    #
+    # SAST_FIRST is intentionally excluded: the expected dispatch depends on
+    # the Semgrep run output, which is unknown at strategy-entry time.  Rather
+    # than accept any partial dispatch as "correct", we simply leave the
+    # validator off for SAST_FIRST and document that decision here.
+    # ------------------------------------------------------------------
+    shape = strategy.orchestration_shape
+    effective_dispatch = expected_dispatch  # caller override always wins
+    effective_match_key = dispatch_match_key
+
+    if effective_dispatch is None and subagent_roles and bundle.dispatch_fallback != "none":
+        if shape == OrchestrationShape.PER_VULN_CLASS:
+            from sec_review_framework.data.findings import VulnClass
+            effective_dispatch = [{"vuln_class": vc.value} for vc in VulnClass]
+            effective_match_key = "vuln_class"
+        elif shape == OrchestrationShape.PER_FILE:
+            try:
+                source_files: list[str] = target.list_source_files()  # type: ignore[attr-defined]
+            except AttributeError:
+                source_files = []
+            if source_files:
+                effective_dispatch = [{"file_path": fp} for fp in source_files]
+                effective_match_key = "file_path"
+        # SAST_FIRST and other shapes: leave effective_dispatch as None
+
+    # ------------------------------------------------------------------
+    # 7. Build the pydantic-ai Agent
+    # ------------------------------------------------------------------
+    agent: Agent[SubagentDeps | None, Any] = Agent(
         llm_model,
         system_prompt=system_prompt,
         tools=tool_callables,
-        output_type=list[Finding],
+        output_type=output_type,
     )
 
     # ------------------------------------------------------------------
-    # 6. Run the agent
+    # 8. Run the agent
     # ------------------------------------------------------------------
     try:
         result = agent.run_sync(user_prompt, deps=deps)
@@ -214,10 +247,23 @@ def run_strategy(
             f"strategy {strategy.id!r}: {exc}"
         ) from exc
 
-    findings: list[Finding] = result.output or []
+    # ------------------------------------------------------------------
+    # 9. Extract findings (only when output_type IS list[Finding])
+    # ------------------------------------------------------------------
+    dispatch_completeness: float | None = None
+    non_finding_output: object | None = None
+
+    _is_finding_output = output_type == list[Finding]
+    if _is_finding_output:
+        findings: list[Finding] = result.output or []
+    else:
+        # Non-finding structured output — wrap into StrategyOutput.non_finding_output
+        non_finding_output = result.output
+        findings = []
 
     # ------------------------------------------------------------------
-    # 7. Dispatch validator (optional)
+    # 10. Dispatch validator (fix #2: runs unconditionally when subagents
+    #     are non-empty, fallback_mode != "none", and dispatch is derivable)
     #
     # Fallback behaviour is controlled by strategy.default.dispatch_fallback:
     #   "reprompt"      — re-ask the supervisor LLM once (default).
@@ -226,17 +272,21 @@ def run_strategy(
     #   "none"          — no fallback; missing dispatches are silently dropped.
     # ------------------------------------------------------------------
     fallback_mode = bundle.dispatch_fallback
-    if expected_dispatch and deps is not None and fallback_mode != "none":
+    if effective_dispatch is not None and deps is not None and fallback_mode != "none":
         # Combine single and batch call logs to detect dispatched roles
         all_actual_calls = list(deps.batch_call_log) + [
             (role, [inp]) for role, inp in deps.single_call_log
         ]
         missing = _validate_dispatch(
             strategy.id,
-            expected_dispatch,
+            effective_dispatch,
             all_actual_calls,
-            dispatch_match_key,
+            effective_match_key,
         )
+
+        dispatched_count = len(effective_dispatch) - len(missing)
+        dispatch_completeness = dispatched_count / len(effective_dispatch) if effective_dispatch else 1.0
+
         if missing:
             if fallback_mode == "programmatic":
                 # Programmatic fallback — bypass the supervisor LLM entirely for
@@ -244,15 +294,18 @@ def run_strategy(
                 extra_findings = _programmatic_fallback(
                     strategy.id,
                     missing,
-                    dispatch_match_key,
+                    effective_match_key,
                     deps,
                 )
                 findings = findings + extra_findings
+                dispatch_completeness = 1.0
             else:
-                # Re-prompt the supervisor (bounded to 1 attempt)
+                # fix #8: re-prompt with invoke_subagent_batch framing, then
+                # deduplicate to avoid duplicates from the supervisor re-emitting
+                # previously-dispatched results alongside the new ones.
                 re_prompt = (
                     "You missed dispatching the following inputs. "
-                    "Please call invoke_subagent now for these missing items:\n"
+                    "Please call invoke_subagent_batch now for these missing items:\n"
                     + "\n".join(str(m) for m in missing)
                 )
                 try:
@@ -262,7 +315,35 @@ def run_strategy(
                         deps=deps,
                     )
                     extra_findings_reprompt: list[Finding] = retry_result.output or []
-                    findings = findings + extra_findings_reprompt
+                    # Deduplicate the combined set to collapse any findings the
+                    # supervisor re-emits alongside the newly-dispatched ones.
+                    from sec_review_framework.strategies.common import deduplicate
+                    combined_output = deduplicate(findings + extra_findings_reprompt)
+                    findings = combined_output.findings
+
+                    # Second-pass validator: log a warning if misses remain.
+                    all_actual_calls_after = list(deps.batch_call_log) + [
+                        (role, [inp]) for role, inp in deps.single_call_log
+                    ]
+                    still_missing = _validate_dispatch(
+                        strategy.id,
+                        effective_dispatch,
+                        all_actual_calls_after,
+                        effective_match_key,
+                    )
+                    if still_missing:
+                        dispatched_after = len(effective_dispatch) - len(still_missing)
+                        dispatch_completeness = dispatched_after / len(effective_dispatch)
+                        logging.warning(
+                            "run_strategy: strategy %r still missing %d/%d dispatches after re-prompt "
+                            "(completeness=%.2f)",
+                            strategy.id,
+                            len(still_missing),
+                            len(effective_dispatch),
+                            dispatch_completeness,
+                        )
+                    else:
+                        dispatch_completeness = 1.0
                 except UnexpectedModelBehavior as exc:
                     logging.warning(
                         "run_strategy: re-prompt for strategy %r failed: %s",
@@ -272,7 +353,19 @@ def run_strategy(
 
     # Stamp required fields that pydantic-ai's structured output does not
     # populate automatically (id, raw_llm_output, produced_by, experiment_id).
-    findings = _stamp_findings(findings, strategy_id=strategy.id)
+    if _is_finding_output:
+        findings = _stamp_findings(findings, strategy_id=strategy.id)
+
+    # Collect token and conversation logs from all child providers in the cache.
+    # Children with the same model_id share a provider; their entries accumulate
+    # on that provider's token_log and conversation_log.
+    child_token_log: list[object] = []
+    child_conversation_log: list[object] = []
+    if deps is not None and deps.model_provider_cache is not None:
+        # pylint: disable=protected-access
+        for provider in deps.model_provider_cache._cache.values():
+            child_token_log.extend(provider.token_log)
+            child_conversation_log.extend(provider.conversation_log)
 
     return StrategyOutput(
         findings=findings,
@@ -281,6 +374,10 @@ def run_strategy(
         dedup_log=[],
         system_prompt=system_prompt,
         user_message=user_prompt,
+        non_finding_output=non_finding_output,
+        dispatch_completeness=dispatch_completeness,
+        child_token_log=child_token_log,
+        child_conversation_log=child_conversation_log,
     )
 
 
@@ -479,17 +576,9 @@ def _programmatic_fallback(
         # Role suffix as emitted by the parent agent (e.g. "sqli_specialist")
         role_suffix = f"{match_value}_specialist"
 
-        # Resolve the full strategy ID by searching available_roles for a
-        # name that ends with the suffix (handles both bare "sqli_specialist"
-        # and namespaced "builtin_v2.sqli_specialist" role names).
-        role: str | None = None
-        if role_suffix in deps.subagent_strategies:
-            role = role_suffix
-        else:
-            for candidate in deps.subagent_strategies:
-                if candidate.endswith(f".{role_suffix}") or candidate == role_suffix:
-                    role = candidate
-                    break
+        # Resolve the full strategy ID using the shared resolver.
+        # Handles both bare "sqli_specialist" and namespaced "builtin_v2.sqli_specialist".
+        role = resolve_role(role_suffix, set(deps.subagent_strategies.keys()))
 
         if role is None:
             logging.warning(
@@ -541,6 +630,10 @@ def _build_default_deps(
     roles (not yet seeded) are silently skipped — the agent will receive a
     ``ModelRetry`` if it tries to invoke an unknown role.
 
+    A :class:`~sec_review_framework.strategies.common.ModelProviderCache` is
+    created here and attached to the deps so that ``_run_child`` can share
+    providers across children with the same ``model_id``.
+
     Parameters
     ----------
     strategy:
@@ -553,6 +646,8 @@ def _build_default_deps(
     SubagentDeps
         Ready-to-use deps for the parent agent.
     """
+    from sec_review_framework.models.litellm_provider import LiteLLMProvider
+    from sec_review_framework.strategies.common import ModelProviderCache
     from sec_review_framework.strategies.strategy_registry import load_default_registry
 
     bundle = strategy.default
@@ -573,6 +668,11 @@ def _build_default_deps(
             e,
         )
 
+    # Build a cache with a factory so children get shared providers keyed by
+    # model_id.  Token usage and conversation logs accumulate on these shared
+    # providers, making child spend visible to run_strategy's caller.
+    cache = ModelProviderCache(factory=lambda mid: LiteLLMProvider(model_name=mid))
+
     return SubagentDeps(
         depth=0,
         max_depth=bundle.max_subagent_depth,
@@ -582,6 +682,7 @@ def _build_default_deps(
         available_roles=set(roles),
         subagent_strategies=subagent_strategies,
         tool_registry=tools,
+        model_provider_cache=cache,
     )
 
 
