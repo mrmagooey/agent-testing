@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import random
+import threading
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -89,6 +90,10 @@ class ModelProvider(ABC):
         self.retry_policy: RetryPolicy = retry_policy or RetryPolicy()
         self.token_log: list[ModelResponse] = []
         self.conversation_log: list[dict[str, Any]] = []
+        # Serialises the multi-step append sequence in complete() so concurrent
+        # callers sharing a provider (e.g. asyncio.gather over to_thread) cannot
+        # interleave token_log / conversation_log entries from different turns.
+        self._log_lock: threading.Lock = threading.Lock()
 
     def complete(
         self,
@@ -107,23 +112,23 @@ class ModelProvider(ABC):
                 response = self._do_complete(
                     messages, tools, system_prompt, max_tokens, temperature
                 )
-                self.token_log.append(response)
 
-                # Auto-capture conversation log
-                for msg in messages:
-                    entry: dict[str, Any] = {"role": msg.role, "content": msg.content}
-                    if msg.tool_call_id is not None:
-                        entry["tool_call_id"] = msg.tool_call_id
-                    if msg.tool_calls is not None:
-                        entry["tool_calls"] = msg.tool_calls
-                    self.conversation_log.append(entry)
-                self.conversation_log.append(
-                    {
-                        "role": "assistant",
-                        "content": response.content,
-                        "tool_calls": response.tool_calls,
-                    }
-                )
+                with self._log_lock:
+                    self.token_log.append(response)
+                    for msg in messages:
+                        entry: dict[str, Any] = {"role": msg.role, "content": msg.content}
+                        if msg.tool_call_id is not None:
+                            entry["tool_call_id"] = msg.tool_call_id
+                        if msg.tool_calls is not None:
+                            entry["tool_calls"] = msg.tool_calls
+                        self.conversation_log.append(entry)
+                    self.conversation_log.append(
+                        {
+                            "role": "assistant",
+                            "content": response.content,
+                            "tool_calls": response.tool_calls,
+                        }
+                    )
 
                 return response
 
@@ -177,4 +182,5 @@ class ModelProvider(ABC):
         cloned = copy.copy(self)
         cloned.token_log = []
         cloned.conversation_log = []
+        cloned._log_lock = threading.Lock()
         return cloned

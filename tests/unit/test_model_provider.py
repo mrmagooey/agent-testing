@@ -261,3 +261,69 @@ def test_clone_original_logs_unaffected_by_clone_usage():
 
     assert len(provider.token_log) == 1
     assert provider.token_log[0].content == "original"
+
+
+def test_clone_has_independent_lock():
+    """clone() must allocate a fresh lock so children don't serialise on the parent."""
+    provider = _TestProvider([])
+    cloned = provider.clone()
+    assert cloned._log_lock is not provider._log_lock
+
+
+# ---------------------------------------------------------------------------
+# Concurrent log integrity (per-provider lock)
+# ---------------------------------------------------------------------------
+
+
+def test_complete_holds_log_lock_during_append_sequence():
+    """complete() must acquire the per-provider lock around the log appends.
+
+    Without the lock, two threads sharing a provider can interleave their
+    token_log / conversation_log appends. The lock makes the append sequence
+    atomic per call.
+    """
+    import threading as _threading
+
+    class _SpyLock:
+        def __init__(self) -> None:
+            self._inner = _threading.Lock()
+            self.acquire_count = 0
+
+        def __enter__(self) -> "_SpyLock":
+            self.acquire_count += 1
+            self._inner.acquire()
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            self._inner.release()
+
+    provider = _TestProvider([_ok_response("ok")])
+    spy = _SpyLock()
+    provider._log_lock = spy  # type: ignore[assignment]
+    provider.complete(_msg())
+    assert spy.acquire_count == 1
+
+
+def test_concurrent_complete_calls_keep_log_pairs_contiguous():
+    """Threads sharing a provider produce intact per-call log groups.
+
+    Each call appends one user entry then one assistant entry. With the lock,
+    those two appends are atomic per call so the log alternates user/assistant.
+    """
+    import concurrent.futures
+
+    n = 16
+    provider = _TestProvider([_ok_response(f"resp-{i}") for i in range(n)])
+
+    def _one_call(i: int) -> None:
+        provider.complete([Message(role="user", content=f"q-{i}")])
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=n) as pool:
+        list(pool.map(_one_call, range(n)))
+
+    assert len(provider.token_log) == n
+    log = provider.conversation_log
+    assert len(log) == 2 * n
+    for i in range(0, len(log), 2):
+        assert log[i]["role"] == "user"
+        assert log[i + 1]["role"] == "assistant"
