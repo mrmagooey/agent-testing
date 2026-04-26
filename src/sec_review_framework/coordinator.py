@@ -993,7 +993,20 @@ class ExperimentCoordinator:
                         )
                         continue
                     from sec_review_framework.data.experiment import ExperimentRun
-                    run = ExperimentRun.model_validate_json(run_config_path.read_text())
+                    try:
+                        run = ExperimentRun.model_validate_json(run_config_path.read_text())
+                    except Exception as _parse_exc:
+                        logger.warning(
+                            "Run %s config file is malformed — marking failed: %s",
+                            run_data["id"],
+                            _parse_exc,
+                        )
+                        await self.db.update_run(
+                            run_data["id"],
+                            status="failed",
+                            error=f"run config malformed: {_parse_exc}",
+                        )
+                        continue
                     # For HTTP transport: skip re-dispatch if the token has already been
                     # consumed (meaning the run completed successfully via upload).
                     if run.result_transport == "http":

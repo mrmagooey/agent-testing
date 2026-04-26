@@ -834,3 +834,114 @@ async def test_compare_runs_logs_warning_for_malformed_finding(
         for record in caplog.records
         if record.levelno >= logging.WARNING
     ), f"Expected a warning for malformed finding, got: {[r.message for r in caplog.records]}"
+
+
+# ---------------------------------------------------------------------------
+# Test: reconcile() — K8s job-list exception does not halt orphan processing
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_reconcile_k8s_job_list_exception_continues(
+    tmp_path: Path, temp_db: Database
+):
+    """When list_namespaced_job raises, reconcile() should log the error and
+    continue processing orphaned runs (treating dispatched_run_ids as empty)."""
+    import sec_review_framework.coordinator as coord_module
+
+    coord = _make_coordinator(tmp_path, temp_db)
+    coord.storage_root.mkdir(parents=True, exist_ok=True)
+
+    run = _make_run()
+
+    await temp_db.create_experiment(
+        experiment_id=EXPERIMENT_ID,
+        config_json="{}",
+        total_runs=1,
+        max_cost_usd=None,
+    )
+    await temp_db.create_run(
+        run_id=run.id,
+        experiment_id=EXPERIMENT_ID,
+        config_json=run.model_dump_json(),
+        model_id=run.model_id,
+        strategy=run.strategy.value,
+        tool_variant=run.tool_variant.value,
+        review_profile=run.review_profile.value,
+        verification_variant=run.verification_variant.value,
+    )
+
+    config_dir = coord.storage_root / "config" / "runs"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / f"{run.id}.json").write_text(run.model_dump_json())
+
+    fake_k8s = MagicMock()
+    fake_k8s.list_namespaced_job.side_effect = RuntimeError("K8s API unreachable")
+    coord.k8s_client = fake_k8s
+
+    original_k8s_available = coord_module.K8S_AVAILABLE
+    coord_module.K8S_AVAILABLE = True
+
+    dispatch_calls: list[str] = []
+    original_create = coord._create_k8s_job
+
+    def _tracked_create(exp_id, r):
+        dispatch_calls.append(r.id)
+
+    coord._create_k8s_job = _tracked_create  # type: ignore[method-assign]
+
+    try:
+        await asyncio.wait_for(coord.reconcile(), timeout=5.0)
+    finally:
+        coord_module.K8S_AVAILABLE = original_k8s_available
+
+    assert run.id in dispatch_calls, (
+        "reconcile() should still dispatch orphaned run even when job-list raises"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test: reconcile() — orphaned run with malformed config file is marked failed
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_reconcile_orphaned_run_malformed_config_marked_failed(
+    tmp_path: Path, temp_db: Database
+):
+    """A pending orphaned run whose config file contains malformed JSON should be
+    transitioned to 'failed' rather than causing reconcile() to raise."""
+    coord = _make_coordinator(tmp_path, temp_db)
+    coord.storage_root.mkdir(parents=True, exist_ok=True)
+
+    run = _make_run()
+
+    await temp_db.create_experiment(
+        experiment_id=EXPERIMENT_ID,
+        config_json="{}",
+        total_runs=1,
+        max_cost_usd=None,
+    )
+    await temp_db.create_run(
+        run_id=run.id,
+        experiment_id=EXPERIMENT_ID,
+        config_json=run.model_dump_json(),
+        model_id=run.model_id,
+        strategy=run.strategy.value,
+        tool_variant=run.tool_variant.value,
+        review_profile=run.review_profile.value,
+        verification_variant=run.verification_variant.value,
+    )
+
+    config_dir = coord.storage_root / "config" / "runs"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / f"{run.id}.json").write_text("{this is not valid json ...")
+
+    await asyncio.wait_for(coord.reconcile(), timeout=5.0)
+
+    db_run = await temp_db.get_run(run.id)
+    assert db_run is not None
+    assert db_run["status"] == "failed", (
+        f"Expected 'failed' for malformed-config run, got '{db_run['status']}'"
+    )
+    assert db_run.get("error") is not None
