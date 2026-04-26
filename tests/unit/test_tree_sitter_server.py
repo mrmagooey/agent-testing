@@ -30,6 +30,17 @@ except ImportError as _e:
 
 pytestmark = pytest.mark.skipif(not _TREE_SITTER_AVAILABLE, reason=_SKIP_REASON)
 
+# Probe whether Query.captures() is available (tree-sitter >= 0.22 changed the API).
+_QUERY_CAPTURES_SUPPORTED = False
+if _TREE_SITTER_AVAILABLE:
+    try:
+        from tree_sitter import Language, Parser, Query
+        _QUERY_CAPTURES_SUPPORTED = hasattr(Query, "captures")
+    except Exception:
+        pass
+
+_SKIP_CAPTURES_REASON = "tree-sitter Query.captures() not available in this version"
+
 
 # ---------------------------------------------------------------------------
 # Helpers / inline source snippets
@@ -253,16 +264,12 @@ class TestHappyPathPython:
         with pytest.raises(ValueError, match="Unsupported file extension"):
             _run_query(tmp_path, "data.txt", "(identifier) @id", 50)
 
+    @pytest.mark.skipif(not _QUERY_CAPTURES_SUPPORTED, reason=_SKIP_CAPTURES_REASON)
     def test_query_valid_call_does_not_raise_value_error(self, py_repo: Path) -> None:
         from sec_review_framework.tools.extensions.tree_sitter_server import _run_query
         q = "(function_definition name: (identifier) @fn)"
-        try:
-            result = _run_query(py_repo, "app.py", q, 50)
-            assert isinstance(result, str)
-        except (AttributeError, Exception) as exc:
-            if "captures" in str(exc) or "Query" in str(exc) or "AttributeError" in type(exc).__name__:
-                pytest.skip(f"tree-sitter Query.captures API not available in this version: {exc}")
-            raise
+        result = _run_query(py_repo, "app.py", q, 50)
+        assert isinstance(result, str)
 
 
 # ---------------------------------------------------------------------------
@@ -285,16 +292,12 @@ class TestHappyPathJavaScript:
         result = _find_symbol(js_repo, "util.js", "greet")
         assert "greet" in result
 
+    @pytest.mark.skipif(not _QUERY_CAPTURES_SUPPORTED, reason=_SKIP_CAPTURES_REASON)
     def test_query_function_declaration(self, js_repo: Path) -> None:
         from sec_review_framework.tools.extensions.tree_sitter_server import _run_query
         q = "(function_declaration name: (identifier) @fn)"
-        try:
-            result = _run_query(js_repo, "util.js", q, 50)
-            assert isinstance(result, str)
-        except (AttributeError, Exception) as exc:
-            if "captures" in str(exc) or "Query" in str(exc) or "AttributeError" in type(exc).__name__:
-                pytest.skip(f"tree-sitter Query.captures API not available in this version: {exc}")
-            raise
+        result = _run_query(js_repo, "util.js", q, 50)
+        assert isinstance(result, str)
 
 
 # ---------------------------------------------------------------------------
@@ -321,17 +324,13 @@ class TestEmptyInput:
         assert isinstance(result, str)
         assert len(result) > 0
 
+    @pytest.mark.skipif(not _QUERY_CAPTURES_SUPPORTED, reason=_SKIP_CAPTURES_REASON)
     def test_empty_python_file_query_does_not_raise_security_error(self, tmp_path: Path) -> None:
         from sec_review_framework.tools.extensions.tree_sitter_server import _run_query
         (tmp_path / "empty.py").write_text("")
         q = "(function_definition name: (identifier) @fn)"
-        try:
-            result = _run_query(tmp_path, "empty.py", q, 50)
-            assert isinstance(result, str)
-        except (AttributeError, Exception) as exc:
-            if "captures" in str(exc) or "AttributeError" in type(exc).__name__:
-                pytest.skip(f"tree-sitter Query.captures API not available in this version: {exc}")
-            raise
+        result = _run_query(tmp_path, "empty.py", q, 50)
+        assert isinstance(result, str)
 
 
 # ---------------------------------------------------------------------------
@@ -354,15 +353,11 @@ class TestDispatch:
         result = _dispatch("list_functions", {"path": "app.py"}, py_repo)
         assert "authenticate" in result
 
+    @pytest.mark.skipif(not _QUERY_CAPTURES_SUPPORTED, reason=_SKIP_CAPTURES_REASON)
     def test_dispatch_query(self, py_repo: Path) -> None:
         from sec_review_framework.tools.extensions.tree_sitter_server import _dispatch
-        try:
-            result = _dispatch("query", {"path": "app.py", "query_string": "(identifier) @id"}, py_repo)
-            assert isinstance(result, str)
-        except (AttributeError, Exception) as exc:
-            if "captures" in str(exc) or "AttributeError" in type(exc).__name__:
-                pytest.skip(f"tree-sitter Query.captures API not available in this version: {exc}")
-            raise
+        result = _dispatch("query", {"path": "app.py", "query_string": "(identifier) @id"}, py_repo)
+        assert isinstance(result, str)
 
     def test_dispatch_unknown_tool_raises(self, py_repo: Path) -> None:
         from sec_review_framework.tools.extensions.tree_sitter_server import _dispatch
