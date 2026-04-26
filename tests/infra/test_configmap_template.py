@@ -23,6 +23,8 @@ requires_helm = pytest.mark.skipif(
     reason="helm CLI not installed",
 )
 
+_TEST_ENCRYPTION_KEY = "dGVzdC1mZXJuZXQta2V5LWZvci1oZWxtLXJlbmRlcg=="
+
 
 def _render_chart(values_file: str | None = None) -> list[dict]:
     cmd = [
@@ -31,13 +33,35 @@ def _render_chart(values_file: str | None = None) -> list[dict]:
         # Test-only Fernet key so the chart can render. The chart `required`s
         # this when secrets.create=true; profiles that disable secret creation
         # ignore the override.
-        "--set", "secrets.encryptionKey=dGVzdC1mZXJuZXQta2V5LWZvci1oZWxtLXJlbmRlcg==",
+        "--set", f"secrets.encryptionKey={_TEST_ENCRYPTION_KEY}",
     ]
     if values_file is not None:
         cmd.extend(["--values", str(CHART_DIR / values_file)])
     result = subprocess.run(cmd, capture_output=True, text=True, check=True)
     docs = list(yaml.safe_load_all(result.stdout))
     return [d for d in docs if d is not None]
+
+
+def _render_chart_with_sets(extra_sets: list[str], values_file: str | None = None) -> list[dict]:
+    cmd = [
+        "helm", "template", "sec-review", str(CHART_DIR),
+        "--namespace", "sec-review",
+        "--set", f"secrets.encryptionKey={_TEST_ENCRYPTION_KEY}",
+    ]
+    for kv in extra_sets:
+        cmd.extend(["--set", kv])
+    if values_file is not None:
+        cmd.extend(["--values", str(CHART_DIR / values_file)])
+    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    docs = list(yaml.safe_load_all(result.stdout))
+    return [d for d in docs if d is not None]
+
+
+def _get_coordinator_env(docs: list[dict]) -> dict[str, str]:
+    deployments = [d for d in docs if d.get("kind") == "Deployment"]
+    assert deployments, "No Deployment rendered"
+    container = deployments[0]["spec"]["template"]["spec"]["containers"][0]
+    return {e["name"]: e["value"] for e in container["env"] if "value" in e}
 
 
 def _get_experiment_configmap(docs: list[dict]) -> dict:
@@ -143,3 +167,99 @@ def test_semgrep_enabled_flag_flows_through_deployment() -> None:
     assert env.get("TOOL_EXT_SEMGREP_AVAILABLE") == "false", (
         "Setting workerTools.semgrep.enabled=false must propagate to TOOL_EXT_SEMGREP_AVAILABLE=false"
     )
+
+
+# ---------------------------------------------------------------------------
+# Env-var substitution: Helm values flow into coordinator env vars correctly
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.infra
+@requires_helm
+def test_storage_root_env_var_reflects_override() -> None:
+    docs = _render_chart_with_sets(["coordinator.storageRoot=/mnt/custom"])
+    env = _get_coordinator_env(docs)
+    assert env.get("STORAGE_ROOT") == "/mnt/custom", (
+        "coordinator.storageRoot override must propagate to STORAGE_ROOT env var"
+    )
+
+
+@pytest.mark.infra
+@requires_helm
+def test_local_llm_base_url_absent_when_blank() -> None:
+    docs = _render_chart_with_sets(["providerEndpoints.localLlm.baseUrl="])
+    env = _get_coordinator_env(docs)
+    assert "LOCAL_LLM_BASE_URL" not in env, (
+        "LOCAL_LLM_BASE_URL must be absent from coordinator env when providerEndpoints.localLlm.baseUrl is empty"
+    )
+
+
+@pytest.mark.infra
+@requires_helm
+def test_local_llm_base_url_present_when_set() -> None:
+    docs = _render_chart_with_sets(["providerEndpoints.localLlm.baseUrl=http://192.168.1.10:8080"])
+    env = _get_coordinator_env(docs)
+    assert env.get("LOCAL_LLM_BASE_URL") == "http://192.168.1.10:8080", (
+        "LOCAL_LLM_BASE_URL must reflect providerEndpoints.localLlm.baseUrl when non-empty"
+    )
+
+
+@pytest.mark.infra
+@requires_helm
+def test_extra_env_passes_through_to_deployment() -> None:
+    docs = _render_chart_with_sets(["coordinator.extraEnv[0].name=LOG_LEVEL", "coordinator.extraEnv[0].value=DEBUG"])
+    env = _get_coordinator_env(docs)
+    assert env.get("LOG_LEVEL") == "DEBUG", (
+        "coordinator.extraEnv entries must appear verbatim in the coordinator container env"
+    )
+
+
+@pytest.mark.infra
+@requires_helm
+def test_all_four_tool_ext_env_vars_present_by_default() -> None:
+    docs = _render_chart()
+    env = _get_coordinator_env(docs)
+    for var in ("TOOL_EXT_DEVDOCS_AVAILABLE", "TOOL_EXT_LSP_AVAILABLE",
+                "TOOL_EXT_SEMGREP_AVAILABLE", "TOOL_EXT_TREE_SITTER_AVAILABLE"):
+        assert var in env, f"{var} must be present in coordinator env by default"
+    for var in ("TOOL_EXT_DEVDOCS_AVAILABLE", "TOOL_EXT_LSP_AVAILABLE",
+                "TOOL_EXT_SEMGREP_AVAILABLE", "TOOL_EXT_TREE_SITTER_AVAILABLE"):
+        assert env[var] == "true", f"{var} must default to 'true'"
+
+
+# ---------------------------------------------------------------------------
+# Invalid tool extension names: closed set enforced at Helm and Python layers
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.infra
+@requires_helm
+def test_unknown_worker_tools_key_does_not_inject_tool_ext_env_var() -> None:
+    docs = _render_chart_with_sets(["workerTools.fakeExt.enabled=true"])
+    env = _get_coordinator_env(docs)
+    known_tool_ext_vars = {
+        "TOOL_EXT_DEVDOCS_AVAILABLE",
+        "TOOL_EXT_LSP_AVAILABLE",
+        "TOOL_EXT_SEMGREP_AVAILABLE",
+        "TOOL_EXT_TREE_SITTER_AVAILABLE",
+    }
+    unexpected = {k for k in env if k.startswith("TOOL_EXT_") and k not in known_tool_ext_vars}
+    assert not unexpected, (
+        f"Unknown workerTools key must not inject extra TOOL_EXT_* env vars; found: {unexpected}"
+    )
+
+
+@pytest.mark.infra
+def test_tool_extension_enum_rejects_invalid_name() -> None:
+    from sec_review_framework.data.experiment import ToolExtension
+    with pytest.raises(ValueError):
+        ToolExtension("INVALID_EXTENSION")
+
+
+@pytest.mark.infra
+def test_tool_extension_enum_accepts_all_valid_names() -> None:
+    from sec_review_framework.data.experiment import ToolExtension
+    assert ToolExtension("devdocs") is ToolExtension.DEVDOCS
+    assert ToolExtension("lsp") is ToolExtension.LSP
+    assert ToolExtension("semgrep") is ToolExtension.SEMGREP
+    assert ToolExtension("tree_sitter") is ToolExtension.TREE_SITTER
