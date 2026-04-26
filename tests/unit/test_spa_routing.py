@@ -5,7 +5,7 @@ These tests verify:
   - GET /experiments/new with Accept: application/json falls through to the API.
   - GET /api/experiments strips the /api prefix and routes to the API handler.
   - GET /api/health strips the /api prefix and returns healthy.
-  - Malformed request paths (control chars, very long paths, encoded paths) are
+  - Malformed request paths (backslash-prefixed, percent-encoded traversal, very long paths) are
     handled safely without crashing the middleware.
   - Filesystem errors during SPA fallback (file disappears between exists() and
     FileResponse.__call__) produce a 500 response, not a worker crash.
@@ -14,9 +14,8 @@ These tests verify:
 from __future__ import annotations
 
 import os
-import stat
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
