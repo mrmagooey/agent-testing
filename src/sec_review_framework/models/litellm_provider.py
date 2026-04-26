@@ -85,6 +85,8 @@ class LiteLLMProvider(ModelProvider):
             entry: dict[str, Any] = {"role": msg.role, "content": msg.content}
             if msg.tool_call_id is not None:
                 entry["tool_call_id"] = msg.tool_call_id
+            if msg.tool_calls is not None:
+                entry["tool_calls"] = msg.tool_calls
             litellm_messages.append(entry)
 
         kwargs: dict[str, Any] = {

@@ -13,6 +13,9 @@ class Message:
     role: str  # "user" | "assistant" | "tool"
     content: str
     tool_call_id: str | None = None
+    # OpenAI/LiteLLM tool_calls array for assistant turns that made tool calls.
+    # Each element: {"id": "...", "type": "function", "function": {"name": "...", "arguments": "..."}}
+    tool_calls: list[dict[str, Any]] | None = None
 
 
 @dataclass
@@ -111,6 +114,8 @@ class ModelProvider(ABC):
                     entry: dict[str, Any] = {"role": msg.role, "content": msg.content}
                     if msg.tool_call_id is not None:
                         entry["tool_call_id"] = msg.tool_call_id
+                    if msg.tool_calls is not None:
+                        entry["tool_calls"] = msg.tool_calls
                     self.conversation_log.append(entry)
                 self.conversation_log.append(
                     {

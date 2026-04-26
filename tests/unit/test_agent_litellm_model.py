@@ -741,3 +741,199 @@ async def test_request_does_not_block_event_loop() -> None:
     flag_task = asyncio.create_task(set_flag())
     await asyncio.gather(run_task, flag_task)
     assert flag[0] is True, "Event loop was blocked; asyncio.to_thread not working"
+
+
+# ---------------------------------------------------------------------------
+# Tests: Bug #1 — multi-turn tool replay wire-format correctness
+# ---------------------------------------------------------------------------
+#
+# ValidatingProvider rejects message sequences where a role="tool" message
+# references a tool_call_id that was not declared in a preceding assistant
+# turn's tool_calls array.  This is the regression guard for the bug where
+# ToolCallPart data was silently dropped from the history.
+# ---------------------------------------------------------------------------
+
+
+class ValidatingProvider(ScriptedLiteLLMProvider):
+    """ScriptedLiteLLMProvider that asserts LiteLLM message list integrity.
+
+    Raises AssertionError on any call where a tool-result message references a
+    tool_call_id that does not appear in the immediately preceding assistant
+    turn's tool_calls array.  This rejects the broken wire format produced
+    before the Bug #1 fix.
+    """
+
+    def _do_complete(
+        self,
+        messages: list[Message],
+        tools: list[ToolDefinition] | None,
+        system_prompt: str | None,
+        max_tokens: int,
+        temperature: float,
+    ) -> FrameworkModelResponse:
+        # Collect tool_call_ids declared in assistant turns.
+        declared_ids: set[str] = set()
+        for msg in messages:
+            if msg.role == "assistant" and msg.tool_calls:
+                for tc in msg.tool_calls:
+                    declared_ids.add(tc["id"])
+
+        # Every tool-result message must reference a declared id.
+        for msg in messages:
+            if msg.role == "tool" and msg.tool_call_id is not None:
+                assert msg.tool_call_id in declared_ids, (
+                    f"tool message references tool_call_id={msg.tool_call_id!r} "
+                    f"which was never declared in an assistant tool_calls array. "
+                    f"Declared IDs: {declared_ids}"
+                )
+
+        return super()._do_complete(messages, tools, system_prompt, max_tokens, temperature)
+
+
+class TestConvertMessagesToolCallPart:
+    """ToolCallPart in ModelResponse must populate Message.tool_calls."""
+
+    def _make_model(self) -> LiteLLMModel:
+        return LiteLLMModel(ScriptedLiteLLMProvider([]))
+
+    def test_model_response_with_tool_call_part_populates_tool_calls(self) -> None:
+        model = self._make_model()
+        pai_messages: list[Any] = [
+            ModelResponse(
+                parts=[ToolCallPart(tool_name="read_file", args='{"path": "a.py"}', tool_call_id="tc1")],
+                model_name="fake/test",
+            )
+        ]
+        result = model._convert_messages(pai_messages)
+        assert len(result) == 1
+        assert result[0].role == "assistant"
+        assert result[0].tool_calls is not None
+        assert len(result[0].tool_calls) == 1
+        tc = result[0].tool_calls[0]
+        assert tc["id"] == "tc1"
+        assert tc["type"] == "function"
+        assert tc["function"]["name"] == "read_file"
+        assert json.loads(tc["function"]["arguments"]) == {"path": "a.py"}
+
+    def test_model_response_text_and_tool_call_part(self) -> None:
+        model = self._make_model()
+        pai_messages: list[Any] = [
+            ModelResponse(
+                parts=[
+                    TextPart(content="Let me read that file."),
+                    ToolCallPart(tool_name="read_file", args='{"path": "b.py"}', tool_call_id="tc2"),
+                ],
+                model_name="fake/test",
+            )
+        ]
+        result = model._convert_messages(pai_messages)
+        assert len(result) == 1
+        assert result[0].content == "Let me read that file."
+        assert result[0].tool_calls is not None
+        assert result[0].tool_calls[0]["id"] == "tc2"
+
+    def test_model_response_no_tool_calls_yields_none(self) -> None:
+        model = self._make_model()
+        pai_messages: list[Any] = [
+            ModelResponse(
+                parts=[TextPart(content="plain text")],
+                model_name="fake/test",
+            )
+        ]
+        result = model._convert_messages(pai_messages)
+        assert result[0].tool_calls is None
+
+    def test_multiple_tool_call_parts_all_captured(self) -> None:
+        model = self._make_model()
+        pai_messages: list[Any] = [
+            ModelResponse(
+                parts=[
+                    ToolCallPart(tool_name="read_file", args='{"path": "a.py"}', tool_call_id="tc-a"),
+                    ToolCallPart(tool_name="read_file", args='{"path": "b.py"}', tool_call_id="tc-b"),
+                ],
+                model_name="fake/test",
+            )
+        ]
+        result = model._convert_messages(pai_messages)
+        assert len(result) == 1
+        assert result[0].tool_calls is not None
+        assert len(result[0].tool_calls) == 2
+        ids = {tc["id"] for tc in result[0].tool_calls}
+        assert ids == {"tc-a", "tc-b"}
+
+
+@pytest.mark.asyncio
+async def test_multi_turn_tool_replay_wire_format_valid() -> None:
+    """Multi-turn flow through ValidatingProvider succeeds after Bug #1 fix.
+
+    Before the fix: the assistant turn's tool_calls were dropped from Message,
+    so ValidatingProvider would raise AssertionError when the tool-return turn
+    arrived referencing the orphaned tool_call_id.
+
+    After the fix: Message.tool_calls is populated, so the validator passes.
+    """
+    provider = ValidatingProvider(
+        responses=[
+            {
+                "content": "",
+                "tool_calls": [{"name": "read_file", "id": "tc-multi", "input": {"path": "x.py"}}],
+                "input_tokens": 100,
+                "output_tokens": 20,
+            },
+            {
+                "content": "Found an issue.",
+                "tool_calls": [],
+                "input_tokens": 150,
+                "output_tokens": 30,
+            },
+        ]
+    )
+    model = LiteLLMModel(provider)
+    agent: Agent[None, str] = Agent(model)
+
+    @agent.tool_plain
+    def read_file(path: str) -> str:  # type: ignore[return]
+        return f"contents of {path}"
+
+    result = await agent.run("Review x.py")
+    assert "Found an issue" in result.output
+
+
+@pytest.mark.asyncio
+async def test_validating_provider_rejects_orphaned_tool_return() -> None:
+    """ValidatingProvider raises AssertionError when tool_calls are missing.
+
+    This test documents the pre-fix failure mode: if a caller manually builds
+    a message list where the assistant turn has no tool_calls but a subsequent
+    tool message references a tool_call_id, the validator must reject it.
+    """
+    provider = ValidatingProvider(
+        responses=[
+            {
+                "content": "done",
+                "tool_calls": [],
+                "input_tokens": 10,
+                "output_tokens": 5,
+            }
+        ]
+    )
+    model = LiteLLMModel(provider)
+
+    # Build a broken message list directly: assistant with no tool_calls,
+    # followed by a tool message referencing an id that was never declared.
+    broken_messages: list[Any] = [
+        ModelRequest(parts=[UserPromptPart(content="hi")]),
+        # Assistant turn with a ToolCallPart that has been MANUALLY stripped:
+        # simulate the pre-fix state by using a raw Message with no tool_calls.
+        # We can't trigger this via the normal agent flow after the fix, so we
+        # call _convert_messages and then strip tool_calls to replicate the bug.
+    ]
+
+    fw_messages = model._convert_messages(broken_messages)
+    # Insert an orphaned tool return referencing id "ghost-id"
+    from sec_review_framework.models.base import Message as FwMessage
+    fw_messages.append(FwMessage(role="assistant", content=""))
+    fw_messages.append(FwMessage(role="tool", content="result", tool_call_id="ghost-id"))
+
+    with pytest.raises(AssertionError, match="tool_call_id=.ghost-id."):
+        provider._do_complete(fw_messages, None, None, 100, 0.2)

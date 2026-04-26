@@ -345,14 +345,30 @@ class LiteLLMModel(Model):
                         result.append(Message(role="user", content=content))
 
             elif isinstance(msg, ModelResponse):
-                # Build a plain assistant message.  The framework's Message has no
-                # tool_calls field; tool call details live in the following tool-return
-                # messages so we emit text content only here.
                 text_content = ""
+                wire_tool_calls: list[dict[str, Any]] = []
                 for part in msg.parts:
                     if isinstance(part, TextPart):
                         text_content = part.content
-                result.append(Message(role="assistant", content=text_content))
+                    elif isinstance(part, ToolCallPart):
+                        # Reconstruct the OpenAI/LiteLLM wire format expected by
+                        # providers so that subsequent tool-return messages referencing
+                        # tool_call_id can be matched to an existing tool call.
+                        args: str = (
+                            part.args
+                            if isinstance(part.args, str)
+                            else json.dumps(part.args)
+                        )
+                        wire_tool_calls.append({
+                            "id": part.tool_call_id,
+                            "type": "function",
+                            "function": {"name": part.tool_name, "arguments": args},
+                        })
+                result.append(Message(
+                    role="assistant",
+                    content=text_content,
+                    tool_calls=wire_tool_calls if wire_tool_calls else None,
+                ))
 
         return result
 

@@ -827,3 +827,320 @@ class TestInvokeSubagentBatchRoleResolution:
 
         with pytest.raises(ModelRetry, match="Unknown subagent role"):
             await invoke_batch(ctx, role="totally_unknown_role", inputs=[{}])
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for bugs #4, #7, #10, #11
+# ---------------------------------------------------------------------------
+
+
+class TestModelProviderCache:
+    """Regression tests for bugs #10 and #4/#11 (provider sharing via cache)."""
+
+    def test_two_children_same_model_id_share_provider(self) -> None:
+        """Bug #10 regression: two children with same model_id share one ModelProvider.
+
+        When model_provider_cache is set on SubagentDeps, _run_child fetches the
+        provider from the cache keyed by model_id.  Two invocations for the same
+        model_id must return the *same object*, not construct separate instances.
+        """
+        from sec_review_framework.strategies.common import ModelProviderCache
+
+        # One scripted provider that can serve two responses sequentially.
+        shared_provider = ScriptedLiteLLMProvider(
+            responses=[
+                {"content": "child-a", "tool_calls": [], "input_tokens": 7, "output_tokens": 3},
+                {"content": "child-b", "tool_calls": [], "input_tokens": 8, "output_tokens": 4},
+            ],
+            model_name="fake/shared",
+        )
+        cache = ModelProviderCache()
+        cache.put("fake/shared", shared_provider)
+
+        strategy = _make_strategy(model_id="fake/shared")
+        deps = SubagentDeps(
+            depth=0,
+            max_depth=3,
+            invocations=0,
+            max_invocations=100,
+            max_batch_size=32,
+            available_roles={"reviewer"},
+            subagent_strategies={"reviewer": strategy},
+            tool_registry=ToolRegistry(),
+            model_provider_cache=cache,
+        )
+
+        # Run two children sequentially; both must use the shared provider.
+        import asyncio
+
+        async def _run_two():
+            await _run_child(strategy, {"input": "a"}, deps)
+            await _run_child(strategy, {"input": "b"}, deps)
+
+        asyncio.run(_run_two())
+
+        # The shared provider should have accumulated both invocations.
+        assert len(shared_provider.token_log) == 2
+        # No new provider was constructed outside the cache.
+        assert "fake/shared" in cache
+
+    def test_child_token_log_accumulates_on_shared_provider(self) -> None:
+        """Bug #4 regression: child token usage accumulates on the shared provider.
+
+        After two child invocations, the shared provider's token_log must contain
+        entries for every child call so callers can sum the total spend.
+        """
+        from sec_review_framework.strategies.common import ModelProviderCache
+
+        shared_provider = ScriptedLiteLLMProvider(
+            responses=[
+                {"content": "r1", "tool_calls": [], "input_tokens": 10, "output_tokens": 5},
+                {"content": "r2", "tool_calls": [], "input_tokens": 20, "output_tokens": 8},
+            ],
+            model_name="fake/billing",
+        )
+        cache = ModelProviderCache()
+        cache.put("fake/billing", shared_provider)
+
+        strategy = _make_strategy(model_id="fake/billing")
+        deps = SubagentDeps(
+            depth=0,
+            max_depth=3,
+            invocations=0,
+            max_invocations=100,
+            max_batch_size=32,
+            available_roles={"specialist"},
+            subagent_strategies={"specialist": strategy},
+            tool_registry=ToolRegistry(),
+            model_provider_cache=cache,
+        )
+
+        import asyncio
+
+        async def _run_both():
+            await asyncio.gather(
+                _run_child(strategy, {"x": 1}, deps),
+                _run_child(strategy, {"x": 2}, deps),
+            )
+
+        asyncio.run(_run_both())
+
+        # Both child calls contributed token entries.
+        assert len(shared_provider.token_log) == 2
+        total_input = sum(e.input_tokens for e in shared_provider.token_log)
+        assert total_input == 30  # 10 + 20
+
+    def test_child_conversation_log_accumulates_on_shared_provider(self) -> None:
+        """Bug #11 regression: child conversation turns accumulate on shared provider.
+
+        conversation_log must contain entries from every child invocation so
+        worker.py can write a complete conversation.jsonl artifact.
+        """
+        from sec_review_framework.strategies.common import ModelProviderCache
+
+        shared_provider = ScriptedLiteLLMProvider(
+            responses=[
+                {"content": "turn1", "tool_calls": [], "input_tokens": 5, "output_tokens": 3},
+            ],
+            model_name="fake/conv",
+        )
+        cache = ModelProviderCache()
+        cache.put("fake/conv", shared_provider)
+
+        strategy = _make_strategy(model_id="fake/conv")
+        deps = SubagentDeps(
+            depth=0,
+            max_depth=3,
+            invocations=0,
+            max_invocations=100,
+            max_batch_size=32,
+            available_roles={"specialist"},
+            subagent_strategies={"specialist": strategy},
+            tool_registry=ToolRegistry(),
+            model_provider_cache=cache,
+        )
+
+        import asyncio
+
+        asyncio.run(_run_child(strategy, {"q": "hello"}, deps))
+
+        # The shared provider's conversation_log must contain entries from the child.
+        assert len(shared_provider.conversation_log) > 0
+
+    def test_child_deps_inherits_cache(self) -> None:
+        """Bug #10 regression: child_deps passes the cache by reference."""
+        from sec_review_framework.strategies.common import ModelProviderCache
+
+        cache = ModelProviderCache()
+        deps = SubagentDeps(
+            depth=0,
+            max_depth=3,
+            invocations=0,
+            max_invocations=100,
+            max_batch_size=32,
+            available_roles=set(),
+            subagent_strategies={},
+            tool_registry=ToolRegistry(),
+            model_provider_cache=cache,
+        )
+        child = deps.child_deps()
+        assert child.model_provider_cache is cache
+
+    def test_no_cache_falls_back_to_fresh_provider(self) -> None:
+        """Without a cache, _run_child still constructs a fresh provider (legacy behaviour)."""
+        strategy = _make_strategy(model_id="fake/nocache")
+        constructed: list[str] = []
+
+        def _fake_provider(model_name: str) -> ScriptedLiteLLMProvider:
+            constructed.append(model_name)
+            return ScriptedLiteLLMProvider(
+                responses=[{"content": "done", "tool_calls": [], "input_tokens": 2, "output_tokens": 1}]
+            )
+
+        deps = SubagentDeps(
+            depth=0,
+            max_depth=3,
+            invocations=0,
+            max_invocations=100,
+            max_batch_size=32,
+            available_roles={"reviewer"},
+            subagent_strategies={"reviewer": strategy},
+            tool_registry=ToolRegistry(),
+            model_provider_cache=None,
+        )
+
+        import asyncio
+
+        with patch(
+            "sec_review_framework.agent.subagent.LiteLLMProvider",
+            side_effect=_fake_provider,
+        ):
+            asyncio.run(_run_child(strategy, {}, deps))
+
+        assert len(constructed) == 1
+        assert constructed[0] == "fake/nocache"
+
+
+class TestRunChildAsync:
+    """Bug #7 regression: _run_child is async; no asyncio.run in the hot path."""
+
+    def test_run_child_is_coroutine(self) -> None:
+        """_run_child must be an async coroutine function, not a sync function."""
+        import inspect
+
+        assert inspect.iscoroutinefunction(_run_child)
+
+    def test_run_child_sync_works_from_thread_pool(self) -> None:
+        """_run_child_sync (the thin wrapper) works from a thread pool worker.
+
+        Simulates the _programmatic_fallback execution context: a
+        ThreadPoolExecutor thread with no running event loop calls
+        _run_child_sync, which internally uses asyncio.run.
+        """
+        import concurrent.futures
+
+        strategy = _make_strategy(model_id="fake/thread-test")
+        provider = ScriptedLiteLLMProvider(
+            responses=[{"content": "ok", "tool_calls": [], "input_tokens": 3, "output_tokens": 2}],
+            model_name="fake/thread-test",
+        )
+        deps = SubagentDeps(
+            depth=0,
+            max_depth=3,
+            invocations=0,
+            max_invocations=100,
+            max_batch_size=32,
+            available_roles={"reviewer"},
+            subagent_strategies={"reviewer": strategy},
+            tool_registry=ToolRegistry(),
+            model_provider_cache=None,
+        )
+
+        with patch(
+            "sec_review_framework.agent.subagent.LiteLLMProvider",
+            return_value=provider,
+        ):
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                fut = pool.submit(_run_child_sync, strategy, {}, deps)
+                result = fut.result()
+
+        assert isinstance(result, SubagentOutput)
+
+    @pytest.mark.asyncio
+    async def test_invoke_subagent_awaits_child_directly(self) -> None:
+        """invoke_subagent awaits _run_child directly without to_thread.
+
+        Verify it works inside an already-running event loop (the very situation
+        that caused 'asyncio.run() cannot be called from a running event loop').
+        """
+        strategy = _make_strategy(model_id="fake/async-single")
+        provider = ScriptedLiteLLMProvider(
+            responses=[{"content": "response", "tool_calls": [], "input_tokens": 4, "output_tokens": 2}],
+            model_name="fake/async-single",
+        )
+        deps = SubagentDeps(
+            depth=0,
+            max_depth=3,
+            invocations=0,
+            max_invocations=100,
+            max_batch_size=32,
+            available_roles={"specialist"},
+            subagent_strategies={"specialist": strategy},
+            tool_registry=ToolRegistry(),
+            model_provider_cache=None,
+        )
+        ctx = _make_run_context(deps)
+        invoke_subagent = make_invoke_subagent_tool()
+
+        with patch(
+            "sec_review_framework.agent.subagent.LiteLLMProvider",
+            return_value=provider,
+        ):
+            # This runs inside an already-running event loop (pytest-asyncio).
+            # If _run_child used asyncio.run(), it would raise
+            # "cannot be called from a running event loop".
+            result = await invoke_subagent(ctx, role="specialist", input={"task": "check"})
+
+        assert isinstance(result, SubagentOutput)
+
+    @pytest.mark.asyncio
+    async def test_invoke_subagent_batch_gather_works_in_event_loop(self) -> None:
+        """invoke_subagent_batch uses asyncio.gather, works inside a running loop."""
+        strategy = _make_strategy(model_id="fake/async-batch")
+
+        def _make_provider() -> ScriptedLiteLLMProvider:
+            return ScriptedLiteLLMProvider(
+                responses=[{"content": "r", "tool_calls": [], "input_tokens": 3, "output_tokens": 1}],
+                model_name="fake/async-batch",
+            )
+
+        deps = SubagentDeps(
+            depth=0,
+            max_depth=3,
+            invocations=0,
+            max_invocations=100,
+            max_batch_size=32,
+            available_roles={"specialist"},
+            subagent_strategies={"specialist": strategy},
+            tool_registry=ToolRegistry(),
+            model_provider_cache=None,
+        )
+        ctx = _make_run_context(deps)
+        invoke_batch = make_invoke_subagent_batch_tool()
+
+        with patch(
+            "sec_review_framework.agent.subagent.LiteLLMProvider",
+            side_effect=[_make_provider(), _make_provider()],
+        ):
+            results = await invoke_batch(
+                ctx,
+                role="specialist",
+                inputs=[{"a": 1}, {"a": 2}],
+            )
+
+        assert len(results) == 2
+        assert all(isinstance(r, SubagentOutput) for r in results)
+
+
+# Import needed for TestRunChildAsync tests
+from sec_review_framework.agent.subagent import _run_child  # noqa: E402
