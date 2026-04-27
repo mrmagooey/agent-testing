@@ -781,6 +781,44 @@ keys (length 2, no DevDocs leak), and pre-existing parent-fixture
 
 5th spec to copy `mockStrategiesRoutes` — extraction target.
 
+### 33. Server-side validation gates the strategy-save flow
+
+**Spec:** `frontend/e2e/strategy-validation.spec.ts` + `frontend/e2e/helpers/mockStrategiesRoutes.ts` (commit `9778a0d`)
+
+> As a security researcher saving a new or forked strategy, I want
+> server-side validation to fire FIRST and surface a list of validation
+> errors as a red error block — so I can fix mistakes (missing required
+> placeholders, invalid model_id, etc.) before the strategy commits.
+> AND if the validation endpoint itself fails or is unavailable, I
+> want the save to fall through to the create POST so a transient
+> validation outage doesn't block me.
+
+Covers the save flow at `StrategyEditor.tsx:845-868`. When
+`validateStrategy('__new__')` returns `{valid: false, errors: [...]}`,
+the red error block renders with all errors as `<li>` items and the
+create POST is short-circuited. When the validation endpoint network-
+aborts or returns 500, the production `.catch(() => null)` silently
+swallows the failure and the save proceeds to `createStrategy`. The
+button shows "Saving…" while in-flight. `createStrategy` 400 surfaces
+`err.message` in `saveErrors`.
+
+**Critical reviewer-caught semantic**: Test 8 verifies the
+second-click error-clear flow using `page.unroute(pattern, handler)`
+with a NAMED handler reference. The bare `page.unroute(pattern)`
+form would remove BOTH the per-test failing override AND the base
+helper's `{valid:true}` handler — the unmatched validation request
+would then fall through to apiFetch's `.catch(() => null)`, silently
+bypassing validation and proceeding to the create POST for the wrong
+reason. The named-handler form is the canonical Playwright pattern.
+
+**Helper extraction**: this iteration also creates
+`frontend/e2e/helpers/mockStrategiesRoutes.ts` exporting
+`mockStrategiesRoutes`, `STRATEGY_BUILTIN_SINGLE`,
+`FULL_BUILTIN_SINGLE`, and `CREATED_FORK`. Five existing specs (iters
+2, 15, 30, 31, 32) keep their inline copies — migrating them is a
+separate refactor. Going forward, new strategy specs should import
+from the helper.
+
 ---
 
 ## Candidate stories for future iterations
