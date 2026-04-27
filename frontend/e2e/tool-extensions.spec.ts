@@ -2,131 +2,19 @@
  * Tool-extensions e2e spec.
  *
  * Covers:
- *  1. Checkbox rendering — Tree-sitter, LSP, DevDocs labels visible.
- *  2. DevDocs disabled (available: false in mock).
- *  3. Selecting Tree-sitter + LSP and submitting → POST body contains a
- *     tool_extension_sets entry with both "lsp" and "tree_sitter" (sorted
- *     ascending, as per the CLAUDE.md _ext-<sorted> invariant).
  *  4. Extension badges rendered in the matrix table when the results fixture
  *     carries tool_extensions on the run object.
- *  5a. Empty-extensions path: POST body has no non-empty tool_extension_sets.
  *  5b. Run IDs shown in the UI do NOT carry an `_ext-` suffix when the fixture
  *      contains no tool_extensions (legacy byte-identical path).
+ *
+ * Tests 1–3 and 5a (checkbox rendering and POST body assertions for the
+ * tool-extension selector on /experiments/new) were deleted: the Tool
+ * Extensions section was removed from /experiments/new during the strategy-
+ * editor refactor. Those UI surfaces no longer exist on that page.
  */
 
 import { test, expect } from '@playwright/test'
 import { mockApi } from './helpers/mockApi'
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/** Fill the minimum required fields so the form is submittable. */
-async function fillRequiredFields(page: import('@playwright/test').Page) {
-  await page.locator('select').first().selectOption('cve-2024-python')
-  await page.getByText('GPT-4o').first().click()
-  await page
-    .locator('label')
-    .filter({ hasText: 'zero_shot' })
-    .locator('input[type="checkbox"]')
-    .check()
-}
-
-/** Wait until the dataset <select> has real options loaded. */
-async function waitForPageReady(page: import('@playwright/test').Page) {
-  await page.waitForFunction(() => {
-    const sel = document.querySelector('select')
-    return sel !== null && sel.options.length > 1
-  })
-  await page.waitForSelector('[placeholder="Search models…"]', { state: 'visible' })
-}
-
-// ---------------------------------------------------------------------------
-// Test 1: Checkboxes render with correct labels
-// ---------------------------------------------------------------------------
-
-test('renders Tree-sitter, LSP, and DevDocs tool-extension labels', async ({ page }) => {
-  await mockApi(page)
-  await page.goto('/experiments/new')
-  await waitForPageReady(page)
-
-  await expect(page.locator('label').filter({ hasText: 'Tree-sitter' })).toBeVisible()
-  await expect(page.locator('label').filter({ hasText: 'LSP' })).toBeVisible()
-  await expect(page.locator('label').filter({ hasText: 'DevDocs' })).toBeVisible()
-})
-
-// ---------------------------------------------------------------------------
-// Test 2: DevDocs is disabled (available: false in the mock)
-// ---------------------------------------------------------------------------
-
-test('DevDocs checkbox is disabled because available is false in the mock', async ({ page }) => {
-  await mockApi(page)
-  await page.goto('/experiments/new')
-  await waitForPageReady(page)
-
-  const devdocsCheckbox = page
-    .locator('label')
-    .filter({ hasText: 'DevDocs' })
-    .locator('input[type="checkbox"]')
-
-  await expect(devdocsCheckbox).toBeDisabled()
-})
-
-// ---------------------------------------------------------------------------
-// Test 3: Selecting Tree-sitter + LSP → POST body contains sorted set
-// ---------------------------------------------------------------------------
-
-test('selecting Tree-sitter and LSP produces a sorted tool_extension_sets entry in POST body', async ({ page }) => {
-  await mockApi(page)
-  await page.goto('/experiments/new')
-  await waitForPageReady(page)
-
-  await fillRequiredFields(page)
-
-  // Select Tree-sitter (available: true)
-  await page
-    .locator('label')
-    .filter({ hasText: 'Tree-sitter' })
-    .locator('input[type="checkbox"]')
-    .check()
-
-  // Select LSP (available: true)
-  await page
-    .locator('label')
-    .filter({ hasText: 'LSP' })
-    .locator('input[type="checkbox"]')
-    .check()
-
-  // Power-set mode is on by default — the POST body will include multiple
-  // extension sets ([], ["lsp"], ["tree_sitter"], ["lsp","tree_sitter"]).
-  // The CLAUDE.md invariant: the combined set must appear sorted ascending.
-  const postPromise = page.waitForRequest(
-    (req) => req.url().includes('/api/experiments') && req.method() === 'POST'
-  )
-
-  await page.getByRole('button', { name: 'Submit Experiment' }).click()
-
-  const req = await postPromise
-  const body = req.postDataJSON() as Record<string, unknown>
-
-  // tool_extension_sets is present and is an array
-  expect(Array.isArray(body.tool_extension_sets)).toBe(true)
-
-  const sets = body.tool_extension_sets as string[][]
-
-  // The full combined set must contain both "lsp" and "tree_sitter".
-  // When normalised to a sorted array it must equal ["lsp", "tree_sitter"]
-  // (alphabetical — "lsp" < "tree_sitter").
-  // This is the CLAUDE.md `_ext-<sorted>` invariant expressed at the API boundary.
-  const hasExpectedSet = sets.some(
-    (s) =>
-      JSON.stringify([...s].sort()) === JSON.stringify(['lsp', 'tree_sitter'])
-  )
-  expect(hasExpectedSet).toBe(
-    true,
-    'Expected a set containing both "lsp" and "tree_sitter" (sorted ascending) in tool_extension_sets'
-  )
-})
 
 // ---------------------------------------------------------------------------
 // Test 4: Extension badges render in the matrix table
@@ -179,39 +67,6 @@ test('extension badges render in the matrix table when runs have tool_extensions
   // The Ext column badges should render the extension names
   await expect(page.getByText('lsp').first()).toBeVisible()
   await expect(page.getByText('tree_sitter').first()).toBeVisible()
-})
-
-// ---------------------------------------------------------------------------
-// Test 5a: Empty extensions → POST body has no non-empty tool_extension_sets
-// ---------------------------------------------------------------------------
-
-test('submitting with no extensions selected omits non-empty tool_extension_sets from POST body', async ({ page }) => {
-  await mockApi(page)
-  await page.goto('/experiments/new')
-  await waitForPageReady(page)
-
-  await fillRequiredFields(page)
-
-  // Do NOT select any tool extensions (leave them all unchecked)
-
-  const postPromise = page.waitForRequest(
-    (req) => req.url().includes('/api/experiments') && req.method() === 'POST'
-  )
-
-  await page.getByRole('button', { name: 'Submit Experiment' }).click()
-
-  const req = await postPromise
-  const body = req.postDataJSON() as Record<string, unknown>
-
-  // When no extensions are selected the component sets tool_extension_sets to
-  // undefined, which is omitted during JSON serialisation. If it is present it
-  // must contain only the empty set (no extension combos that would generate
-  // _ext- suffixed run IDs).
-  if (body.tool_extension_sets !== undefined) {
-    const sets = body.tool_extension_sets as unknown[][]
-    const nonEmptySets = sets.filter((s) => Array.isArray(s) && s.length > 0)
-    expect(nonEmptySets).toHaveLength(0)
-  }
 })
 
 // ---------------------------------------------------------------------------
