@@ -411,6 +411,34 @@ sub-resource fetches fall through to the global `mockApi` handler.
 Boundary tests cover ratios 0.0249, 0.8 exact (no warning), 0.9
 (warning fires), and 0.98 (warning fires).
 
+### 21. Track experiment progress at a glance via the colored progress bar
+
+**Spec:** `frontend/e2e/progress-bar.spec.ts` (commit `ec586fd`)
+
+> As a security researcher monitoring an experiment, I want a visual
+> progress bar showing run-state counts (completed / running /
+> pending / failed) with color-coded segments, an overall
+> percentage, and a counts legend — so I can see at a glance how the
+> experiment is progressing and whether anything has failed.
+
+Covers the `ProgressBar` rendering paths on ExperimentDetail (only
+mount point at `ExperimentDetail.tsx:215`): `total === 0` short-circuit
+returns null (no bar, no legend, no percentage), conditional segment
+rendering (`{N > 0 && (...)}` per-segment guard means only non-zero
+segments mount as `<div style="width:...%">` inside the `.h-4.rounded-full`
+track), proportional widths via the inline style, the running
+segment's `.animate-pulse` class, the percentage `Math.round(completed /
+total * 100)` rendered in `span.w-12.text-right`, the four-item
+legend (completed/running/pending always; failed only when > 0), the
+"{total} total" right-aligned span, and per-segment `title="N role"`
+tooltips.
+
+**Cross-browser style quirk captured**: the `style="width: 100.0%"`
+attribute is preserved verbatim by Firefox but normalized to `width:
+100%` by Chromium when read via `getAttribute('style')`. Width
+assertion uses regex `/width:\s*100(\.0)?%/` to handle both. Other
+percentage values like `12.5%` survive intact in both browsers.
+
 ---
 
 ## Candidate stories for future iterations
