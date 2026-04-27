@@ -560,6 +560,41 @@ the line stroke is the amber accent `#F5A524` (case-insensitive regex
 guards against browser hex normalization), and `CostHeadroomCard`
 co-renders in the same grid `<section>`.
 
+### 26. Live cost estimate as you build a new experiment
+
+**Spec:** `frontend/e2e/cost-estimate.spec.ts` (commit `d6b18ef`)
+
+> As a security researcher building a new experiment, I want to see
+> the projected total runs and estimated cost (per-model breakdown
+> plus a Spend Cap suggestion) update live as I tune the dataset /
+> strategy / repetitions controls — so I don't accidentally configure
+> a wildly expensive matrix.
+
+Closes the original candidate-J gap. Covers the `CostEstimate`
+component on `/experiments/new` (zero prior coverage):
+
+- Idle state: "Configure experiment to see estimate."
+- Loading: "Calculating..." with `animate-spin` SVG during in-flight
+- Loaded: "Total runs", "Estimated cost: $4.00" amber-text, per-model
+  rows (`gpt-4o $2.00` and `claude-3-5-sonnet-20241022 $2.00`)
+- Spend Cap input placeholder updates to `Suggested: $4.80` (1.2x of
+  the estimated cost) when the estimate resolves; reverts to
+  `e.g. 10.00` when cleared
+- Estimate gate (`selectedStrategyIds.length > 0 && selectedDataset !== ''`)
+  prevents API calls when only one is selected
+- Debounce coalescing: 3 rapid clicks within the 400ms window produce
+  exactly 1 API request
+- API 500 error → catch block sets `estimate=null` → idle state returns
+
+**Critical fixture caveat captured**: the default mockApi `/api/strategies`
+returns a string array (`['zero_shot', 'chain_of_thought', ...]`) but
+`listStrategiesFull` expects `StrategySummary[]`. With strings,
+`<StrategyCard strategy={s}>` accesses `s.id`/`s.name`/etc as
+`undefined`, breaking the click-to-select flow. The spec installs a
+per-test `**/api/strategies` override returning proper
+`StrategySummary[]` (mirroring iter-2's `mockStrategiesRoutes`
+pattern) so the strategy-card interactions work.
+
 ---
 
 ## Candidate stories for future iterations
@@ -640,16 +675,10 @@ file-picker is already covered.
 
 ### J. ExperimentNew "estimate" preview
 
-> As a security researcher building a new experiment, I want to see the
-> projected total runs and cost-USD update live as I tune the model /
-> strategy / repetitions controls — so I don't accidentally configure a
-> wildly expensive matrix.
-
-`POST /experiments/estimate` is mocked in `mockApi.ts` and called by
-`ExperimentNew`. Some piece of this is exercised by `experiment-new-extended.spec.ts`,
-but those tests have shown flake (30s timeouts in iteration 3's
-unrelated full-suite run). A focused pass on the estimate display
-contract — not the form-submission path — would be useful.
+~~Covered in iteration 26~~ — see `cost-estimate.spec.ts`. Note: the
+spec captured a fixture-mismatch caveat that any future ExperimentNew
+spec must work around — `/api/strategies` mockApi default returns
+`string[]`, not `StrategySummary[]`.
 
 ---
 
