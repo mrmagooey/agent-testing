@@ -218,6 +218,29 @@ abort-banner locator is scoped to `section`-filtered-by-button to
 avoid colliding with the top-level `error` block at Dashboard.tsx:251
 which shares the `text-signal-danger font-mono` classes.
 
+### 14. Surface dataset-injection failures so a broken inject is never committed
+
+**Spec:** `frontend/e2e/dataset-inject-errors.spec.ts` (commit `ce20b13`)
+
+> As a security researcher injecting a vulnerability template into a
+> clean dataset, when the preview API or the inject API returns an
+> error, I want the failure to surface visibly so I don't accidentally
+> commit a broken injection — and I should be able to recover the
+> dataset detail by reloading the page.
+
+Covers both failure surfaces (`previewInjection` and `injectVuln`):
+422 with `detail`, 500 with `detail`, 400 with `message` (apiFetch's
+secondary lookup), 503 with non-JSON body (`API error <N>` fallback),
+network abort, and recovery via `page.reload()` (after `page.unroute`
+removes the per-test override). The test must capture the production
+contract that `setError(...)` short-circuits the entire DatasetDetail
+page (lines 484-489) — the wizard modal disappears and the "Inject
+Vulnerability" button is gone, leaving only a red page-level error
+block. URL discrimination between `/inject/preview` and `/inject` is
+handled by Playwright's `**`-prefix-only glob semantics; the existing
+happy-path spec's `!url.includes('preview')` guard is not strictly
+needed but mirrored where added cost is zero.
+
 ---
 
 ## Candidate stories for future iterations
@@ -291,15 +314,12 @@ fresh gap emerges.
 
 ### H. Dataset injection wizard step error states
 
-> As a security researcher injecting a vulnerability template into a clean
-> dataset, when the preview API returns an error, I want the wizard to
-> stop progressing and surface the message — so I don't accidentally
-> commit a broken injection.
-
-`dataset-inject.spec.ts` covers the happy path and warning banner. The
-error paths from `/inject/preview` and `/inject` (4xx, 5xx, malformed
-substitutions) are not tested, and injection is a load-bearing flow for
-ground-truth dataset construction.
+~~Covered in iteration 14~~ — see `dataset-inject-errors.spec.ts`. Note
+the actual production contract is harsher than the original story
+described: a `setError(...)` short-circuits the entire DatasetDetail
+page rather than letting the wizard surface the error inline. The
+spec faithfully captures that contract — fixing the UX (so the wizard
+stays mounted on error) is a separate product change.
 
 ### I. ExperimentImport drag-and-drop
 
