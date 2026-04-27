@@ -595,6 +595,38 @@ per-test `**/api/strategies` override returning proper
 `StrategySummary[]` (mirroring iter-2's `mockStrategiesRoutes`
 pattern) so the strategy-card interactions work.
 
+### 27. Audit dataset provenance via the OriginCard and RecipeSummary
+
+**Spec:** `frontend/e2e/dataset-origin-card.spec.ts` (commit `7958701`)
+
+> As a security researcher reviewing a dataset's provenance, I want to
+> see where the dataset came from — for git-origin datasets, the
+> upstream URL (clickable link), short commit hash with a one-click
+> copy button, optional ref tag, and CVE link; for derived datasets,
+> the base-dataset link plus the recipe summary (templates_version,
+> applications count with an expandable details list) — so I can
+> audit and reproduce the dataset elsewhere.
+
+Covers `OriginCard`, `CopyButton`, and `RecipeSummary` on DatasetDetail
+(zero prior e2e coverage; iter-9 only covered the materialize banner
+on the same page). Test fixtures override `GET /api/datasets/<name>`
+per-test (mockApi has no default handler for the dataset-detail
+endpoint — same pattern as iter-9).
+
+Asserts: git-origin URL `<a target="_blank" rel="noopener noreferrer">`
+when http(s)-prefixed, plain mono `<span>` otherwise (per the
+`/^https?:\/\//` regex in DatasetDetail.tsx:157), 12-char commit slice
++ `data-testid="copy-button"` rendering the FULL hash to clipboard
+on click (chromium via grantPermissions; firefox skipped — its
+WebDriver-BiDi doesn't expose `clipboard-read`), icon flip ⎘→✓→⎘
+verified via a polling `toContainText('⎘', { timeout: 3000 })`
+assertion (vs. a brittle `waitForTimeout`), conditional ref/cve_id
+rows, derived-kind branch with `base_dataset` Link, RecipeSummary's
+templates_version + Applications count + the `<details><summary>Show
+applications</summary>` expansion exposing per-app fields including
+`seed: 42`, and the invalid-JSON fallback rendering "Invalid recipe
+JSON" (Applications line absent).
+
 ---
 
 ## Candidate stories for future iterations
