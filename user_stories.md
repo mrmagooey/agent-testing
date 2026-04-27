@@ -466,6 +466,41 @@ via the iter-7 capturing-preventDefault listener pattern). Empty state
 "No findings match the current filters." renders when `filtered.length
 === 0`.
 
+### 23. Search experiment findings server-side with debounce, spinner, and clear
+
+**Spec:** `frontend/e2e/findings-search.spec.ts` (commit `d5e43ae`)
+
+> As a security researcher reviewing an experiment's findings, I want
+> to search across all findings by title / description /
+> recommendation with debounced server-side search — so the table
+> updates as I type without sending a request for every keystroke,
+> and I can clear the query with a single click to restore the full
+> list.
+
+Covers the `FindingsSearch` component (mounted inside
+`FindingsExplorer` at `FindingsExplorer.tsx:58`, only on
+ExperimentDetail). Closes the gap noted at
+`run-detail-filters.spec.ts:161` where the existing test was misnamed
+and actually exercised RunDetail's inline `<input type="search">`,
+not this component.
+
+Asserts: initial render with placeholder + search-icon SVG; typing
+fires `GET /api/experiments/<id>/findings/search?q=...` after the
+300ms debounce; results replace initial findings via
+FindingsExplorer's `setSearchResults(r.length > 0 ? r : null)`; rapid
+typing (6 chars at delay=0) coalesces to exactly one API request;
+`.animate-spin` spinner during in-flight (delayed-fixture pattern);
+mutually-exclusive icon-area states (search-icon ↔ spinner ↔ clear
+button); clear button (×, `aria-label="Clear search"`) restores
+initial findings and resets input value; empty input
+(`!value.trim()`) NEVER fires an API request even after typing-and-
+backspacing; API error path triggers `catch` → `onResults([])` →
+source falls back to `initialFindings`.
+
+`waitForTimeout(500)` used (vs. 300ms debounce window) on the
+"empty input no-request" test for CI slack — `waitForResponse` would
+hang forever since no request is expected.
+
 ---
 
 ## Candidate stories for future iterations
