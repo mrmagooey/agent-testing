@@ -439,6 +439,33 @@ attribute is preserved verbatim by Firefox but normalized to `width:
 assertion uses regex `/width:\s*100(\.0)?%/` to handle both. Other
 percentage values like `12.5%` survive intact in both browsers.
 
+### 22. Triage experiment findings via filters, row expand, and dataset back-link
+
+**Spec:** `frontend/e2e/findings-explorer.spec.ts` (commit `744fe24`)
+
+> As a security researcher reviewing an experiment's aggregated
+> findings, I want to filter the table by match status, vuln class,
+> and severity (with the live count updating), expand any row to read
+> the full description and jump to the source dataset, and see a
+> clear empty-state when filters return nothing — so I can triage the
+> experiment's results without leaving the page.
+
+Covers the `FindingsExplorer` interactive surface on ExperimentDetail
+that wasn't already covered by iter-8's reclassify modal spec.
+`FindingsExplorer` is mounted only on ExperimentDetail (not RunDetail
+— RunDetail has its own inline filter UI). Three local-state filter
+selects (match status / vuln class / severity), a live `"{N}
+findings"` counter, vuln-class dropdown options derived from
+`Array.from(new Set(source.map(f => f.vuln_class))).sort()`, single-row
+expansion (state is `expandedId | null`), CodeMirror-backed
+description rendering inside the expanded `<tr><td colspan=6>` row, the
+"View in dataset" link href shape (`path` %-encoded slashes,
+`line=line_start`, `end=line_end`, `from_experiment`, `from_run`), and
+`stopPropagation` on the link click preserving row expansion (verified
+via the iter-7 capturing-preventDefault listener pattern). Empty state
+"No findings match the current filters." renders when `filtered.length
+=== 0`.
+
 ---
 
 ## Candidate stories for future iterations
