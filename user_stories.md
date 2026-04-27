@@ -328,6 +328,32 @@ the absence assertion to the Run A card via
 `heading.locator('../..')` ancestor traversal so a future move of the
 row to Run B wouldn't mask a Run A regression.
 
+### 18. Scan model × strategy accuracy at a glance via the dashboard heatmap
+
+**Spec:** `frontend/e2e/accuracy-heatmap.spec.ts` (commit `133bff7`)
+
+> As a security researcher landing on the dashboard, I want to scan a
+> model × strategy accuracy heatmap to identify high-performing
+> combinations at a glance — with clear PASS / WARN / FAIL signal
+> labels per cell, an em-dash placeholder for missing combinations,
+> and meaningful empty / loading / error fallbacks when data is
+> unavailable or stale.
+
+Complements `heatmap-contrast.spec.ts` (which covers only color
+contrast). Adds: populated table render with exact 4-cell count on
+the default fixture, signal-threshold mapping (PASS ≥ 0.8, WARN ≥
+0.6, FAIL < 0.6) verified via `data-signal` attribute and the
+`heatmap-cell-signal` testid, EmptyCell `—` rendering for missing
+model×strategy combinations (exact count = `models × strategies -
+populated cells`), the empty-data fallback ("No completed runs with
+evaluation data yet."), the error-state paragraph (apiFetch surfaces
+the response `detail` as `error.message`, rendered in
+`text-signal-danger`), the loading skeleton (scoped to
+`.animate-pulse.h-24` to avoid collision with other Tailwind
+`animate-pulse` users), and the footer explanatory text. The PASS/WARN
+signal tests use `.filter({ hasText: '0.912' })` etc. to scope to
+specific cells in the default fixture's distinct accuracy values.
+
 ---
 
 ## Candidate stories for future iterations
