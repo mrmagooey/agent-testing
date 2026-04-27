@@ -383,6 +383,34 @@ sort before files at every level. The pre-fix author had used
 the reviewer noted that could match the labels-table cell too — the
 fix scopes via the `<p class="text-xs font-mono">` viewer header.
 
+### 20. Watch experiment cost approach the configured spend cap
+
+**Spec:** `frontend/e2e/experiment-detail-near-cap.spec.ts` (commit `fd492f3`)
+
+> As a security researcher monitoring an experiment, I want to see
+> the running cost on the experiment detail page, alongside any
+> configured spend cap and a clear warning indicator when actual
+> spend exceeds 80% of the cap — so I can decide whether to cancel
+> before the experiment hits the cap.
+
+Covers the three rendering branches of the Cost / Cap block in
+`ExperimentDetail.tsx:223-238`:
+
+- **Cost** — always shown with `toFixed(2)` format.
+- **Cap** — shown only when `experiment.spend_cap_usd` is truthy.
+  When `null`, the entire Cap `<span>` is omitted.
+- **⚠ Near cap warning** — orange-classed inline span (`text-orange-600
+  dark:text-orange-400`) shown only when `total_cost_usd /
+  spend_cap_usd > 0.8` (strict inequality — exactly 0.8 does NOT
+  trigger).
+
+Per-test override pattern targets `**/api/experiments/<id>*` (trailing
+`*` glob for query-string compatibility), with an
+`url.pathname.endsWith(/<id>)` guard so the `/results` and other
+sub-resource fetches fall through to the global `mockApi` handler.
+Boundary tests cover ratios 0.0249, 0.8 exact (no warning), 0.9
+(warning fires), and 0.98 (warning fires).
+
 ---
 
 ## Candidate stories for future iterations
