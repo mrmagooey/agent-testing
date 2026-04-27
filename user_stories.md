@@ -688,6 +688,33 @@ fragile. Locator for row 1 after row 0 expands uses
 `.filter({ hasText: 'search_code' }).first()` to dodge the inserted
 expansion `<tr>` shifting indices.
 
+### 30. Toggle which builtin tools a strategy gives the agent
+
+**Spec:** `frontend/e2e/strategy-tools.spec.ts` (commit `76b0e11`)
+
+> As a security researcher authoring a strategy, I want to quickly
+> toggle which builtin tools (read_file, list_directory,
+> search_files, run_command, write_file) are available to the
+> agent — with clear visual feedback for selected vs. unselected —
+> so the POST body's `tools` array reflects exactly what I picked,
+> including pre-existing tools inherited from the fork's parent.
+
+Covers the Tools section in `StrategyEditor.tsx:207-226` (the 5
+`COMMON_TOOLS` toggle buttons inside `BundleDefaultForm`). Uses the
+same `mockStrategiesRoutes` helper as iters 2 and 15 (worth extracting
+to a shared helper at some future point — three duplicates now).
+
+Asserts: exactly 5 buttons render with the right names, parent's
+pre-existing `read_file` is `bg-amber-100` active and the other 4
+COMMON tools are `bg-white` inactive, click toggles both directions,
+multiple selections are independent (`list_directory` + `run_command`
+become amber while untouched buttons stay inactive). Save POST body
+shape: `default.tools` reflects the toggle state AND preserves
+invisible non-COMMON tools — the parent fixture's `search_code` (not
+in `COMMON_TOOLS`, never rendered as a button) round-trips on save.
+Test 6 uses both `arrayContaining(['write_file', 'search_code'])` and
+`toHaveLength(2)` so a leak of extra tools would be caught.
+
 ---
 
 ## Candidate stories for future iterations
