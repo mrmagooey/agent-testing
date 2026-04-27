@@ -60,7 +60,7 @@ class FindingIdentity(NamedTuple):
 class Finding(BaseModel):
     """A single security finding produced by a scan strategy."""
 
-    id: str
+    id: str = ""
     file_path: str
     line_start: int | None = None
     line_end: int | None = None
@@ -71,9 +71,13 @@ class Finding(BaseModel):
     description: str
     recommendation: str | None = None
     confidence: float  # 0.0-1.0, self-reported by model
-    raw_llm_output: str
-    produced_by: str  # strategy name + subagent id if applicable
-    experiment_id: str
+    # Framework-internal fields: populated by _stamp_findings after pydantic-ai
+    # validates the model output.  The LLM does not need to supply these; they
+    # default to empty strings so pydantic-ai's structured-output validation
+    # succeeds even when the model response omits them.
+    raw_llm_output: str = ""
+    produced_by: str = ""  # strategy name + subagent id if applicable
+    experiment_id: str = ""
 
     # Verification fields — populated by the verification pass
     verified: bool | None = None

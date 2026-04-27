@@ -11,7 +11,9 @@ from pathlib import Path
 
 from sec_review_framework.data.strategy_bundle import (
     OrchestrationShape,
+    OverrideRule,
     StrategyBundleDefault,
+    StrategyBundleOverride,
     UserStrategy,
 )
 
@@ -248,9 +250,23 @@ def seed_builtins(registry: StrategyRegistry) -> None:
     # dispatch_fallback="programmatic" ensures missing specialists are invoked
     # directly, bypassing the supervisor LLM — the Phase 3c reproducibility
     # lifeline for benchmarking.
+    #
+    # Overrides: each VulnClass key maps to its own specialist system prompt
+    # so that resolve_bundle can apply class-specific instructions when the
+    # coordinator resolves a bundle for a particular key (e.g. in tests or
+    # future per-class customisation).
     # ------------------------------------------------------------------
     _pvc_specialist_ids = [
         f"builtin.{vc.value}_specialist" for vc in VulnClass
+    ]
+    _pvc_overrides = [
+        OverrideRule(
+            key=_vc.value,
+            override=StrategyBundleOverride(
+                system_prompt=_read(_SYSTEM_DIR / "per_vuln_class" / f"{_vc.value}.txt"),
+            ),
+        )
+        for _vc in VulnClass
     ]
     registry.register(
         UserStrategy(
@@ -270,7 +286,7 @@ def seed_builtins(registry: StrategyRegistry) -> None:
                 subagents=_pvc_specialist_ids,
                 dispatch_fallback="programmatic",
             ),
-            overrides=[],
+            overrides=_pvc_overrides,
             created_at=_CREATED_AT,
             is_builtin=True,
         )

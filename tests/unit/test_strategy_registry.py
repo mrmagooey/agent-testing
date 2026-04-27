@@ -261,12 +261,22 @@ def test_builtin_orchestration_shapes():
     assert shapes["builtin.diff_review"] == OrchestrationShape.DIFF_REVIEW
 
 
-def test_per_vuln_class_has_no_overrides():
-    """builtin.per_vuln_class (Phase 4) uses subagents, not overrides."""
+def test_per_vuln_class_has_overrides_for_all_vuln_classes():
+    """builtin.per_vuln_class carries one OverrideRule per VulnClass.
+
+    The strategy dispatches via subagents AND exposes per-VulnClass system-prompt
+    overrides so callers can resolve a class-specific bundle via resolve_bundle().
+    There must be exactly one override per VulnClass value.
+    """
+    from sec_review_framework.data.findings import VulnClass
     registry = load_default_registry()
     pvc = registry.get("builtin.per_vuln_class")
-    # The new implementation dispatches via subagents list, not overrides
-    assert pvc.overrides == []
+    expected_keys = {vc.value for vc in VulnClass}
+    actual_keys = {rule.key for rule in pvc.overrides}
+    assert actual_keys == expected_keys, (
+        f"Expected one override per VulnClass. Missing: {expected_keys - actual_keys}, "
+        f"Extra: {actual_keys - expected_keys}"
+    )
 
 
 def test_single_agent_has_nonempty_prompts():

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import os
+import re
+import uuid
 
 # Set a deterministic Fernet key before any `sec_review_framework` module is
 # imported. The coordinator eagerly imports `secrets.fernet` at module load to
@@ -104,7 +107,49 @@ class FakeModelProvider(ModelProvider):
                 model_id="fake-model",
                 raw={},
             )
-        return self._responses.popleft()
+        response = self._responses.popleft()
+
+        # When pydantic-ai uses structured output it presents a ``final_result``
+        # tool to the model and expects the model to call it rather than return
+        # plain text.  FakeModelProvider stores canned text responses (often JSON
+        # in a markdown code block); intercept here and convert them to a proper
+        # ``final_result`` tool call so pydantic-ai's output validation passes.
+        if (
+            response.tool_calls == []
+            and tools
+            and any(t.name == "final_result" for t in tools)
+        ):
+            content = response.content
+            # Try to extract JSON: first look for a markdown code fence block,
+            # then fall back to the raw content.  Using re.search extracts only
+            # the fenced portion — re.sub leaves surrounding prose which breaks
+            # json.loads when the response starts with explanatory text.
+            fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)```", content)
+            candidate = fence_match.group(1).strip() if fence_match else content.strip()
+            # Attempt to parse as JSON
+            try:
+                parsed = json.loads(candidate)
+                # Wrap in the expected {"response": ...} envelope
+                tool_input: dict = {"response": parsed}
+                return ModelResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "final_result",
+                            "id": str(uuid.uuid4()),
+                            "input": tool_input,
+                        }
+                    ],
+                    input_tokens=response.input_tokens,
+                    output_tokens=response.output_tokens,
+                    model_id=response.model_id,
+                    raw=response.raw,
+                )
+            except (json.JSONDecodeError, ValueError):
+                # Not valid JSON — fall through and return the original response
+                pass
+
+        return response
 
     def model_id(self) -> str:
         return "fake-model"

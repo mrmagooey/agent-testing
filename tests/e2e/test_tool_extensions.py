@@ -23,6 +23,7 @@ worker completes without needing real MCP subprocesses.
 from __future__ import annotations
 
 import asyncio
+import os
 import sqlite3
 import sys
 from contextlib import contextmanager
@@ -110,15 +111,31 @@ def _stub_extension_builders(*extensions: ToolExtension):
 
     This lets us test run_id suffix and DB column invariants without needing
     real MCP server subprocesses.
+
+    Also temporarily sets the TOOL_EXT_*_AVAILABLE env vars so the coordinator's
+    POST /experiments availability check treats the stubbed extensions as enabled.
+    The env vars use the pattern TOOL_EXT_{value.upper()}_AVAILABLE.
     """
-    original = dict(_registry_module._EXTENSION_BUILDERS)
+    original_builders = dict(_registry_module._EXTENSION_BUILDERS)
+    # Compute env var names for each extension (e.g. "lsp" -> "TOOL_EXT_LSP_AVAILABLE")
+    env_var_names = [f"TOOL_EXT_{ext.value.upper()}_AVAILABLE" for ext in extensions]
+    original_env: dict[str, str | None] = {
+        name: os.environ.get(name) for name in env_var_names
+    }
     for ext in extensions:
         _registry_module._EXTENSION_BUILDERS[ext] = _noop_builder
+    for name in env_var_names:
+        os.environ[name] = "true"
     try:
         yield
     finally:
         _registry_module._EXTENSION_BUILDERS.clear()
-        _registry_module._EXTENSION_BUILDERS.update(original)
+        _registry_module._EXTENSION_BUILDERS.update(original_builders)
+        for name, old_val in original_env.items():
+            if old_val is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = old_val
 
 
 # ---------------------------------------------------------------------------
