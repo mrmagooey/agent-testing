@@ -324,6 +324,54 @@ class TestCVEDiscoveryEvaluate:
         # language score = 0.0 (python not in [])
         assert candidate.score_breakdown.get("language", 1.0) == pytest.approx(0.0)
 
+    # --- Regression tests: discovery-stage shape (lines_changed=0, affected_files=[]) ---
+
+    def test_discovery_stage_shape_is_importable(self):
+        """Regression: lines_changed=0 and affected_files=[] (discovery stage) must not be
+        rejected.  The diff is never fetched during discovery so 0 means unknown."""
+        discovery = self._make_discovery()
+        criteria = CVESelectionCriteria(
+            max_lines_changed=200, min_lines_changed=2, max_files_changed=5
+        )
+        resolved = _make_resolved_cve(lines_changed=0, affected_files=[])
+        candidate = discovery._evaluate(resolved, criteria)
+        assert candidate.importable is True
+        assert candidate.score > 0.0
+        assert candidate.rejection_reason is None
+        assert "Patch too small" not in (candidate.rejection_reason or "")
+        assert "Too many files changed" not in (candidate.rejection_reason or "")
+        assert "patch_size" not in candidate.score_breakdown
+
+    def test_real_values_include_patch_size_in_breakdown(self):
+        """Existing behavior: a CVE with real diff data still gets patch_size scored."""
+        discovery = self._make_discovery()
+        criteria = CVESelectionCriteria(max_lines_changed=200, min_lines_changed=2)
+        resolved = _make_resolved_cve(lines_changed=50, affected_files=["a.py"])
+        candidate = discovery._evaluate(resolved, criteria)
+        assert candidate.importable is True
+        assert "patch_size" in candidate.score_breakdown
+
+    def test_hard_filter_fires_when_patch_too_large(self):
+        """Hard filter still rejects when lines_changed is present and exceeds max."""
+        discovery = self._make_discovery()
+        criteria = CVESelectionCriteria(max_lines_changed=200)
+        resolved = _make_resolved_cve(lines_changed=500, affected_files=["a.py"])
+        candidate = discovery._evaluate(resolved, criteria)
+        assert candidate.importable is False
+        assert "Patch too large" in (candidate.rejection_reason or "")
+
+    def test_hard_filter_fires_when_too_many_files(self):
+        """Hard filter still rejects when affected_files is present and exceeds max."""
+        discovery = self._make_discovery()
+        criteria = CVESelectionCriteria(max_files_changed=5)
+        resolved = _make_resolved_cve(
+            lines_changed=10,
+            affected_files=["a.py", "b.py", "c.py", "d.py", "e.py", "f.py"],
+        )
+        candidate = discovery._evaluate(resolved, criteria)
+        assert candidate.importable is False
+        assert "Too many files changed" in (candidate.rejection_reason or "")
+
 
 # ---------------------------------------------------------------------------
 # CVEImporter — _build_labels (dedup, injection in description/CWE)
