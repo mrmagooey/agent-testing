@@ -748,6 +748,39 @@ required-missing + 1 green `{code}`.
 across 4 specs (iters 2, 15, 30, 31). Worth extracting to a shared
 `e2e/helpers/mockStrategiesRoutes.ts` in a follow-up iteration.
 
+### 32. Pick Tool Extensions for a strategy with disabled-state safety
+
+**Spec:** `frontend/e2e/strategy-tool-extensions.spec.ts` (commit `3601da9`)
+
+> As a security researcher authoring a strategy, I want checkboxes for
+> the available Tool Extensions (Tree-sitter, LSP, DevDocs) — with
+> disabled, reduced-opacity styling on unavailable extensions (e.g.,
+> DevDocs when the deployment hasn't configured it) — so I can opt
+> into compile-time helpers without trying to toggle disabled options,
+> and so my POST body's `default.tool_extensions` reflects exactly
+> what I selected.
+
+Covers the Tool Extensions section in `StrategyEditor.tsx:228-247`.
+
+**Important context**: the legacy `tool-extensions.spec.ts` was authored
+against the old `/experiments/new` Tool Extensions section that has
+since been removed in a refactor (the same refactor also removed the
+"Search models…" model picker — confirmed broken in iter 13). The
+production location of these checkboxes today is StrategyEditor only.
+
+Asserts: all 3 extensions render with the right labels (Tree-sitter,
+LSP, DevDocs from default mockApi), available extensions have enabled
+checkboxes and labels without `opacity-50`, unavailable DevDocs has
+BOTH `disabled` checkbox AND `opacity-50` on its label,
+`click({ force: true })` cannot check the disabled DevDocs (HTML5
+disabled state is respected even when Playwright's actionability
+check is bypassed), Tree-sitter + LSP toggle independently and
+populate POST body's `default.tool_extensions` with exactly those
+keys (length 2, no DevDocs leak), and pre-existing parent-fixture
+`tool_extensions: ['tree_sitter']` is pre-checked on fork-load.
+
+5th spec to copy `mockStrategiesRoutes` — extraction target.
+
 ---
 
 ## Candidate stories for future iterations
