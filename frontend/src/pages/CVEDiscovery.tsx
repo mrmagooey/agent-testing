@@ -23,6 +23,7 @@ export default function CVEDiscovery() {
   const [searching, setSearching] = useState(false)
   const [candidates, setCandidates] = useState<CVECandidate[]>([])
   const [searchError, setSearchError] = useState<string | null>(null)
+  const [hasSearched, setHasSearched] = useState(false)
 
   // Resolve tab state
   const [cveId, setCveId] = useState('')
@@ -40,6 +41,7 @@ export default function CVEDiscovery() {
     e.preventDefault()
     setSearching(true)
     setSearchError(null)
+    setHasSearched(true)
     try {
       const criteria: Record<string, unknown> = {}
       if (languages.length) criteria.languages = languages
@@ -230,9 +232,13 @@ export default function CVEDiscovery() {
             </div>
           )}
 
-          {candidates.length > 0 && (
+          {candidates.length > 0 ? (
             <CVECandidateTable candidates={candidates} onImport={handleImport} />
-          )}
+          ) : hasSearched && !searching && !searchError ? (
+            <div className="p-3 rounded-lg bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 text-sm text-gray-600 dark:text-gray-400">
+              No candidates matched. Most public advisories are rejected because they lack a resolvable GitHub fix commit. Try a specific CVE on the Resolve tab.
+            </div>
+          ) : null}
         </div>
       )}
 

@@ -161,6 +161,27 @@ describe('CVEDiscovery — Search tab: empty state', () => {
     })
     expect(screen.queryByTestId('cve-candidate-table')).not.toBeInTheDocument()
   })
+
+  it('shows empty-state message when search returns no candidates', async () => {
+    mockDiscoverCVEs.mockResolvedValue([])
+
+    renderCVEDiscovery()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Search CVEs' }))
+
+    await waitFor(() => {
+      expect(screen.getByText(/No candidates matched/)).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('cve-candidate-table')).not.toBeInTheDocument()
+  })
+
+  it('does not show empty-state on initial render before any search', () => {
+    mockDiscoverCVEs.mockResolvedValue([])
+
+    renderCVEDiscovery()
+
+    expect(screen.queryByText(/No candidates matched/)).not.toBeInTheDocument()
+  })
 })
 
 describe('CVEDiscovery — Search tab: error state', () => {
