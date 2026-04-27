@@ -849,6 +849,41 @@ Two patterns used:
   init-script runs before the page's JavaScript on every navigation,
   so storage values are present when `useState` initializers fire.
 
+### 35. Download a run's full results bundle from inside the run-detail page
+
+**Spec:** `frontend/e2e/run-detail-download.spec.ts` (commit `22749dd`)
+
+> As a security researcher reviewing a single run, I want a "Download
+> Run" button that initiates a browser download of the experiment's
+> full results bundle — sharing the experiment's results-download
+> endpoint but reachable from inside any of its runs — so I can grab
+> the artifact without navigating back up to the experiment detail
+> page first.
+
+Covers the click flow on `RunDetail.tsx:191`'s `<DownloadButton>`.
+The existing `run-detail-interactions.spec.ts:391-393` only checks
+visibility; this spec adds:
+
+- Suggested filename is `experiment-<expId>-reports.zip` (the
+  EXPERIMENT id, not the run id — even though we're on a run page —
+  because RunDetail passes `experimentId` from URL params, not
+  `runId`)
+- Download URL targets `/api/experiments/<expId>/results/download`
+  with NO `/runs/<runId>` segment (regression guard against future
+  wiring drift)
+- Button click does not navigate the page (the `<a download>`
+  attribute prevents navigation)
+- The temporary `<a>` created in `handleDownload` is cleaned up from
+  the DOM after click via `document.body.removeChild`
+
+**Browser caveat captured**: Firefox skips 4 of 5 tests (via
+`test.skip(browserName === 'firefox', ...)`) because `<a download>`
+clicks don't reliably fire Playwright's `download` event in Gecko —
+same precedent as iter-5's `export-menu.spec.ts`. The browser-
+agnostic test 3 uses `context.on('request')` as the firefox-safe
+path so the URL contract still has at least one assertion running
+on both browsers.
+
 ---
 
 ## Candidate stories for future iterations
