@@ -501,6 +501,36 @@ source falls back to `initialFindings`.
 "empty input no-request" test for CI slack — `waitForResponse` would
 hang forever since no request is expected.
 
+### 24. Onboarding pipeline diagram on the Dashboard empty-state
+
+**Spec:** `frontend/e2e/pipeline-diagram.spec.ts` (commit `86a7908`)
+
+> As a security researcher landing on the dashboard for the first time
+> (or whenever no experiments are running), I want to see a clear
+> visual pipeline diagram explaining the five experiment stages —
+> Configure, Expand Matrix, Schedule, Execute, Aggregate & Report —
+> with the Configure stage acting as a quick-start link to
+> `/experiments/new` — so I understand what's about to happen before
+> I start my first experiment.
+
+Covers the `PipelineDiagram` component (no prior e2e coverage). The
+Dashboard mounts it ONLY when `active.length === 0` (active = `running
+| pending` experiments at `Dashboard.tsx:347`). Default fixture has
+experiment B running, so the diagram is hidden by default; an override
+returning only completed experiments brings it back.
+
+Asserts: hidden when running experiment exists (negative case), header
+text ("Experiment pipeline" + "No experiments running…"), all 5 stage
+labels in document order via the `data-stage-index` walk, each stage's
+description text, the Configure stage as the only `<Link>` (href
+ends with `/experiments/new`), the other 4 stages render as `<div>`
+not `<a>` (verified via `getByRole('link')` count 0 per non-Configure
+label), click-navigation to `/experiments/new`, and exactly 4 arrow
+separators between the 5 stages (each separator renders BOTH
+`<ArrowRight>` and `<ArrowDown>` via CSS-only `md:hidden` /
+`hidden md:block`, so `svg.lucide-arrow-right` count = 4 AND
+`svg.lucide-arrow-down` count = 4).
+
 ---
 
 ## Candidate stories for future iterations
