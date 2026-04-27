@@ -627,6 +627,35 @@ applications</summary>` expansion exposing per-app fields including
 `seed: 42`, and the invalid-JSON fallback rendering "Invalid recipe
 JSON" (Applications line absent).
 
+### 28. Drag-and-drop a `.secrev.zip` bundle onto ExperimentImport
+
+**Spec:** `frontend/e2e/experiment-import-drag-drop.spec.ts` (commit `3192cdc`)
+
+> As a security researcher, I want to drop a `.secrev.zip` experiment
+> bundle directly onto the dropzone (without going through a file
+> picker), see the dropzone visually highlight while I'm hovering with
+> the file, and then see the dropped file's name and size displayed —
+> so I can drag-and-drop my way through bundle import without
+> clicking through a file dialog.
+
+Closes the original candidate-I gap. Iter-3's `experiment-import.spec.ts`
+intentionally tested the file-picker path via `setInputFiles`; the
+drag-drop path was uncovered until now.
+
+Asserts: initial placeholder render ("Drop a `.secrev.zip` bundle
+here"), `dragover` applies amber-classed highlight (`border-amber-500
+bg-amber-50`), `dragleave` reverts to default classes, `drop` sets
+the file (name + `2.00 MB — click or drop to change` text shown,
+placeholder gone, dragging state cleared), subsequent drops replace
+the file, and empty-DataTransfer drops are no-ops (`if (dropped)`
+short-circuit) with the placeholder still visible. Uses
+`page.evaluateHandle(() => new DataTransfer())` to construct the
+DataTransfer object inside the page context, then passes the resulting
+`JSHandle` via `locator.dispatchEvent('drop', { dataTransfer: handle })`.
+Files are constructed with `'x'.repeat(bytes)` since ASCII strings
+have UTF-8 byte length === character count, so `2 * 1024 * 1024`
+characters give an exact 2 MiB `File.size`.
+
 ---
 
 ## Candidate stories for future iterations
@@ -696,14 +725,10 @@ stays mounted on error) is a separate product change.
 
 ### I. ExperimentImport drag-and-drop
 
-> As a security researcher, I want to drop a `.secrev.zip` bundle onto the
-> dropzone and have it select for upload — so I don't have to click
-> through a file picker.
-
-Iteration 3 chose `setInputFiles` for reliability. The actual drag-drop
-DataTransfer path is untested. Lower priority because drag-drop is
-inherently flaky in headless browsers and the UX path through the
-file-picker is already covered.
+~~Covered in iteration 28~~ — see `experiment-import-drag-drop.spec.ts`.
+The "inherently flaky in headless browsers" concern proved unfounded
+when using `page.evaluateHandle(() => new DataTransfer())` +
+`dispatchEvent` — both Chromium and Firefox handle it reliably.
 
 ### J. ExperimentNew "estimate" preview
 
