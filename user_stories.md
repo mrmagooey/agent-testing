@@ -196,6 +196,28 @@ count. Each test that mutates `messages` registers a per-test runFull
 override BEFORE a fresh `page.goto(BASE_URL)` so the override wins
 the initial useEffect fetch.
 
+### 13. Smoke-test failure path renders an error banner and re-enables retry
+
+**Spec:** `frontend/e2e/dashboard-smoke-test-failure.spec.ts` (commit `0978f5e`)
+
+> As a security researcher who has just installed the framework, when I
+> click "Run Smoke Test" and the backend returns an error, I want to see
+> a clear failure banner with the error reason and have the button
+> re-enabled so I can retry — so I know my deployment isn't healthy and
+> can attempt a fresh run.
+
+Covers the `smokeTest.status === 'error'` render branch on the
+Dashboard: 422 `detail`, 500 `detail`, 400 `message` (apiFetch's
+secondary message field), 503 with non-JSON body (the `API error <N>`
+fallback), `route.abort('failed')` for connection-failure messages,
+failure-then-retry path (error banner replaced by success banner +
+"View experiment →" link via `page.unroute(...)` letting the global
+mockApi success handler take over), and a fresh-navigation regression
+guard (component-local state resets, no stale error banner). The
+abort-banner locator is scoped to `section`-filtered-by-button to
+avoid colliding with the top-level `error` block at Dashboard.tsx:251
+which shares the `text-signal-danger font-mono` classes.
+
 ---
 
 ## Candidate stories for future iterations
@@ -246,15 +268,13 @@ user-visible.
 
 ### E. ModelSearchPicker keyboard interactions
 
-> As a security researcher selecting models for a new experiment, I want
-> Backspace on an empty search input to remove the most-recently-selected
-> model pill — so I can quickly back out a misclick without reaching for
-> the mouse.
-
-`ModelSearchPicker.tsx` implements `removeLast()` on Backspace when search
-is empty (lines ~253–266). Existing experiment-new specs cover search
-filtering and the "Show unavailable" toggle but not the keyboard pill
-removal.
+~~Candidate dead — picker no longer mounted~~. As of iteration 13's
+investigation, `ModelSearchPicker.tsx` is imported only by its own unit
+test. `/experiments/new` (`ExperimentNew.tsx`) no longer renders a
+Models section — model id is baked into the strategy. The legacy
+`experiment-new.spec.ts` "search models" tests fail (21/28) for the
+same reason. Treat this picker as unmounted dead code unless/until it
+returns to a real page; do NOT spend an iteration on it.
 
 ### F. Hardening: switch `route.continue()` to `route.fallback()` in iter-1 spec
 
@@ -267,15 +287,7 @@ fresh gap emerges.
 
 ### G. Smoke test failure path
 
-> As a security researcher who has just installed the framework, when I
-> click "Run Smoke Test" and the backend returns an error, I want to see
-> a clear failure banner with the error reason — so I know my deployment
-> isn't healthy.
-
-Existing dashboard specs cover the success path with the "View experiment
-→" link. The failure surface (network/500/422) is referenced in
-`error-states-uncovered-flows.spec.ts` but the dashboard-side rendering
-of a failed smoke test isn't end-to-end-verified.
+~~Covered in iteration 13~~ — see `dashboard-smoke-test-failure.spec.ts`.
 
 ### H. Dataset injection wizard step error states
 
