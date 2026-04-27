@@ -354,6 +354,35 @@ the response `detail` as `error.message`, rendered in
 signal tests use `.filter({ hasText: '0.912' })` etc. to scope to
 specific cells in the default fixture's distinct accuracy values.
 
+### 19. Browse a dataset's source files via the side file tree
+
+**Spec:** `frontend/e2e/dataset-detail-filetree.spec.ts` (commit `cae91fb`)
+
+> As a security researcher exploring a dataset, I want to navigate the
+> dataset's source files via the side file tree — directories expand
+> and collapse with arrow indicators, files show ground-truth label
+> counts as red badges, the selected file is highlighted, and clicking
+> a file loads its content in the viewer panel — so I can read source
+> code in context with the labels that mark known vulnerabilities.
+
+Covers the standalone (non-modal) `FileTree` on `/datasets/<name>`,
+distinct from the inject-modal scoping in
+`dataset-detail-interactions.spec.ts`. Asserts: top-level dirs (`src`,
+`tests`) start expanded with `▼` because `useState(depth === 0)` at
+FileTree.tsx:22 returns true only for depth-0; nested dirs (`auth`,
+`api`, `files`, `search`) at depth=1 start collapsed with `▶`;
+click-to-expand reveals children + flips indicator; click-to-collapse
+hides children; selecting a file flips its row to `bg-blue-100 |
+bg-blue-900` and replaces the "Select a file to view" placeholder
+with the path text inside `<p class="text-xs font-mono ...">` (scoped
+this way to avoid colliding with the labels-table cell rendering the
+same path); red label-count pill (`.bg-red-100 | .bg-red-900`) only
+on files with labels (`login.py` has 1; `logout.py` has 0); and dirs
+sort before files at every level. The pre-fix author had used
+`getByText('src/auth/login.py').first()` for the viewer assertion;
+the reviewer noted that could match the labels-table cell too — the
+fix scopes via the `<p class="text-xs font-mono">` viewer header.
+
 ---
 
 ## Candidate stories for future iterations
