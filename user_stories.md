@@ -656,6 +656,38 @@ Files are constructed with `'x'.repeat(bytes)` since ASCII strings
 have UTF-8 byte length === character count, so `2 * 1024 * 1024`
 characters give an exact 2 MiB `File.size`.
 
+### 29. Audit a run's tool calls and flag external URL access
+
+**Spec:** `frontend/e2e/tool-call-audit.spec.ts` (commit `22212a1`)
+
+> As a security researcher reviewing a run's transcript, I want a Tool
+> Call Audit table showing every tool invocation with its serialized
+> input, timestamp, and a ⚠ URL flag for any tool call whose input
+> contains an http(s) URL — so I can audit whether the agent reached
+> out to external resources, and click into individual entries to
+> inspect the full JSON input.
+
+Covers `RunDetail.tsx:414-461`. The existing `run-detail.spec.ts:68`
+only verified the heading existed and the default tool names rendered.
+
+Asserts: dynamic count "Tool Call Audit (N)" in the heading, all rows
+rendering (tool name + 100-char truncated input + timestamp), flagged-
+row `bg-red-50` styling AND `⚠ URL` badge under BOTH conditions —
+URL auto-flag (`/https?:\/\//.test(JSON.stringify(input))`) and
+explicit `tc.flagged=true` — non-flagged rows have neither bg nor
+badge, 100-char truncation with the full JSON preserved in the
+`title` attribute, click-to-expand mounts a `<CodeViewer>` with the
+full JSON, click-again collapses, and the single-row expansion
+invariant (clicking a different row collapses the previous,
+verified via `.cm-editor` count = 1).
+
+The `… ` ellipsis at position 100 is the single Unicode `U+2026`
+character; the test compares via `textContent` (not `getByText`)
+since the regex matching of multi-codepoint terminators can be
+fragile. Locator for row 1 after row 0 expands uses
+`.filter({ hasText: 'search_code' }).first()` to dodge the inserted
+expansion `<tr>` shifting indices.
+
 ---
 
 ## Candidate stories for future iterations
