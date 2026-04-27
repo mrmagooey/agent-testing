@@ -715,6 +715,39 @@ in `COMMON_TOOLS`, never rendered as a button) round-trips on save.
 Test 6 uses both `arrayContaining(['write_file', 'search_code'])` and
 `toHaveLength(2)` so a leak of extra tools would be caught.
 
+### 31. Live linter for user-prompt-template required placeholders
+
+**Spec:** `frontend/e2e/strategy-placeholder-linter.spec.ts` (commit `6648306`)
+
+> As a security researcher authoring a strategy's user_prompt_template,
+> I want a live placeholder linter that flags missing required
+> placeholders (`{repo_summary}` and `{finding_output_format}`) in red
+> and confirms the ones I've included in green — so I can fix
+> prompt-template mistakes before saving instead of seeing runs fail
+> at execution time.
+
+Covers `PlaceholderLinter` (StrategyEditor.tsx:81-112). Mounted next
+to the user_prompt_template `<textarea>` in BundleDefaultForm.
+Production renders RED `missing: {p}` pills for required placeholders
+absent from the template, and GREEN pills for everything found —
+**including unknown / non-required placeholders**. The `unknown`
+variable in production is computed but never rendered distinctly;
+the spec captures the actual behavior, not the wishful "unknown is
+amber" behavior.
+
+Asserts: empty template → render guard returns null (no pills),
+whitespace-only template → same null guard, no-placeholders text →
+2 red pills (both required missing), all-required → 2 green pills no
+red, mixed required + unknown → 1 red + 2 green (the unknown renders
+green), live `fill` updates flip pills red→green reactively, and the
+default parent fixture's `{{code}}` template hits the regex
+`/\{(\w+)\}/g` matching the inner `{code}` substring → 2 red
+required-missing + 1 green `{code}`.
+
+**Helper duplication note**: `mockStrategiesRoutes` is now duplicated
+across 4 specs (iters 2, 15, 30, 31). Worth extracting to a shared
+`e2e/helpers/mockStrategiesRoutes.ts` in a follow-up iteration.
+
 ---
 
 ## Candidate stories for future iterations
