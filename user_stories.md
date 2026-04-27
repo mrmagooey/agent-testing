@@ -299,6 +299,35 @@ iter-11's labels-filter spec. The author originally used a URL
 predicate function as a workaround; the trailing-`*` glob is the
 correct sibling-spec convention and is what landed.
 
+### 17. Dataset-mismatch warning + experiment back-link in run comparison
+
+**Spec:** `frontend/e2e/runcompare-extras.spec.ts` (commit `ee54a96`)
+
+> As a security researcher comparing runs from two experiments, I want
+> a clear "Dataset mismatch" warning banner with per-run details when
+> the runs were executed against different datasets, and inline links
+> from each run's metadata to its parent experiment — so I know my
+> conclusions don't generalize across the underlying ground truth, and
+> I can drill back to either source experiment in one click.
+
+Closes the iter-16 reviewer's noted gap. Two render paths exercised:
+
+`DatasetMismatchBanner` (`role="alert"`,
+`data-testid="dataset-mismatch-banner"`) — visible when
+`comparison.dataset_mismatch` is truthy; absent on `false` and on
+field omission (the banner mount uses `&&` truthy-check). Heading
+"Dataset mismatch" is the FIRST `<p>` of the banner, so the child
+count is `warnings.length + 1`. Empty `warnings: []` still renders the
+banner with just the heading.
+
+Per-card Experiment link — `Run A` card's `<dl>` has an `Experiment`
+row with `<Link to=/experiments/<id>>` only when `run.experiment_name`
+is truthy; `.filter(([, v]) => v !== null)` at RunCompare.tsx:251
+drops the row entirely otherwise (no "—" placeholder). Test 7 scopes
+the absence assertion to the Run A card via
+`heading.locator('../..')` ancestor traversal so a future move of the
+row to Run B wouldn't mask a Run A regression.
+
 ---
 
 ## Candidate stories for future iterations
