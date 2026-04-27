@@ -531,6 +531,35 @@ separators between the 5 stages (each separator renders BOTH
 `hidden md:block`, so `svg.lucide-arrow-right` count = 4 AND
 `svg.lucide-arrow-down` count = 4).
 
+### 25. Cost-trend sparkline on the Dashboard Trends section
+
+**Spec:** `frontend/e2e/dashboard-trends.spec.ts` (commit `8533708`)
+
+> As a security researcher returning to the dashboard, I want a Trends
+> sparkline showing cost per completed experiment over time, alongside
+> the cost-headroom card — so I can see at a glance whether my
+> experiment spend is trending upward or downward and decide whether
+> to throttle the matrix.
+
+Covers the recharts-backed `SparklineChart` mounted inside the
+Dashboard Trends section. The section is conditionally rendered with
+`{costSparkData.length >= 2 && <section>...}` (Dashboard.tsx:448),
+where `costSparkData` is built from completed experiments only. The
+default fixture has 2 completed experiments → section visible by
+default; per-test overrides drop to 1 completed (section hidden) and
+0 completed (still hidden, plus PipelineDiagram is suppressed by
+running experiment B).
+
+Asserts: section heading and "Cost per experiment (USD)" label
+visible at the right threshold, conditional hidden states, the SVG
+line element renders with `path.recharts-curve`, both axes are
+omitted (`hide={true}` produces no `.recharts-xAxis` / `.recharts-yAxis`
+SVG groups — assertions scoped to the Trends `<section>` so they don't
+break if another recharts user is added elsewhere on the dashboard),
+the line stroke is the amber accent `#F5A524` (case-insensitive regex
+guards against browser hex normalization), and `CostHeadroomCard`
+co-renders in the same grid `<section>`.
+
 ---
 
 ## Candidate stories for future iterations
