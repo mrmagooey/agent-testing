@@ -268,6 +268,37 @@ use position-based `nth(INHERIT_INDEX.field)` indices into the five
 checkboxes per panel — order pinned in a frozen `INHERIT_INDEX` map at
 the top of the spec.
 
+### 16. Cross-experiment run comparison: tab switching, loading, error, and URL shape
+
+**Spec:** `frontend/e2e/runcompare-render.spec.ts` (commit `c7ae3e0`)
+
+> As a security researcher, I want to pick two runs from different
+> experiments via the global `/compare` picker, see the side-by-side
+> comparison split into "Found by Both" / "Only in A" / "Only in B"
+> tabs, and see clear empty/error/loading states — so I can compare
+> strategies across experiments without manually copying URLs.
+
+Complements `global-compare.spec.ts` (which covered picker mechanics +
+URL persistence + breadcrumb structure + the default Found-by-Both
+render). Adds: no-selection prompt ("Select two runs above to compare
+them."), tab switching to "Only in A" (path-traversal finding visible,
+SQL-injection finding gone, active tab gets `border-amber-600`), "Only
+in B" empty-state ("No findings in this category."), the actual
+`/api/compare-runs` URL params captured via `page.waitForRequest`
+(asserting `a_experiment != b_experiment`), the loading spinner during
+a delayed fetch (uses `waitUntil: 'domcontentloaded'` on `goto` so the
+assertion runs while the fetch is still in flight), the red error
+block when `/compare-runs` returns 500 with detail, and dynamic tab
+counts from a custom-shaped fixture.
+
+**Glob convention reminder**: per-test routes use
+`**/api/compare-runs*` (trailing-`*` glob). The bare
+`**/api/compare-runs` glob compiles to a `$`-anchored regex that does
+NOT match query-stringed URLs — a hazard already documented in
+iter-11's labels-filter spec. The author originally used a URL
+predicate function as a workaround; the trailing-`*` glob is the
+correct sibling-spec convention and is what landed.
+
 ---
 
 ## Candidate stories for future iterations
@@ -288,14 +319,11 @@ matrix-table badge rendering (line 135). My initial flag was wrong.
 
 ### C. Cross-experiment run comparison
 
-> As a security researcher, I want to pick two runs from different
-> experiments via the global `/compare` picker and see the side-by-side
-> finding diff — so I can compare strategies across experiments without
-> manually copying URLs.
-
-`global-compare.spec.ts` has 3 tests for picker mechanics; the actual
-side-by-side comparison rendering and the cross-experiment POST body
-shape (`compareRunsCross`) are not exercised.
+~~Covered in iteration 16~~ — see `runcompare-render.spec.ts`. The
+remaining gap noted by the iter-16 reviewer is the
+`DatasetMismatchBanner` render path (a `data-testid="dataset-mismatch-banner"`
+warning shown when `comparison.dataset_mismatch === true`). Worth a
+follow-up iteration if it ever becomes load-bearing.
 
 ### D. ConversationViewer message-type rendering
 
