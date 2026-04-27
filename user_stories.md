@@ -241,6 +241,33 @@ handled by Playwright's `**`-prefix-only glob semantics; the existing
 happy-path spec's `!url.includes('preview')` guard is not strictly
 needed but mirrored where added cost is zero.
 
+### 15. Edit per-vuln-class overrides in the strategy editor
+
+**Spec:** `frontend/e2e/strategy-vulnclass-overrides.spec.ts` (commit `9c66e9b`)
+
+> As a security researcher authoring a `per_vuln_class` strategy, I
+> want to switch to the SQLi tab, uncheck "Inherit from default" on
+> the model_id field, set a different model, then switch to the XSS
+> tab and override `max_turns` — so the resulting POST body carries
+> overrides for both classes with only the changed fields, and the
+> inactive vuln-class tabs reset to inheriting all fields.
+
+Completes the strategy-editor trilogy alongside iter 1 (browse), iter 2
+(fork), and iter 4 (per_file rules). Covers `VulnClassOverrides` Tabs
+rendering with one tab per `VULN_CLASSES` entry, sqli-default selection,
+amber-dot indicator (`rules.some(r => r.key === vc)`), per-tab Inherit
+toggling on `OverrideFieldEditor`, cross-tab state preservation, and
+POST body shape (only sqli + xss override entries with only changed
+fields). **Production quirk captured**: re-checking Inherit on a field
+calls `clear(field)` which sets the field to `null` but does NOT remove
+the rule entry from the `rules` array — so the amber tab dot persists
+even after all five fields are re-inherited (rule entry remains as
+`{key: 'xss', override: {max_turns: null}}`). The test asserts the
+actual production behavior, not the wishful "dot disappears". Locators
+use position-based `nth(INHERIT_INDEX.field)` indices into the five
+checkboxes per panel — order pinned in a frozen `INHERIT_INDEX` map at
+the top of the spec.
+
 ---
 
 ## Candidate stories for future iterations
@@ -250,17 +277,7 @@ points at production code or testids that have no e2e coverage today.
 
 ### A. Edit per-vuln-class overrides in the strategy editor
 
-> As a security researcher authoring a `per_vuln_class` strategy, I want to
-> open the SQLi tab, uncheck "Inherit from default" on the model_id field,
-> set a different model, switch to the XSS tab and override max_turns —
-> so the resulting POST body carries overrides for both classes with only
-> the changed fields.
-
-Completes the strategy-editor coverage trilogy (browse + fork + per_file
-already done; per_vuln_class editing is the last pattern). The
-`OverrideFieldEditor` component in `StrategyEditor.tsx` has no
-`data-testid`s, so the spec needs careful structural locators — flagged
-during iteration 6 selection.
+~~Covered in iteration 15~~ — see `strategy-vulnclass-overrides.spec.ts`.
 
 ### B. Tool extensions matrix selection
 
