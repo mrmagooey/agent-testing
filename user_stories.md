@@ -819,6 +819,36 @@ reason. The named-handler form is the canonical Playwright pattern.
 separate refactor. Going forward, new strategy specs should import
 from the helper.
 
+### 34. Trends filter selections persist across visits via localStorage
+
+**Spec:** `frontend/e2e/feedback-localstorage.spec.ts` (commit `b1311bf`)
+
+> As a security researcher returning to the Feedback page after a
+> session, I want my Trends filter selections (dataset, last-N limit,
+> tool-extension filter, since, until dates) to be remembered across
+> reloads so I don't have to re-set them on every visit — and I want
+> a fresh visit with cleared localStorage to default to the original
+> empty / `10` defaults.
+
+Covers the `useTrendFilters` hook in `Feedback.tsx:37-93`. Five keys
+(`feedback_trend_dataset`, `_limit`, `_tool_ext`, `_since`, `_until`)
+round-trip through the trends-section inputs: clean storage produces
+empty / 10 defaults; each individual setter writes to localStorage
+immediately (the production `setAndPersist*` calls
+`localStorage.setItem` inside the synchronous React state update);
+each value survives a page reload because `useState(() =>
+localStorage.getItem(...))` re-initializes from storage on mount; all
+5 set together persist together; `addInitScript`-pre-seeded values
+populate inputs on first mount. Limit is stored as a string (`'50'`
+not `50`) per the production `String(v)` call at line 66.
+
+Two patterns used:
+- **Navigate-clear-navigate** for "clean state" tests: same-origin
+  context required before `localStorage.clear()`.
+- **`addInitScript` BEFORE `page.goto`** for pre-seeding tests:
+  init-script runs before the page's JavaScript on every navigation,
+  so storage values are present when `useState` initializers fire.
+
 ---
 
 ## Candidate stories for future iterations
