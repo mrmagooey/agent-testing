@@ -468,12 +468,17 @@ class CVEDiscovery:
                 rejection_reason="No fix commit found",
             )
 
-        # Hard filters on patch size
-        if resolved.lines_changed > criteria.max_lines_changed:
+        # Hard filters on patch size.
+        # lines_changed == 0 and affected_files == [] mean "unknown" at the
+        # discovery stage: _build_resolved() never fetches the diff, so these
+        # fields are always zero/empty.  Treat 0 as unknown rather than
+        # "literally zero" so the CVE isn't spuriously rejected here; the real
+        # values are checked again during the import path (CVEImporter).
+        if resolved.lines_changed > 0 and resolved.lines_changed > criteria.max_lines_changed:
             rejection = f"Patch too large ({resolved.lines_changed} lines)"
-        elif resolved.lines_changed < criteria.min_lines_changed:
+        elif resolved.lines_changed > 0 and resolved.lines_changed < criteria.min_lines_changed:
             rejection = f"Patch too small ({resolved.lines_changed} lines)"
-        elif len(resolved.affected_files) > criteria.max_files_changed:
+        elif len(resolved.affected_files) > 0 and len(resolved.affected_files) > criteria.max_files_changed:
             rejection = f"Too many files changed ({len(resolved.affected_files)})"
 
         if rejection:
@@ -485,9 +490,12 @@ class CVEDiscovery:
                 rejection_reason=rejection,
             )
 
-        # Soft scores (0-1)
-        patch_score = 1.0 - (resolved.lines_changed / criteria.max_lines_changed)
-        scores["patch_size"] = max(0.0, patch_score)
+        # Soft scores (0-1).
+        # Omit patch_size entirely when lines_changed == 0 (unknown at discovery
+        # stage) so the score isn't artificially inflated by a meaningless 1.0.
+        if resolved.lines_changed > 0:
+            patch_score = 1.0 - (resolved.lines_changed / criteria.max_lines_changed)
+            scores["patch_size"] = max(0.0, patch_score)
 
         scores["language"] = 1.0 if resolved.language in criteria.languages else 0.0
 
