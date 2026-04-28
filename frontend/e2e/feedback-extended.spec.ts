@@ -150,9 +150,13 @@ test.describe('FP Pattern Browser error handling', () => {
     await page.locator('[data-testid="fp-pattern-browser-section"] select').selectOption(EXPERIMENT_A_ID)
     await page.getByRole('button', { name: 'Load Patterns' }).click()
 
-    // On error, fp-patterns.json handler not used → component should show empty state
-    // The component sets fpPatterns=[] on catch, showing "No FP patterns found."
-    await expect(page.getByText('No FP patterns found.')).toBeVisible()
+    // On error, surface the backend detail in an alert region. The misleading
+    // "No FP patterns found." copy (which means "successful empty result")
+    // must be suppressed.
+    await expect(
+      page.getByRole('alert').filter({ hasText: 'Internal server error' }),
+    ).toBeVisible()
+    await expect(page.getByText('No FP patterns found.')).not.toBeVisible()
   })
 })
 

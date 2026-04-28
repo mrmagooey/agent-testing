@@ -1690,6 +1690,47 @@ e2e suite — no regression.
 
 ---
 
+### 56. Feedback page clears stale data on reload failure + surfaces FP errors
+
+**Frontend fix:** `frontend/src/pages/Feedback.tsx`
+**Frontend test:** `frontend/e2e/feedback-error-clearing.spec.ts` (NEW, 3 tests)
+**Frontend test (updated):** `frontend/e2e/feedback-extended.spec.ts`
+(FP-error test now asserts the corrected behavior)
+
+> As an analyst on the Feedback page, when a Load Trends, Compare,
+> or Load Patterns call fails after a previous successful load,
+> I want stale data cleared so I don't misread the old chart as
+> fresh — and I want a visible error, not a silent swallow that
+> reads as "no results".
+
+**The bug**: three sibling handlers had the same UX defect:
+- `handleLoadTrends` and `handleCompare` only set their `error`
+  state on failure but left the previous successful payload in place.
+  After a reload failure the user saw both the chart from a prior
+  load AND the error message — easy to misread.
+- `handleLoadFP` had a bare `catch {}` that silently swallowed the
+  error and set `fpPatterns = []`. The empty array then triggered
+  the "No FP patterns found." copy — the same string a successful
+  zero-result query produces — leaving the user no way to tell the
+  service was down.
+
+**The fix**:
+- `handleLoadTrends` catch: also `setTrendsData(null)`.
+- `handleCompare` catch: also `setComparison(null)`.
+- `handleLoadFP`: capture `err`, set new `fpError` state, render it
+  in a `<p role="alert">`, gate "No FP patterns found." on `!fpError`.
+- All three error `<p>`s now have `role="alert"` for screen-reader
+  announce.
+- Updated the pre-existing `feedback-extended.spec.ts:140` test that
+  had asserted the buggy contract (expecting "No FP patterns found."
+  on 500) to assert the alert-visible / no-misleading-line contract.
+
+**Result**: 3 new e2e tests pass on chromium + firefox; 132/132
+in the full feedback suite — including the corrected pre-existing
+test.
+
+---
+
 ## Candidate stories for future iterations
 
 Listed roughly in order of estimated value vs implementation effort. Each

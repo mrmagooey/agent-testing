@@ -113,6 +113,7 @@ export default function Feedback() {
   const [fpExperimentId, setFpExperimentId] = useState('')
   const [fpPatterns, setFpPatterns] = useState<FPPattern[]>([])
   const [fpLoading, setFpLoading] = useState(false)
+  const [fpError, setFpError] = useState<string | null>(null)
 
   // Trends state
   const {
@@ -154,6 +155,7 @@ export default function Feedback() {
       })
       setTrendsData(data)
     } catch (err) {
+      setTrendsData(null)
       setTrendsError(err instanceof Error ? err.message : 'Failed to load trends')
     } finally {
       setTrendsLoading(false)
@@ -168,6 +170,7 @@ export default function Feedback() {
       const result = await compareExperiments(experimentAId, experimentBId)
       setComparison(result)
     } catch (err) {
+      setComparison(null)
       setCompareError(err instanceof Error ? err.message : 'Comparison failed')
     } finally {
       setComparing(false)
@@ -177,11 +180,13 @@ export default function Feedback() {
   const handleLoadFP = async () => {
     if (!fpExperimentId) return
     setFpLoading(true)
+    setFpError(null)
     try {
       const patterns = await getFPPatterns(fpExperimentId)
       setFpPatterns(patterns)
-    } catch {
+    } catch (err) {
       setFpPatterns([])
+      setFpError(err instanceof Error ? err.message : 'Failed to load FP patterns')
     } finally {
       setFpLoading(false)
     }
@@ -293,7 +298,7 @@ export default function Feedback() {
         </div>
 
         {trendsError && (
-          <p className="text-sm text-red-600 dark:text-red-400 mb-4">{trendsError}</p>
+          <p role="alert" className="text-sm text-red-600 dark:text-red-400 mb-4">{trendsError}</p>
         )}
 
         {trendsData && (
@@ -354,7 +359,7 @@ export default function Feedback() {
         </div>
 
         {compareError && (
-          <p className="text-sm text-red-600 dark:text-red-400 mb-4">{compareError}</p>
+          <p role="alert" className="text-sm text-red-600 dark:text-red-400 mb-4">{compareError}</p>
         )}
 
         {comparison && (
@@ -453,8 +458,12 @@ export default function Feedback() {
           </button>
         </div>
 
+        {fpError && (
+          <p role="alert" className="text-sm text-red-600 dark:text-red-400 mb-4">{fpError}</p>
+        )}
+
         {fpPatterns.length > 0 && <FPPatternsTable patterns={fpPatterns} />}
-        {fpPatterns.length === 0 && fpExperimentId && !fpLoading && (
+        {fpPatterns.length === 0 && fpExperimentId && !fpLoading && !fpError && (
           <p className="text-sm text-gray-400 dark:text-gray-500">No FP patterns found.</p>
         )}
       </section>
