@@ -930,6 +930,35 @@ behaviour is unaffected.
 
 **Result**: 10/10 pass on chromium and firefox.
 
+### 37. GlobPreview shows match count and example files for per_file rules
+
+**Spec:** `frontend/e2e/glob-preview.spec.ts` (commit pending)
+
+> As a security researcher authoring a per_file strategy override,
+> I want a live glob-match preview that shows exactly how many of
+> the sample files my pattern matches, lists up to 3 examples (with
+> a +N-more suffix when there are more), and uses singular/plural
+> grammar correctly — so I can validate my pattern before saving.
+
+Covers `StrategyEditor.tsx:114-127`'s `GlobPreview` component
+running against the 10-file `GLOB_PREVIEW_SAMPLE_FILES` constant.
+Eight tests:
+
+- Empty pattern → component returns null (no DOM node)
+- Whitespace-only pattern → null
+- Singular grammar: `README.md` → "Matches 1 sample file: README.md"
+  (no trailing `s`; the `: README.md` suffix prevents the assertion
+  from accidentally matching the plural form)
+- Plural with 0 matches: `nonexistent/*.go` → "Matches 0 sample
+  files" with NO listing colon
+- Plural with 2 matches: `**/*.tsx` → 2 files fully listed
+- Truncation: `**/*.py` → first 3 listed + `+4 more` suffix
+- Live update: pattern change replaces preview text without reload
+- `*` does NOT cross `/`: `src/*.py` → 0; `src/*/*.py` → 5 — the
+  globMatches translation `*` → `[^/]*` is the source of this.
+
+**Result**: 16/16 pass across chromium and firefox.
+
 ---
 
 ## Candidate stories for future iterations
