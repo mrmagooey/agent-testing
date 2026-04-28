@@ -5,6 +5,7 @@ import {
   cancelExperiment,
   type Run,
   type Finding,
+  type ExperimentResults,
 } from '../api/client'
 import { useExperiment } from '../hooks/useExperiment'
 import Breadcrumbs from '../components/Breadcrumbs'
@@ -16,6 +17,7 @@ import DimensionChart from '../components/DimensionChart'
 import DownloadButton from '../components/DownloadButton'
 import ExportMenu from '../components/ExportMenu'
 import PageDescription from '../components/PageDescription'
+import BenchmarkScorecardPanel from '../components/BenchmarkScorecardPanel'
 import { parseMatrixFilter, serializeMatrixFilter, applyMatrixFilter, clearMatrixFilter } from '../lib/matrixFilter'
 
 const STATUS_BADGE: Record<string, string> = {
@@ -116,7 +118,7 @@ export default function ExperimentDetail() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const { experiment, loading, error, refetch } = useExperiment(experimentId)
-  const [results, setResults] = useState<{ runs: Run[]; findings: Finding[] } | null>(null)
+  const [results, setResults] = useState<ExperimentResults | null>(null)
   const [resultsLoading, setResultsLoading] = useState(false)
   const [selectedRuns, setSelectedRuns] = useState<string[]>([])
   const [cancelling, setCancelling] = useState(false)
@@ -361,6 +363,9 @@ export default function ExperimentDetail() {
               <FindingsExplorer experimentId={experimentId} findings={results.findings} datasetName={experiment?.dataset} />
             </section>
           )}
+
+          {/* Benchmark Scorecard — only shown for benchmark datasets */}
+          <BenchmarkScorecardPanel scorecards={results.benchmark_scorecards} />
         </>
       )}
 

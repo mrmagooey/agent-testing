@@ -340,7 +340,37 @@ export function getExperiment(experimentId: string): Promise<Experiment> {
   return apiFetch<Experiment>(`/experiments/${experimentId}`)
 }
 
-export function getExperimentResults(experimentId: string): Promise<{ runs: Run[]; findings: Finding[] }> {
+// ─── Benchmark Scorecard Types ─────────────────────────────────────────────
+
+export interface CweRow {
+  cwe_id: string
+  tp: number
+  fp: number
+  tn: number
+  fn: number
+  precision: number | null
+  recall: number | null
+  f1: number | null
+  fp_rate: number | null
+  owasp_score: number | null
+  warning: string | null
+}
+
+export type AggregateRow = Omit<CweRow, 'cwe_id'>
+
+export interface BenchmarkScorecard {
+  dataset_name: string
+  per_cwe: CweRow[]
+  aggregate: AggregateRow
+}
+
+export interface ExperimentResults {
+  runs: Run[]
+  findings: Finding[]
+  benchmark_scorecards?: BenchmarkScorecard[]
+}
+
+export function getExperimentResults(experimentId: string): Promise<ExperimentResults> {
   return apiFetch(`/experiments/${experimentId}/results`)
 }
 
