@@ -155,6 +155,61 @@ def test_discover_cves_missing_body_returns_422(coordinator_client):
     assert resp.status_code == 422
 
 
+# ---------------------------------------------------------------------------
+# POST /datasets/discover-cves — patch-size + max_results validation
+# ---------------------------------------------------------------------------
+
+
+def test_discover_cves_negative_patch_size_min_returns_400(coordinator_client):
+    client, _, _ = coordinator_client
+    resp = client.post("/datasets/discover-cves", json={"patch_size_min": -5})
+    assert resp.status_code == 400
+    assert "patch_size_min" in resp.json()["detail"]
+
+
+def test_discover_cves_zero_patch_size_max_returns_400(coordinator_client):
+    client, _, _ = coordinator_client
+    resp = client.post("/datasets/discover-cves", json={"patch_size_max": 0})
+    assert resp.status_code == 400
+    assert "patch_size_max" in resp.json()["detail"]
+
+
+def test_discover_cves_inverted_patch_size_range_returns_400(coordinator_client):
+    client, _, _ = coordinator_client
+    resp = client.post(
+        "/datasets/discover-cves",
+        json={"patch_size_min": 500, "patch_size_max": 10},
+    )
+    assert resp.status_code == 400
+    body = resp.json()
+    assert "patch_size_min" in body["detail"]
+    assert "patch_size_max" in body["detail"]
+
+
+def test_discover_cves_max_results_too_small_returns_400(coordinator_client):
+    client, _, _ = coordinator_client
+    resp = client.post("/datasets/discover-cves", json={"max_results": 0})
+    assert resp.status_code == 400
+    assert "max_results" in resp.json()["detail"]
+
+
+def test_discover_cves_max_results_too_large_returns_400(coordinator_client):
+    client, _, _ = coordinator_client
+    resp = client.post("/datasets/discover-cves", json={"max_results": 5000})
+    assert resp.status_code == 400
+    assert "max_results" in resp.json()["detail"]
+
+
+def test_discover_cves_equal_min_and_max_patch_size_is_accepted(coordinator_client):
+    client, c, _ = coordinator_client
+    with patch.object(c, "discover_cves", return_value=[]):
+        resp = client.post(
+            "/datasets/discover-cves",
+            json={"patch_size_min": 50, "patch_size_max": 50},
+        )
+    assert resp.status_code == 200
+
+
 def test_discover_cves_multiple_candidates_returned(coordinator_client):
     client, c, _ = coordinator_client
     candidates = [

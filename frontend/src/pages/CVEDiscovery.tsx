@@ -192,6 +192,7 @@ export default function CVEDiscovery() {
                 <label className="text-xs text-gray-500 dark:text-gray-400 block mb-1">Patch size min (lines)</label>
                 <input
                   type="number"
+                  min={0}
                   value={patchSizeMin}
                   onChange={(e) => setPatchSizeMin(e.target.value)}
                   className="w-full text-sm rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-2 py-1"
@@ -201,6 +202,7 @@ export default function CVEDiscovery() {
                 <label className="text-xs text-gray-500 dark:text-gray-400 block mb-1">Patch size max (lines)</label>
                 <input
                   type="number"
+                  min={1}
                   value={patchSizeMax}
                   onChange={(e) => setPatchSizeMax(e.target.value)}
                   className="w-full text-sm rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-2 py-1"
@@ -236,7 +238,7 @@ export default function CVEDiscovery() {
           </form>
 
           {searchError && (
-            <div className="p-3 rounded-lg bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 text-sm">
+            <div role="alert" className="p-3 rounded-lg bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 text-sm">
               {searchError}
             </div>
           )}

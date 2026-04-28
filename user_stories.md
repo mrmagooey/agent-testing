@@ -1644,6 +1644,52 @@ The cancel POST → refetch hits the second branch → assertion sees
 
 ---
 
+### 55. CVE Discovery rejects invalid patch-size ranges with a useful message
+
+**Backend fix:** `src/sec_review_framework/coordinator.py`
+(`Coordinator.discover_cves`)
+**Frontend fix:** `frontend/src/pages/CVEDiscovery.tsx`
+**Backend test:** `tests/integration/test_datasets_extra_api.py` (+6)
+**Frontend test:** `frontend/e2e/cve-discovery-patch-size-validation.spec.ts` (NEW, 6 tests)
+
+> As a security researcher using the CVE Discovery search tab, when
+> I enter an invalid patch-size range (negative min, zero max, or
+> min > max), I want a clear validation error rather than getting
+> an empty results table that looks like "no CVEs match".
+
+**The bug**: `DiscoverCVEsRequest.patch_size_min/max` and
+`max_results` were `int` with no bounds. A negative min, a zero max,
+or an inverted range (min=500, max=10) all passed schema validation,
+were forwarded to `CVESelectionCriteria` whose filter is
+`lines_changed > max OR lines_changed < min` — so an inverted range
+silently rejected every candidate. The user saw "0 candidates"
+empty-state copy that suggested CVE feeds had no matches, when in
+fact their query was malformed. `max_results` was also unbounded.
+
+**The fix**: at the top of `Coordinator.discover_cves`, raise
+`HTTPException(400, detail=...)` for `patch_size_min<0`,
+`patch_size_max<1`, `patch_size_min>patch_size_max`, `max_results<1`,
+and `max_results>500`. Each detail string names the offending field
+so the existing apiFetch ApiError chain surfaces it through to the
+existing `searchError` UI (now with `role="alert"` for screen
+readers). HTML5 `min={0}` / `min={1}` on the patch-size inputs is
+defense-in-depth — UI users can't even type negatives — but the
+backend validates regardless.
+
+**Test gotcha**: the negative-min and zero-max e2e tests strip the
+HTML5 `min` attribute via `el.removeAttribute('min')` before
+filling, so the form actually POSTs and exercises the backend
+guard. The inverted-range test doesn't need this trick because
+HTML5 has no min<=max constraint. `getByRole('alert')` is scoped
+with `.filter({ hasText: 'patch_size' })` because two unrelated
+import-error alerts share the role on this page.
+
+**Result**: 12/12 e2e tests pass on chromium + firefox; 6 new backend
+tests + 7 pre-existing all pass. 110/110 in the broader CVE Discovery
+e2e suite — no regression.
+
+---
+
 ## Candidate stories for future iterations
 
 Listed roughly in order of estimated value vs implementation effort. Each

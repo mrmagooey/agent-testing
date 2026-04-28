@@ -2100,6 +2100,36 @@ class ExperimentCoordinator:
         """Discover CVE candidates matching the provided criteria."""
         from sec_review_framework.data.findings import Severity, VulnClass
 
+        if req.patch_size_min is not None and req.patch_size_min < 0:
+            raise HTTPException(
+                status_code=400,
+                detail="patch_size_min must be ≥ 0",
+            )
+        if req.patch_size_max is not None and req.patch_size_max < 1:
+            raise HTTPException(
+                status_code=400,
+                detail="patch_size_max must be ≥ 1",
+            )
+        if (
+            req.patch_size_min is not None
+            and req.patch_size_max is not None
+            and req.patch_size_min > req.patch_size_max
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="patch_size_min cannot exceed patch_size_max",
+            )
+        if req.max_results < 1:
+            raise HTTPException(
+                status_code=400,
+                detail="max_results must be ≥ 1",
+            )
+        if req.max_results > 500:
+            raise HTTPException(
+                status_code=400,
+                detail="max_results must be ≤ 500",
+            )
+
         criteria_kwargs: dict = {}
         if req.languages:
             criteria_kwargs["languages"] = req.languages
