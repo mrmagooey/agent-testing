@@ -109,6 +109,11 @@ vuln_classes:
     cwe_ids: ["CWE-327"]
     owasp_category: "A02:2021"
 
+  crypto:
+    display_name: "Use of Weak or Broken Symmetric Cipher"
+    cwe_ids: ["CWE-327"]
+    owasp_category: "A02:2021"
+
   securecookie:
     display_name: "Insecure Cookie"
     cwe_ids: ["CWE-614"]
@@ -123,6 +128,11 @@ vuln_classes:
     display_name: "Trust Boundary Violation"
     cwe_ids: ["CWE-501"]
     owasp_category: "A01:2021"
+
+  reflection_injection:
+    display_name: "Reflection Injection"
+    cwe_ids: ["CWE-470"]
+    owasp_category: null
 
   other:
     display_name: "Other"

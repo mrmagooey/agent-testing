@@ -10,8 +10,8 @@ no network access required at worker runtime.
 
 Default docset list (opinionated selection for security-review workloads)
 -------------------------------------------------------------------------
-python~3.12, javascript, typescript, go, rust, cpp, ruby, php, bash,
-nodejs, express, flask, django, aws, openapi, http, dom
+python~3.12, javascript, typescript, go, rust, cpp, java~21, ruby, php,
+bash, nodejs, express, flask, django, aws, openapi, http, dom
 
 Usage as a module
 -----------------
@@ -61,6 +61,7 @@ DEFAULT_DOCSETS: list[str] = [
     "go",
     "rust",
     "cpp",
+    "java~21",
     "ruby",
     "php",
     "bash",
