@@ -1974,6 +1974,15 @@ class ExperimentCoordinator:
                 except Exception:
                     shutil.rmtree(target_repo_dir, ignore_errors=True)
                     raise
+        elif row["kind"] == "archive":
+            if not target_repo_dir.exists():
+                from sec_review_framework.ground_truth.archive_materializer import (
+                    materialize_archive_dataset,
+                )
+                await materialize_archive_dataset(
+                    dataset_row=row,
+                    target_dir=target_repo_dir,
+                )
         elif row["kind"] == "derived":
             base_repo_dir_check = self.storage_root / "datasets" / row["base_dataset"] / "repo"
             if not base_repo_dir_check.exists():
