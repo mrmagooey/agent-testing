@@ -154,7 +154,7 @@ BANDIT_RULE_TO_CWE: dict[str, str] = {
     "B308": "CWE-79",    # mark_safe → CWE-79 XSS
     "B310": "CWE-22",    # urllib_urlopen → CWE-22 / SSRF; nearest is CWE-918
     "B311": "CWE-330",   # random → CWE-330 Use of Insufficiently Random Values
-    "B312": "CWE-605",   # telnetlib → CWE-319 Cleartext Transmission
+    "B312": "CWE-319",   # telnetlib → CWE-319 Cleartext Transmission
     "B313": "CWE-611",   # xml_bad_cElementTree → CWE-611 XXE
     "B314": "CWE-611",   # xml_bad_ElementTree → CWE-611 XXE
     "B315": "CWE-611",   # xml_bad_expatreader → CWE-611 XXE
@@ -179,7 +179,7 @@ BANDIT_RULE_TO_CWE: dict[str, str] = {
     "B408": "CWE-611",   # import_xml_minidom → CWE-611 XXE
     "B409": "CWE-611",   # import_xml_pulldom → CWE-611 XXE
     "B411": "CWE-611",   # import_xmlrpclib → CWE-611 XXE
-    "B412": "CWE-502",   # import_httpoxy → CWE-20 Input Validation; nearest CWE-441
+    "B412": "CWE-441",   # import_httpoxy → CWE-441 Unintended Proxy / Intermediary
     "B413": "CWE-327",   # import_pycrypto → CWE-327 Deprecated Crypto Library
     "B415": "CWE-327",   # import_pyghmi → CWE-327 Deprecated Crypto
     # B5xx — cryptography
@@ -507,9 +507,10 @@ async def import_bandit_functional(
             # When no issues have rule IDs (polarity only from severity counts),
             # emit a single generic whole-file label with CWE-1.
             # ------------------------------------------------------------------
-            line_count = _count_file_lines(example_path)
             if not example_path.exists():
                 result.skipped_count += 1
+                continue
+            line_count = _count_file_lines(example_path)
 
             if issues:
                 for issue in issues:
