@@ -1203,6 +1203,34 @@ deletion proceeds normally — no test relied on the side-effect.
 across lifecycle + routes_extended + coordinator_api) green; tests
 demonstrably fail without the fix.
 
+### 44. Cancel-modal surfaces backend errors instead of failing silent
+
+**Frontend fix:** `frontend/src/pages/ExperimentDetail.tsx`
+**Frontend spec:** `frontend/e2e/experiment-detail-cancel-error.spec.ts` (4 tests)
+
+> As a security researcher cancelling a long-running experiment, I
+> want clear feedback if the cancel request fails — currently the
+> modal closes silently with no indication, leaving me to wonder if
+> it worked.
+
+**The bug**: `handleCancelConfirm` had `try { await cancelExperiment } finally { setShowCancelModal(false) }` — the modal closed in the `finally` block regardless of whether the API succeeded or threw. A network blip, 500, or backend reject left the user with NO indication that anything went wrong.
+
+**The fix**:
+- Add `cancelError: string | null` state.
+- On success: close modal as before.
+- On error: capture `(err instanceof Error ? err.message : 'Cancel failed')` into `cancelError`, KEEP the modal open, re-enable the buttons. The user sees the error and can retry or dismiss.
+- Dismissing the modal (the modal's own Cancel button) resets both `showCancelModal` AND `cancelError` so a re-open starts fresh.
+- Render the error inline above the buttons in `CancelConfirmModal` with `role="alert"` (live-announced for screen readers; also a stable selector for tests via `getByRole('alert')`).
+- The `error` prop on `CancelConfirmModal` is `string | null | undefined` (optional) so the component remains future-portable to other call sites without a forced prop.
+
+**Tests** (4):
+- 500 + `{detail: "Cancel rejected: K8s unreachable"}` → exact error visible inside modal, modal stays open, buttons re-enabled
+- 500 + empty body → fallback error message visible (`role="alert"` selector)
+- 200 success → modal closes (sanity)
+- Dismiss after error → re-opening modal starts with no error shown (state-leak guard)
+
+**Result**: 8/8 tests pass on chromium and firefox; typecheck clean.
+
 ---
 
 ## Candidate stories for future iterations

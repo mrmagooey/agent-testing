@@ -44,10 +44,12 @@ function CancelConfirmModal({
   onConfirm,
   onCancel,
   confirming,
+  error,
 }: {
   onConfirm: () => void
   onCancel: () => void
   confirming: boolean
+  error?: string | null
 }) {
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -56,6 +58,11 @@ function CancelConfirmModal({
         <p className="text-sm text-gray-600 dark:text-gray-400 mb-6">
           This will cancel all pending and running jobs in this experiment. Completed runs will not be affected.
         </p>
+        {error && (
+          <div role="alert" className="rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950 p-3 mb-4 text-sm text-red-700 dark:text-red-300">
+            {error}
+          </div>
+        )}
         <div className="flex justify-end gap-3">
           <button
             onClick={onCancel}
@@ -114,6 +121,7 @@ export default function ExperimentDetail() {
   const [selectedRuns, setSelectedRuns] = useState<string[]>([])
   const [cancelling, setCancelling] = useState(false)
   const [showCancelModal, setShowCancelModal] = useState(false)
+  const [cancelError, setCancelError] = useState<string | null>(null)
 
   const filter = useMemo(() => parseMatrixFilter(searchParams), [searchParams])
   const filteredRuns = useMemo(() => (results ? applyMatrixFilter(results.runs, filter) : []), [results, filter])
@@ -135,12 +143,15 @@ export default function ExperimentDetail() {
 
   const handleCancelConfirm = async () => {
     if (!experimentId || cancelling) return
+    setCancelError(null)
     setCancelling(true)
     try {
       await cancelExperiment(experimentId)
+      setShowCancelModal(false)
+    } catch (err) {
+      setCancelError(err instanceof Error ? err.message : 'Cancel failed')
     } finally {
       setCancelling(false)
-      setShowCancelModal(false)
     }
   }
 
@@ -169,8 +180,9 @@ export default function ExperimentDetail() {
       {showCancelModal && (
         <CancelConfirmModal
           onConfirm={handleCancelConfirm}
-          onCancel={() => setShowCancelModal(false)}
+          onCancel={() => { setShowCancelModal(false); setCancelError(null) }}
           confirming={cancelling}
+          error={cancelError}
         />
       )}
 
