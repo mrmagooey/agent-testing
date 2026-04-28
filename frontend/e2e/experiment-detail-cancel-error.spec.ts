@@ -198,3 +198,58 @@ test('dismissing modal after error clears the error on re-open', async ({ page }
   await expect(page.getByRole('heading', { name: 'Stop all pending runs?' })).toBeVisible()
   await expect(page.getByText('Cancel rejected: K8s unreachable')).not.toBeVisible()
 })
+
+// ---------------------------------------------------------------------------
+// Test 5: Successful cancel triggers immediate refetch — status flips
+// ---------------------------------------------------------------------------
+
+test('successful cancel refetches experiment so status flips to cancelled immediately', async ({ page }) => {
+  await mockApi(page)
+
+  // Track GETs so the first few are 'running' and only post-cancel returns 'cancelled'.
+  // StrictMode dev double-mount fires the initial fetchExperiment twice, so we
+  // count requests and switch responses based on whether the cancel POST has
+  // already been observed.
+  let cancelPosted = false
+  await page.route(/\/api\/experiments\/[^/]+$/, async (route) => {
+    if (route.request().method() !== 'GET') {
+      await route.fallback()
+      return
+    }
+    const body = cancelPosted
+      ? { ...runningExperiment, status: 'cancelled', completed_at: '2026-04-17T11:00:00Z' }
+      : runningExperiment
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(body),
+    })
+  })
+
+  // POST /cancel succeeds and flips the GET-response branch.
+  await page.route(`**/api/experiments/${RUNNING_ID}/cancel*`, async (route) => {
+    if (route.request().method() !== 'POST') {
+      await route.fallback()
+      return
+    }
+    cancelPosted = true
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ cancelled_jobs: 1 }),
+    })
+  })
+
+  await page.goto(`/experiments/${RUNNING_ID}`)
+  await expect(page.getByText('running').first()).toBeVisible()
+
+  // Trigger the cancel
+  await page.getByRole('button', { name: 'Cancel' }).click()
+  await page.getByRole('button', { name: 'Stop experiment' }).click()
+
+  // Status badge must flip to 'cancelled' WITHOUT waiting for the 10s poll cycle.
+  // Generous timeout since the refetch is async, but well below 10s.
+  await expect(page.getByText('cancelled').first()).toBeVisible({ timeout: 3000 })
+  // The 'Cancel' button (which only renders when !isTerminal) must be gone.
+  await expect(page.getByRole('button', { name: 'Cancel' })).not.toBeVisible()
+})

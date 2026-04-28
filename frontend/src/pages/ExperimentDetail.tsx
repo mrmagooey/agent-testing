@@ -115,7 +115,7 @@ export default function ExperimentDetail() {
   const { id: experimentId } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
-  const { experiment, loading, error } = useExperiment(experimentId)
+  const { experiment, loading, error, refetch } = useExperiment(experimentId)
   const [results, setResults] = useState<{ runs: Run[]; findings: Finding[] } | null>(null)
   const [resultsLoading, setResultsLoading] = useState(false)
   const [selectedRuns, setSelectedRuns] = useState<string[]>([])
@@ -148,6 +148,9 @@ export default function ExperimentDetail() {
     try {
       await cancelExperiment(experimentId)
       setShowCancelModal(false)
+      // Refetch immediately so the status badge flips to 'cancelled'
+      // without waiting for the 10s poll cycle.
+      await refetch()
     } catch (err) {
       setCancelError(err instanceof Error ? err.message : 'Cancel failed')
     } finally {

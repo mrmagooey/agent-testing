@@ -1609,6 +1609,39 @@ in both tabs.
 This iteration completes the matched-pair with iter 52: the backend
 now returns meaningful errors AND the frontend now displays them.
 
+### 54. Successful cancel refetches the experiment immediately
+
+**Frontend fix:** `frontend/src/hooks/useExperiment.ts`,
+`frontend/src/pages/ExperimentDetail.tsx`
+**Frontend test:** `frontend/e2e/experiment-detail-cancel-error.spec.ts` (+1)
+
+> As a security researcher who just cancelled an experiment, I want
+> the page to immediately reflect the new 'cancelled' status —
+> currently the status badge stays 'running' for up to 10 seconds
+> while the polling cycle catches up, leaving me unsure if the
+> cancel succeeded.
+
+**The bug**: `useExperiment` polls `getExperiment` every 10s
+(`POLL_INTERVAL_MS`). After a successful cancel, the modal closed
+but the page kept showing the old status until the next poll
+fired. The Cancel button (gated on `!isTerminal`) also stayed
+visible during the lag, inviting a confusing second cancel
+attempt.
+
+**The fix**: expose a `refetch` function from `useExperiment`
+(wrapping the existing `fetchExperiment`) and call it immediately
+after a successful `cancelExperiment` in `handleCancelConfirm`.
+The status badge flips and the Cancel button disappears within
+the round-trip of the GET, not the 10s poll.
+
+**Test**: a per-test `page.route` that flips its GET-response
+branch on `cancelPosted = true` (set inside the POST handler).
+The cancel POST → refetch hits the second branch → assertion sees
+'cancelled' visible within 3 s, well below the 10 s poll.
+
+**Result**: 10/10 cancel-error tests pass on both browsers
+(4 pre-existing + 1 new).
+
 ---
 
 ## Candidate stories for future iterations

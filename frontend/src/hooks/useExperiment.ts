@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { getExperiment, type Experiment } from '../api/client'
 
 const POLL_INTERVAL_MS = 10_000
@@ -8,6 +8,7 @@ export function useExperiment(experimentId: string | undefined): {
   experiment: Experiment | null
   loading: boolean
   error: string | null
+  refetch: () => Promise<void>
 } {
   const [experiment, setExperiment] = useState<Experiment | null>(null)
   const [loading, setLoading] = useState(true)
@@ -21,7 +22,7 @@ export function useExperiment(experimentId: string | undefined): {
     }
   }
 
-  const fetchExperiment = async () => {
+  const fetchExperiment = useCallback(async () => {
     if (!experimentId) return
     try {
       const data = await getExperiment(experimentId)
@@ -35,7 +36,7 @@ export function useExperiment(experimentId: string | undefined): {
     } finally {
       setLoading(false)
     }
-  }
+  }, [experimentId])
 
   useEffect(() => {
     if (!experimentId) {
@@ -61,5 +62,5 @@ export function useExperiment(experimentId: string | undefined): {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [experimentId])
 
-  return { experiment, loading, error }
+  return { experiment, loading, error, refetch: fetchExperiment }
 }
