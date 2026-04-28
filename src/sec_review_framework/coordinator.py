@@ -1916,6 +1916,49 @@ class ExperimentCoordinator:
         return self._templates_version_cache
 
     async def import_cve(self, spec: dict) -> list[GroundTruthLabel]:
+        # If only cve_id (and optionally dataset_name) is provided, resolve
+        # the full CVE details first via the existing CVEResolver. This is
+        # the path the CVE Discovery page uses — clicking Import sends just
+        # the CVE id and trusts the server to fill in repo_url, fix_commit,
+        # etc. Otherwise fall through to the full-spec path below.
+        if set(spec.keys()) <= {"cve_id", "dataset_name"} and spec.get("cve_id"):
+            importer = self._build_cve_importer()
+            cve_id = spec["cve_id"]
+            try:
+                resolved = importer.resolver.resolve(cve_id)
+            except Exception as exc:
+                raise HTTPException(status_code=502, detail=f"CVE resolver failed: {exc}")
+            if not resolved:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Could not resolve {cve_id} to a GitHub repo + fix commit",
+                )
+            dataset_name = spec.get("dataset_name") or f"cve-{cve_id.lower().replace('-', '_')}"
+            self._validate_dataset_name(dataset_name)
+            try:
+                labels = importer.import_from_id(cve_id, dataset_name)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+            except subprocess.CalledProcessError:
+                raise HTTPException(status_code=502, detail="git clone or checkout failed")
+            now = datetime.now(UTC).isoformat()
+            await self.db.create_dataset({
+                "name": dataset_name,
+                "kind": "git",
+                "origin_url": resolved.repo_url,
+                "origin_commit": resolved.fix_commit_sha,
+                "origin_ref": None,
+                "cve_id": resolved.cve_id,
+                "metadata_json": "{}",
+                "created_at": now,
+            })
+            await self.db.update_dataset_materialized_at(dataset_name, now)
+            await self.db.append_dataset_labels([
+                {**lbl.model_dump(mode="json"), "dataset_name": dataset_name}
+                for lbl in labels
+            ])
+            return labels
+
         try:
             import_spec = CVEImportSpec(**spec)
         except (ValidationError, TypeError) as exc:

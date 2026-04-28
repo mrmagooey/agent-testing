@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
 
 import sec_review_framework.coordinator as coord_module
-from sec_review_framework.coordinator import ExperimentCoordinator, app
+from sec_review_framework.coordinator import app, ExperimentCoordinator
 from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
 from sec_review_framework.data.evaluation import GroundTruthLabel, GroundTruthSource
 from sec_review_framework.data.findings import Severity, VulnClass
@@ -60,7 +61,7 @@ def _make_label(idx: int = 0) -> GroundTruthLabel:
         source=GroundTruthSource.CVE_PATCH,
         source_ref="CVE-2023-00001",
         confidence="confirmed",
-        created_at=datetime.now(UTC),
+        created_at=datetime.now(timezone.utc),
     )
 
 
@@ -114,6 +115,7 @@ def test_import_cve_persists_labels_to_db(coordinator_client):
 
 def test_import_cve_idempotent_second_call_fails_409(coordinator_client):
     """A second import_cve for the same dataset name returns 409 (duplicate PK)."""
+    import asyncio
     client, c, tmp_path = coordinator_client
     labels = [_make_label(0)]
     with patch.object(c, "_build_cve_importer") as mock_builder:
@@ -139,11 +141,21 @@ def test_import_cve_idempotent_second_call_fails_409(coordinator_client):
 
 
 def test_import_cve_invalid_spec_raises_400(coordinator_client):
-    """import_cve with an incomplete spec returns 400."""
-    client, *_ = coordinator_client
-    # Missing repo_url, fix_commit_sha, dataset_name, etc.
-    resp = client.post("/datasets/import-cve", json={"cve_id": "CVE-2023-99999"})
-    assert resp.status_code == 400
+    """import_cve with an id-only request that cannot be resolved returns 404.
+
+    Before the fix, a bare {cve_id} would 400 (missing required fields).
+    After the fix, the coordinator attempts resolution first; when the resolver
+    returns None the response is 404 (not 400).
+    """
+    client, c, *_ = coordinator_client
+    with patch.object(c, "_build_cve_importer") as mock_builder:
+        mock_importer = MagicMock()
+        mock_importer.resolver.resolve.return_value = None
+        mock_builder.return_value = mock_importer
+
+        resp = client.post("/datasets/import-cve", json={"cve_id": "CVE-2023-99999"})
+    # Resolution failed → 404, not 400
+    assert resp.status_code == 404
 
 
 # ---------------------------------------------------------------------------

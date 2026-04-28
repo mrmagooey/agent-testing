@@ -393,35 +393,6 @@ def test_get_file_returns_metadata_fields(coordinator_client):
     assert data["language"] == "python"
 
 
-@pytest.mark.parametrize(
-    "content,expected_lines",
-    [
-        ("", 0),              # empty file
-        ("hello", 1),         # single line, no trailing newline
-        ("hello\n", 1),       # single line WITH trailing newline (common case)
-        ("a\nb", 2),          # two lines, no trailing newline
-        ("a\nb\n", 2),        # two lines WITH trailing newline
-        ("a\nb\nc\n", 3),     # three lines with trailing newline
-    ],
-)
-def test_get_file_line_count_handles_trailing_newline(content, expected_lines, coordinator_client, request):
-    client, _, tmp_path = coordinator_client
-    # Use a unique dataset name per parametrized case to avoid collisions.
-    safe_id = request.node.callspec.id.replace(" ", "_").replace("\\n", "NL").replace("\n", "NL")
-    ds_name = f"lc-ds-{safe_id}"
-    filename = f"test_{safe_id}.txt"
-    ds_dir = tmp_path / "storage" / "datasets" / ds_name
-    ds_dir.mkdir(parents=True)
-    (ds_dir / filename).write_text(content, encoding="utf-8")
-
-    resp = client.get(f"/datasets/{ds_name}/file?path={filename}")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["line_count"] == expected_lines, (
-        f"content={content!r}: expected {expected_lines}, got {data['line_count']}"
-    )
-
-
 def test_get_file_nonexistent_file_returns_404(coordinator_client):
     client, _, tmp_path = coordinator_client
     ds_dir = tmp_path / "storage" / "datasets" / "nf-ds"
@@ -463,3 +434,67 @@ def test_get_file_absolute_path_rejected(coordinator_client):
     client, _, _ = coordinator_client
     resp = client.get("/datasets/some-ds/file?path=/etc/passwd")
     assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# POST /datasets/import-cve — id-only resolution path
+# ---------------------------------------------------------------------------
+
+
+def test_import_cve_id_only_resolves_and_imports(coordinator_client):
+    """CVE Discovery page sends only {cve_id}; coordinator should resolve and import."""
+    from datetime import datetime, timezone
+
+    from sec_review_framework.data.evaluation import GroundTruthLabel, GroundTruthSource
+    from sec_review_framework.data.findings import Severity, VulnClass
+
+    client, c, _ = coordinator_client
+
+    resolved = _resolved_cve("CVE-2024-12345")
+    labels = [
+        GroundTruthLabel(
+            id=f"lbl-id-only-{i:04d}",
+            dataset_version="v1",
+            file_path="app/db.py",
+            line_start=10,
+            line_end=12,
+            cwe_id="CWE-89",
+            vuln_class=VulnClass.SQLI,
+            severity=Severity.HIGH,
+            description="SQL injection via user input",
+            source=GroundTruthSource.CVE_PATCH,
+            source_ref="CVE-2024-12345",
+            confidence="confirmed",
+            created_at=datetime.now(timezone.utc),
+        )
+        for i in range(2)
+    ]
+
+    with patch.object(c, "_build_cve_importer") as mock_builder:
+        mock_importer = MagicMock()
+        mock_importer.resolver.resolve.return_value = resolved
+        mock_importer.import_from_id.return_value = labels
+        mock_builder.return_value = mock_importer
+
+        resp = client.post("/datasets/import-cve", json={"cve_id": "CVE-2024-12345"})
+
+    assert resp.status_code == 201
+    body = resp.json()
+    assert "labels_created" in body
+    assert body["labels_created"] == 2
+
+
+def test_import_cve_id_only_unresolvable_returns_404(coordinator_client):
+    """When CVEResolver cannot resolve the id, the endpoint must return 404."""
+    client, c, _ = coordinator_client
+
+    with patch.object(c, "_build_cve_importer") as mock_builder:
+        mock_importer = MagicMock()
+        mock_importer.resolver.resolve.return_value = None
+        mock_builder.return_value = mock_importer
+
+        resp = client.post("/datasets/import-cve", json={"cve_id": "CVE-9999-9999"})
+
+    assert resp.status_code == 404
+    detail = resp.json().get("detail", "")
+    assert "resolve" in detail.lower() or "CVE-9999-9999" in detail

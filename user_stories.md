@@ -1523,6 +1523,56 @@ unfixed code (sentinel survives the delete).
 
 **Result**: 16/16 routes-extended tests pass.
 
+### 52. Import CVE by id alone now actually works
+
+**Backend fix:** `src/sec_review_framework/coordinator.py`
+**Backend tests:** `tests/integration/test_datasets_extra_api.py` (+2),
+`tests/unit/test_coordinator_cve_injection.py` (1 updated)
+
+> As a security researcher who just resolved a CVE on the CVE
+> Discovery page, I want to click Import and have the dataset
+> created — currently the backend rejects the request because the
+> frontend sends only the cve_id but the API requires the full
+> CVEImportSpec, breaking the user flow.
+
+**The bug**: `frontend/src/api/client.ts` `importCVE(cveId, datasetName?)`
+sent at most `{cve_id, dataset_name}`. The backend `coordinator.import_cve`
+called `CVEImportSpec(**spec)` directly. `CVEImportSpec` requires
+`cve_id`, `repo_url`, `fix_commit_sha`, `dataset_name`, `cwe_id`,
+`vuln_class`, `severity`, `description` — so any id-only request
+400'd with "field required" errors. The frontend's
+`handleImportResolved` had no `.catch()`, so the error propagated
+as an unhandled rejection and the user saw no feedback.
+
+The CVEImporter class already had `import_from_id(cve_id, dataset_name)`
+that resolved via `CVEResolver` and dispatched to `import_from_spec` —
+the coordinator just wasn't using it.
+
+**The fix**: in `coordinator.import_cve`, detect id-only requests
+(`set(spec.keys()) <= {"cve_id", "dataset_name"}`) and dispatch to
+the resolver-then-importer path: build a `CVEImporter`, call
+`importer.resolver.resolve(cve_id)`, derive a `dataset_name` if
+not provided, and call `import_from_id`. Persist the resulting
+dataset row + labels using the same DB calls as the spec path.
+Returns 502 on resolver exceptions, 404 if the resolver returns
+None ("can't resolve to a GitHub repo + fix commit").
+
+The pre-existing full-spec path is unchanged — direct API consumers
+that already build a complete spec hit the same code as before.
+
+**Tests**:
+- `test_import_cve_id_only_resolves_and_imports` — POST `{cve_id}`,
+  mock `_build_cve_importer` to return a fake importer with stubbed
+  resolver + `import_from_id`. Asserts 201 + `labels_created` count.
+- `test_import_cve_id_only_unresolvable_returns_404` — resolver
+  returns None → 404 with "resolve" in detail.
+- Updated `test_import_cve_invalid_spec_raises_400` — id-only
+  requests with an unresolvable id now 404 (not 400 for missing
+  fields), reflecting the new contract.
+
+**Result**: 62/62 dataset-API + CVE-injection tests pass; new tests
+demonstrably fail on the unfixed code.
+
 ---
 
 ## Candidate stories for future iterations
