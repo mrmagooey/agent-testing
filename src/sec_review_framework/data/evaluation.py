@@ -14,6 +14,9 @@ class GroundTruthSource(StrEnum):
     CVE_PATCH = "cve_patch"
     INJECTED = "injected"
     MANUAL = "manual"
+    BENCHMARK = "benchmark"
+    CVEFIXES = "cvefixes"
+    CROSSVUL = "crossvul"
 
 
 class GroundTruthLabel(BaseModel):

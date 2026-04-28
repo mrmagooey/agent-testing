@@ -492,6 +492,36 @@ def test_upload_token_readable_as_attribute():
     assert run.upload_token == "readable"
 
 
+def test_ground_truth_source_accepts_all_db_values():
+    """Regression: GroundTruthSource must accept every value the DB CHECK allows.
+
+    A worker fetches labels via HTTP and validates each via
+    GroundTruthLabel.model_validate(). If the StrEnum drifts behind the DB
+    CHECK constraint, every benchmark/cvefixes/crossvul run fails opaquely.
+    """
+    from sec_review_framework.data.evaluation import GroundTruthLabel, GroundTruthSource
+
+    expected = {"cve_patch", "injected", "manual", "benchmark", "cvefixes", "crossvul"}
+    assert {s.value for s in GroundTruthSource} == expected
+
+    base_label = {
+        "id": "x",
+        "dataset_version": "v",
+        "file_path": "f.py",
+        "line_start": 1,
+        "line_end": 2,
+        "cwe_id": "CWE-1",
+        "vuln_class": VulnClass.SQLI,
+        "severity": Severity.MEDIUM,
+        "description": "d",
+        "confidence": "likely",
+        "created_at": datetime.now(),
+    }
+    for source_value in expected:
+        label = GroundTruthLabel.model_validate({**base_label, "source": source_value})
+        assert label.source == source_value
+
+
 def test_experiment_run_roundtrip_without_token():
     """An ExperimentRun with upload_token can be round-tripped via JSON safely.
 
