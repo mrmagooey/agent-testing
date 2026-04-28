@@ -54,7 +54,7 @@ class CostCalculator:
     def __init__(
         self,
         pricing: dict[str, ModelPricing],
-        pricing_view: "PricingView | None" = None,
+        pricing_view: PricingView | None = None,
     ) -> None:
         self.pricing = pricing
         self._pricing_view = pricing_view
@@ -105,7 +105,7 @@ class CostCalculator:
         return cost / true_positives
 
     @classmethod
-    def from_config(cls, config_dir: Path | None = None) -> "CostCalculator":
+    def from_config(cls, config_dir: Path | None = None) -> CostCalculator:
         """
         Load pricing from config/pricing.yaml via PricingConfig and return a
         CostCalculator instance.

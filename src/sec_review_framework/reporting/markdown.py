@@ -49,8 +49,8 @@ class MarkdownReportGenerator(ReportGenerator):
         # --- Header ---
         lines.append(f"# Security Review Run: {exp.id}\n")
         lines.append("## Run Header\n")
-        lines.append(f"| Field | Value |")
-        lines.append(f"|-------|-------|")
+        lines.append("| Field | Value |")
+        lines.append("|-------|-------|")
         lines.append(f"| Experiment ID | `{exp.id}` |")
         lines.append(f"| Model | `{exp.model_id}` |")
         lines.append(f"| Strategy | `{exp.strategy.value}` |")
@@ -160,7 +160,7 @@ class MarkdownReportGenerator(ReportGenerator):
                     lines.append(f"- **Severity:** `{f.severity.value}`")
                     if f.line_start is not None:
                         lines.append(f"- **Lines:** {f.line_start}–{f.line_end or f.line_start}")
-                    lines.append(f"- *(not in ground truth)*")
+                    lines.append("- *(not in ground truth)*")
                     lines.append("")
                     lines.append(f"**Description:**\n\n{f.description}\n")
 
@@ -280,15 +280,21 @@ class MarkdownReportGenerator(ReportGenerator):
 
         # Tool Access Impact
         lines.append("### Tool Access Impact\n")
-        lines.extend(self._dimension_table(completed, key=lambda r: r.experiment.tool_variant.value, label="Tool Variant"))
+        lines.extend(self._dimension_table(
+            completed, key=lambda r: r.experiment.tool_variant.value, label="Tool Variant"
+        ))
 
         # Review Profile Impact
         lines.append("### Review Profile Impact\n")
-        lines.extend(self._dimension_table(completed, key=lambda r: r.experiment.review_profile.value, label="Profile"))
+        lines.extend(self._dimension_table(
+            completed, key=lambda r: r.experiment.review_profile.value, label="Profile"
+        ))
 
         # Verification Impact
         lines.append("### Verification Impact\n")
-        lines.extend(self._dimension_table(completed, key=lambda r: r.experiment.verification_variant.value, label="Verification"))
+        lines.extend(self._dimension_table(
+            completed, key=lambda r: r.experiment.verification_variant.value, label="Verification"
+        ))
 
         # Tool Extension Impact
         lines.append("### Tool Extension Impact\n")
@@ -353,7 +359,7 @@ class MarkdownReportGenerator(ReportGenerator):
                         label_detection[mf.matched_label.id].append(r.experiment.model_id)
 
         universal = {lid for lid, models in label_detection.items() if len(set(models)) == len(all_model_ids)}
-        lines.append(f"### Vulnerabilities Found by All Models (High Confidence)\n")
+        lines.append("### Vulnerabilities Found by All Models (High Confidence)\n")
         if universal:
             lines.append(f"Found by all {len(all_model_ids)} models: **{len(universal)}** vulnerabilities\n")
         else:
@@ -370,7 +376,7 @@ class MarkdownReportGenerator(ReportGenerator):
                         all_label_ids.add(mf.matched_label.id)
 
         always_missed = all_label_ids - set(label_detection.keys())
-        lines.append(f"### Vulnerabilities Consistently Missed\n")
+        lines.append("### Vulnerabilities Consistently Missed\n")
         if always_missed:
             lines.append(f"Missed by all models: **{len(always_missed)}** vulnerabilities\n")
         else:
@@ -406,7 +412,7 @@ class MarkdownReportGenerator(ReportGenerator):
         for r in results:
             grouped[key(r)].append(r)
 
-        rows = ["| {label} | Avg Prec | Avg Recall | Avg F1 | Avg FPR | Total TP | Total FP |".format(label=label)]
+        rows = [f"| {label} | Avg Prec | Avg Recall | Avg F1 | Avg FPR | Total TP | Total FP |"]
         rows.append("|" + "---------|" * 7)
         for dim_val, dim_results in sorted(grouped.items()):
             evs = [r.evaluation for r in dim_results if r.evaluation is not None]

@@ -98,4 +98,4 @@ jobs:
         run: helm lint helm/sec-review
 
       - name: Helm template
-        run: helm template sec-review helm/sec-review >/dev/null
+        run: helm template sec-review helm/sec-review -f helm/sec-review/values-prod.yaml >/dev/null

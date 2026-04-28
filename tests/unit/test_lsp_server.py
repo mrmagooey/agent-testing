@@ -14,7 +14,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Language detection
 # ---------------------------------------------------------------------------
@@ -293,6 +292,7 @@ class TestLspFramer:
 class TestLspMultiplexerDispatch:
     def test_unknown_extension_returns_error(self, tmp_path: Path) -> None:
         import asyncio
+
         from sec_review_framework.tools.extensions.lsp_server import LSPMultiplexer
 
         mux = LSPMultiplexer(tmp_path)
@@ -319,6 +319,7 @@ class TestLspMultiplexerDispatch:
         """A file path with a recognized extension that escapes the workspace root
         must raise ValueError rather than silently serving the file."""
         import asyncio
+
         from sec_review_framework.tools.extensions.lsp_server import LSPMultiplexer
 
         mux = LSPMultiplexer(tmp_path)
@@ -339,6 +340,7 @@ class TestLspMultiplexerDispatch:
     def test_binary_not_on_path_returns_error(self, tmp_path: Path) -> None:
         """If a language-server binary is missing, the error is surfaced cleanly."""
         import asyncio
+
         import sec_review_framework.tools.extensions.lsp_server as lsp_mod
         from sec_review_framework.tools.extensions.lsp_server import LSPMultiplexer
 

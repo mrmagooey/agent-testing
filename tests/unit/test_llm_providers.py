@@ -379,8 +379,8 @@ async def test_probe_failure_logs_scrubbed_error_only(caplog):
     should appear in log output.
     """
     import logging
-    import asyncio
     import unittest.mock as mock
+
     from sec_review_framework.llm_providers import _probe_custom_provider
 
     # Set up caplog to capture WARNING level

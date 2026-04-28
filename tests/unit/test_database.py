@@ -10,7 +10,6 @@ import pytest_asyncio
 from sec_review_framework.data.experiment import ToolExtension
 from sec_review_framework.db import Database
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -338,8 +337,9 @@ async def test_issue_upload_token_returns_plaintext(db: Database) -> None:
 @pytest.mark.asyncio
 async def test_issue_upload_token_not_stored_as_plaintext(db: Database) -> None:
     """The token stored in the DB is the SHA-256 hash, not the plaintext."""
-    import aiosqlite
     import hashlib
+
+    import aiosqlite
 
     await _setup_run(db, "run-tok-2", "exp-tok-2")
     token = await db.issue_upload_token("run-tok-2")

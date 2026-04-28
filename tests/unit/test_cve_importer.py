@@ -2,25 +2,21 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from pathlib import Path
-from unittest.mock import MagicMock, patch
-from uuid import uuid4
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
 
+from sec_review_framework.data.findings import Severity, VulnClass
 from sec_review_framework.ground_truth.cve_importer import (
-    CVECandidate,
     CVEDiscovery,
-    CVEImportSpec,
     CVEImporter,
+    CVEImportSpec,
     CVEResolver,
     CVESelectionCriteria,
     ResolvedCVE,
 )
-from sec_review_framework.data.findings import Severity, VulnClass
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -397,7 +393,7 @@ class TestCVEImporterBuildLabels:
         )
         labels = importer._build_labels(spec, ["file_a.py", "file_b.py"])
         assert len(labels) == 2
-        file_paths = {l.file_path for l in labels}
+        file_paths = {lb.file_path for lb in labels}
         assert file_paths == {"file_a.py", "file_b.py"}
 
     def test_build_labels_have_unique_ids(self, tmp_path: Path):
@@ -413,7 +409,7 @@ class TestCVEImporterBuildLabels:
             description="test",
         )
         labels = importer._build_labels(spec, ["a.py", "b.py", "c.py"])
-        ids = [l.id for l in labels]
+        ids = [lb.id for lb in labels]
         assert len(ids) == len(set(ids))  # all unique UUIDs
 
     def test_build_labels_cve_source_ref_set(self, tmp_path: Path):
@@ -493,7 +489,7 @@ class TestCVEImporterBuildLabels:
             patch_lines_changed=42,
         )
         labels = importer._build_labels(spec, ["a.py", "b.py"])
-        assert all(l.patch_lines_changed == 42 for l in labels)
+        assert all(lb.patch_lines_changed == 42 for lb in labels)
 
     def test_build_labels_patch_lines_none_when_unset(self, tmp_path: Path):
         importer = self._make_importer(tmp_path)

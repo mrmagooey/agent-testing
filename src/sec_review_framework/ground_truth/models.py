@@ -9,8 +9,6 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel
 
-from sec_review_framework.data.evaluation import GroundTruthLabel
-
 # ---------------------------------------------------------------------------
 # Language detection
 # ---------------------------------------------------------------------------
@@ -213,7 +211,7 @@ class LabelStore:
     directly.
     """
 
-    def __init__(self, datasets_root: "Path") -> None:  # noqa: F821
+    def __init__(self, datasets_root: Path) -> None:  # noqa: F821
         pass  # retained for backward-compatible construction
 
     def load(self, dataset_name: str, version: str | None = None) -> list:  # type: ignore[override]

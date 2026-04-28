@@ -45,7 +45,6 @@ from sec_review_framework.data.findings import (
 from sec_review_framework.tools.registry import ToolCallAuditLog, ToolRegistry
 from sec_review_framework.worker import ExperimentWorker
 
-
 # ---------------------------------------------------------------------------
 # Inject a fake sec_review_framework.strategies.runner into sys.modules so that
 # worker.py's lazy `from sec_review_framework.strategies.runner import run_strategy`

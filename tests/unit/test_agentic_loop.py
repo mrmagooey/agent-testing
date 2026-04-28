@@ -17,7 +17,6 @@ from sec_review_framework.strategies.common import (
 from sec_review_framework.tools.registry import Tool, ToolDefinition, ToolRegistry
 from tests.conftest import FakeModelProvider
 
-
 # ---------------------------------------------------------------------------
 # Minimal mock tool helpers
 # ---------------------------------------------------------------------------

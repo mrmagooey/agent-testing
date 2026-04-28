@@ -10,9 +10,9 @@ import pytest
 
 from sec_review_framework.data.experiment import ToolExtension, ToolVariant
 from sec_review_framework.tools.registry import (
+    _EXTENSION_BUILDERS,
     ToolRegistry,
     ToolRegistryFactory,
-    _EXTENSION_BUILDERS,
     register_extension_builder,
 )
 

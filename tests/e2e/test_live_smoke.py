@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -40,7 +40,6 @@ from sec_review_framework.data.experiment import (
     VerificationVariant,
 )
 from sec_review_framework.worker import ExperimentWorker
-
 
 # ---------------------------------------------------------------------------
 # Backend selection
@@ -141,7 +140,7 @@ def live_run(live_dirs) -> ExperimentRun:
         dataset_version=live_dirs["dataset_version"],
         provider_kwargs=MODEL_CONFIG,
         strategy_config={"max_turns": 5},
-        created_at=datetime(2026, 4, 17, tzinfo=timezone.utc),
+        created_at=datetime(2026, 4, 17, tzinfo=UTC),
     )
 
 
@@ -191,7 +190,7 @@ def test_live_pipeline_smoke(live_dirs, live_run):
     assert result.duration_seconds > 0
 
     # Print summary for visual inspection
-    print(f"\n--- Live Smoke Test Results ---")
+    print("\n--- Live Smoke Test Results ---")
     print(f"Model: {MODEL_ID}")
     print(f"Status: {result.status.value}")
     print(f"Duration: {result.duration_seconds:.1f}s")
@@ -203,4 +202,4 @@ def test_live_pipeline_smoke(live_dirs, live_run):
               f"FN={result.evaluation.false_negatives}")
         print(f"Precision={result.evaluation.precision:.2f}, "
               f"Recall={result.evaluation.recall:.2f}")
-    print(f"--- End ---\n")
+    print("--- End ---\n")

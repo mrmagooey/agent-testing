@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 import math
+from datetime import UTC, datetime
+
 import pytest
 
 from sec_review_framework.data.evaluation import (
@@ -16,7 +16,6 @@ from sec_review_framework.data.evaluation import (
 )
 from sec_review_framework.data.findings import Finding, Severity, VulnClass
 from sec_review_framework.evaluation.metrics import compute_metrics
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -40,7 +39,7 @@ def _make_label(
         description="SQL injection",
         source=GroundTruthSource.INJECTED,
         confidence="confirmed",
-        created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        created_at=datetime(2024, 1, 1, tzinfo=UTC),
     )
 
 

@@ -1239,7 +1239,7 @@ async def test_rename_policy_with_fresh_destination_carries_labels(tmp_path: Pat
     await async_write_bundle(db, coord.storage_root, exp_id, out_path=out_path)
 
     # Import with conflict_policy='rename' — 'foo' already exists so it gets renamed
-    summary = await async_apply_bundle(
+    await async_apply_bundle(
         db2, storage2, out_path,
         conflict_policy="rename",
         materialize=coord2.materialize_dataset,

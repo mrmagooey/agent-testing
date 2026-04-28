@@ -125,7 +125,6 @@ def test_all_5_builtins_present():
 
 def test_specialists_all_present():
     """All 16 per-vuln-class specialist subagents are registered under builtin.*."""
-    from sec_review_framework.data.findings import VulnClass
 
     registry = load_default_registry()
     actual_ids = {s.id for s in registry.list_all()}
@@ -141,7 +140,6 @@ def test_specialists_all_present():
 
 def test_specialist_count():
     """Exactly 16 specialist subagents exist (one per VulnClass)."""
-    from sec_review_framework.data.findings import VulnClass
 
     registry = load_default_registry()
     specialist_ids = {
@@ -155,7 +153,6 @@ def test_specialist_count():
 
 def test_per_vuln_class_parent_has_16_subagents():
     """builtin.per_vuln_class must declare exactly 16 subagents."""
-    from sec_review_framework.data.findings import VulnClass
 
     registry = load_default_registry()
     parent = registry.get("builtin.per_vuln_class")
@@ -171,7 +168,6 @@ def test_per_vuln_class_parent_dispatch_fallback_programmatic():
 
 def test_specialists_have_correct_parent():
     """All specialists must reference builtin.per_vuln_class as parent."""
-    from sec_review_framework.data.findings import VulnClass
 
     registry = load_default_registry()
     for vc in VulnClass:
@@ -184,7 +180,6 @@ def test_specialists_have_correct_parent():
 
 def test_specialists_have_non_empty_system_prompts():
     """All specialist subagents must have non-empty system prompts."""
-    from sec_review_framework.data.findings import VulnClass
 
     registry = load_default_registry()
     for vc in VulnClass:
@@ -210,7 +205,6 @@ def test_total_builtin_count():
                    sanitization_checker, blast_radius_finder, caller_checker
     Total: 23 + 11 = 34
     """
-    from sec_review_framework.data.findings import VulnClass
 
     registry = load_default_registry()
     all_strategies = registry.list_all()
@@ -268,7 +262,6 @@ def test_per_vuln_class_has_overrides_for_all_vuln_classes():
     overrides so callers can resolve a class-specific bundle via resolve_bundle().
     There must be exactly one override per VulnClass value.
     """
-    from sec_review_framework.data.findings import VulnClass
     registry = load_default_registry()
     pvc = registry.get("builtin.per_vuln_class")
     expected_keys = {vc.value for vc in VulnClass}

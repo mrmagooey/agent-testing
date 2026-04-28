@@ -63,7 +63,6 @@ def test_cancel_experiment(live_client, experiment_cleanup):
     # --- Wait briefly for the experiment to register at least some activity ---
     # We give up to 30 s; if the scheduler is slow, that's OK — we cancel anyway.
     deadline = time.monotonic() + 30
-    observed_activity = False
     while time.monotonic() < deadline:
         status_resp = live_client.get(f"/experiments/{experiment_id}")
         assert status_resp.status_code == 200
@@ -72,7 +71,6 @@ def test_cancel_experiment(live_client, experiment_cleanup):
         pending = status.get("pending_runs", 0)
         # "activity" = any run moved out of pending OR one is already running
         if running > 0 or pending < total_runs:
-            observed_activity = True
             break
         time.sleep(3)
 

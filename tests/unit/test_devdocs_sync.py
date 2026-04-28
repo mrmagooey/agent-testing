@@ -5,21 +5,16 @@ No real network calls are made — a fake downloader is injected in all tests.
 
 from __future__ import annotations
 
-import io
 import json
 from pathlib import Path
 from typing import Any
 
-import pytest
-
 from sec_review_framework.data.devdocs_sync import (
     DEFAULT_DOCSETS,
-    _DOCSET_FILES,
     _sync_docset,
     _write_manifest,
     sync,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fake downloader
@@ -55,7 +50,7 @@ def _make_failing_downloader(exc: Exception = OSError("network error")):
 class TestSyncDocset:
     def test_creates_docset_directory(self, tmp_path: Path) -> None:
         dl = _make_fake_downloader(b'{"entries": []}')
-        result = _sync_docset(tmp_path, "python~3.12", force=False, downloader=dl)
+        _sync_docset(tmp_path, "python~3.12", force=False, downloader=dl)
         assert (tmp_path / "python~3.12").is_dir()
 
     def test_downloads_both_files(self, tmp_path: Path) -> None:
@@ -113,7 +108,13 @@ class TestWriteManifest:
 
     def test_manifest_contains_docsets(self, tmp_path: Path) -> None:
         results = [
-            {"slug": "python~3.12", "downloaded": ["index.json"], "skipped": [], "errors": [], "timestamp": "2025-01-01T00:00:00+00:00"},
+            {
+                "slug": "python~3.12",
+                "downloaded": ["index.json"],
+                "skipped": [],
+                "errors": [],
+                "timestamp": "2025-01-01T00:00:00+00:00",
+            },
         ]
         _write_manifest(tmp_path, results)
         manifest = json.loads((tmp_path / "_manifest.json").read_text())

@@ -11,7 +11,8 @@ from pathlib import Path
 
 import yaml
 
-from sec_review_framework.data.experiment import BundleSnapshot as PromptSnapshot, StrategyName
+from sec_review_framework.data.experiment import BundleSnapshot as PromptSnapshot
+from sec_review_framework.data.experiment import StrategyName
 
 
 class PromptRegistry:

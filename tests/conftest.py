@@ -19,19 +19,14 @@ os.environ.setdefault(
 )
 
 from collections import deque
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 
 import pytest
 
 from sec_review_framework.data.evaluation import (
-    EvaluationResult,
-    EvidenceQuality,
     GroundTruthLabel,
     GroundTruthSource,
-    MatchStatus,
-    VerificationResult,
 )
 from sec_review_framework.data.experiment import (
     BundleSnapshot,
@@ -45,7 +40,6 @@ from sec_review_framework.data.experiment import (
     VerificationVariant,
 )
 from sec_review_framework.data.findings import (
-    DedupEntry,
     Finding,
     Severity,
     StrategyOutput,
@@ -59,10 +53,8 @@ from sec_review_framework.models.base import (
     ToolDefinition,
 )
 
-
 # Re-export the shared helper so conftest-based tests can still call it
 from tests.helpers import make_test_bundle_snapshot  # noqa: F401
-
 
 # ---------------------------------------------------------------------------
 # FakeModelProvider — deterministic model for testing
@@ -240,7 +232,7 @@ def sample_label() -> GroundTruthLabel:
         source=GroundTruthSource.CVE_PATCH,
         source_ref="CVE-2023-00001",
         confidence="confirmed",
-        created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        created_at=datetime(2024, 1, 1, tzinfo=UTC),
     )
 
 
@@ -263,7 +255,7 @@ def sample_experiment_run() -> ExperimentRun:
         verification_variant=VerificationVariant.NONE,
         dataset_name="test-dataset",
         dataset_version="1.0.0",
-        created_at=datetime(2026, 4, 16, tzinfo=timezone.utc),
+        created_at=datetime(2026, 4, 16, tzinfo=UTC),
     )
 
 
@@ -347,7 +339,7 @@ def sample_run_result(
         verification_tokens=0,
         estimated_cost_usd=0.42,
         duration_seconds=120.5,
-        completed_at=datetime(2026, 4, 16, 1, 0, 0, tzinfo=timezone.utc),
+        completed_at=datetime(2026, 4, 16, 1, 0, 0, tzinfo=UTC),
     )
 
 
@@ -403,7 +395,7 @@ def sample_labels_for_mock_target() -> list[GroundTruthLabel]:
             description="SQL injection via string formatting",
             source=GroundTruthSource.INJECTED,
             confidence="confirmed",
-            created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            created_at=datetime(2024, 1, 1, tzinfo=UTC),
         ),
         GroundTruthLabel(
             id="label-xss",
@@ -417,7 +409,7 @@ def sample_labels_for_mock_target() -> list[GroundTruthLabel]:
             description="Reflected XSS via unescaped user input",
             source=GroundTruthSource.INJECTED,
             confidence="confirmed",
-            created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            created_at=datetime(2024, 1, 1, tzinfo=UTC),
         ),
         GroundTruthLabel(
             id="label-crypto",
@@ -431,7 +423,7 @@ def sample_labels_for_mock_target() -> list[GroundTruthLabel]:
             description="MD5 used for password hashing",
             source=GroundTruthSource.INJECTED,
             confidence="confirmed",
-            created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            created_at=datetime(2024, 1, 1, tzinfo=UTC),
         ),
     ]
 

@@ -44,7 +44,6 @@ from pydantic_ai.models import Model, ModelRequestParameters, RequestUsage
 from pydantic_ai.settings import ModelSettings
 
 from sec_review_framework.models.base import Message, ModelProvider, ToolDefinition
-from sec_review_framework.models.litellm_provider import LiteLLMProvider
 
 # ---------------------------------------------------------------------------
 # Provider name extraction helper

@@ -12,9 +12,8 @@ Routes covered:
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -23,10 +22,10 @@ from fastapi.testclient import TestClient
 import sec_review_framework.coordinator as coord_module
 from sec_review_framework.coordinator import CVECandidateResponse, app
 from sec_review_framework.data.findings import Severity, VulnClass
-from sec_review_framework.ground_truth.cve_importer import CVECandidate as _CVECandidate, ResolvedCVE
-
-from tests.integration.test_coordinator_api import _make_coordinator
 from sec_review_framework.db import Database
+from sec_review_framework.ground_truth.cve_importer import CVECandidate as _CVECandidate
+from sec_review_framework.ground_truth.cve_importer import ResolvedCVE
+from tests.integration.test_coordinator_api import _make_coordinator
 
 
 @pytest.fixture

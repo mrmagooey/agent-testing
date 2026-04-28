@@ -11,7 +11,6 @@ The test is automatically skipped when the dependencies are missing.
 
 from __future__ import annotations
 
-import sys
 import textwrap
 from pathlib import Path
 
@@ -85,8 +84,8 @@ def _make_target(repo_path: Path):
 class TestTreeSitterExtensionIntegration:
     def test_build_registers_ts_tools(self, vuln_repo: Path) -> None:
         """build_tree_sitter_tools should register at least one ts_* tool."""
-        from sec_review_framework.tools.registry import ToolRegistry
         from sec_review_framework.tools.extensions.tree_sitter_ext import build_tree_sitter_tools
+        from sec_review_framework.tools.registry import ToolRegistry
 
         target = _make_target(vuln_repo)
         registry = ToolRegistry()
@@ -101,8 +100,8 @@ class TestTreeSitterExtensionIntegration:
 
     def test_all_four_tools_registered(self, vuln_repo: Path) -> None:
         """All four security-review tools should be exposed with the ts_ prefix."""
-        from sec_review_framework.tools.registry import ToolRegistry
         from sec_review_framework.tools.extensions.tree_sitter_ext import build_tree_sitter_tools
+        from sec_review_framework.tools.registry import ToolRegistry
 
         target = _make_target(vuln_repo)
         registry = ToolRegistry()
@@ -117,9 +116,10 @@ class TestTreeSitterExtensionIntegration:
 
     def test_list_functions_finds_vulnerable_query(self, vuln_repo: Path) -> None:
         """ts_list_functions should return 'vulnerable_query' from app.py."""
-        from sec_review_framework.tools.registry import ToolRegistry
-        from sec_review_framework.tools.extensions.tree_sitter_ext import build_tree_sitter_tools
         import uuid
+
+        from sec_review_framework.tools.extensions.tree_sitter_ext import build_tree_sitter_tools
+        from sec_review_framework.tools.registry import ToolRegistry
 
         target = _make_target(vuln_repo)
         registry = ToolRegistry()
@@ -139,9 +139,10 @@ class TestTreeSitterExtensionIntegration:
 
     def test_find_symbol_finds_vulnerable_query(self, vuln_repo: Path) -> None:
         """ts_find_symbol should return the definition of vulnerable_query."""
-        from sec_review_framework.tools.registry import ToolRegistry
-        from sec_review_framework.tools.extensions.tree_sitter_ext import build_tree_sitter_tools
         import uuid
+
+        from sec_review_framework.tools.extensions.tree_sitter_ext import build_tree_sitter_tools
+        from sec_review_framework.tools.registry import ToolRegistry
 
         target = _make_target(vuln_repo)
         registry = ToolRegistry()
@@ -161,9 +162,10 @@ class TestTreeSitterExtensionIntegration:
 
     def test_get_ast_returns_module_node(self, vuln_repo: Path) -> None:
         """ts_get_ast should return a tree containing 'module' (Python root node)."""
-        from sec_review_framework.tools.registry import ToolRegistry
-        from sec_review_framework.tools.extensions.tree_sitter_ext import build_tree_sitter_tools
         import uuid
+
+        from sec_review_framework.tools.extensions.tree_sitter_ext import build_tree_sitter_tools
+        from sec_review_framework.tools.registry import ToolRegistry
 
         target = _make_target(vuln_repo)
         registry = ToolRegistry()
@@ -183,9 +185,9 @@ class TestTreeSitterExtensionIntegration:
 
     def test_registry_close_shuts_down_client(self, vuln_repo: Path) -> None:
         """After registry.close(), the MCPClient should be marked closed."""
-        from sec_review_framework.tools.registry import ToolRegistry
         from sec_review_framework.tools.extensions.tree_sitter_ext import build_tree_sitter_tools
         from sec_review_framework.tools.mcp_bridge import MCPClient
+        from sec_review_framework.tools.registry import ToolRegistry
 
         target = _make_target(vuln_repo)
         registry = ToolRegistry()

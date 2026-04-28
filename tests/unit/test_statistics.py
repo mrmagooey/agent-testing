@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 
 from sec_review_framework.data.evaluation import (
@@ -10,8 +12,8 @@ from sec_review_framework.data.evaluation import (
     EvidenceQuality,
     GroundTruthLabel,
     GroundTruthSource,
-    MatchStatus,
     MatchedFinding,
+    MatchStatus,
 )
 from sec_review_framework.data.findings import (
     Finding,
@@ -19,8 +21,6 @@ from sec_review_framework.data.findings import (
     VulnClass,
 )
 from sec_review_framework.evaluation.statistics import StatisticalAnalyzer, wilson_ci
-from datetime import datetime, timezone
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -40,7 +40,7 @@ def _make_label(label_id: str = "lbl-1") -> GroundTruthLabel:
         description="SQL injection",
         source=GroundTruthSource.CVE_PATCH,
         confidence="confirmed",
-        created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        created_at=datetime(2024, 1, 1, tzinfo=UTC),
     )
 
 

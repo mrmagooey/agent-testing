@@ -691,8 +691,9 @@ class TestBug2AutoDerivePERVULN:
 
     def test_programmatic_fallback_fires_for_missed_specialists(self) -> None:
         """8/16 dispatched by supervisor → programmatic fallback covers remaining 8."""
+        from unittest.mock import Mock, patch
+
         from sec_review_framework.data.findings import Finding, Severity, VulnClass
-        from unittest.mock import patch, Mock
 
         strategy = _make_per_vuln_class_strategy(dispatch_fallback="programmatic")
 

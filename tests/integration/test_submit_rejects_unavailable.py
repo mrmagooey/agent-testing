@@ -28,10 +28,8 @@ from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
 from sec_review_framework.db import Database
 from sec_review_framework.models.catalog import ModelMetadata, ProviderSnapshot
 from sec_review_framework.reporting.markdown import MarkdownReportGenerator
-
 from tests.fixtures.provider_snapshots import fake_catalog as _fake_catalog
 from tests.helpers import make_smoke_strategy
-
 
 # ---------------------------------------------------------------------------
 # Helpers

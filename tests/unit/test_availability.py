@@ -9,12 +9,12 @@ Table-driven: parametrize over all combinations of:
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
-from datetime import datetime, timezone
 
 from sec_review_framework.config import ModelProviderConfig
 from sec_review_framework.models.availability import (
-    ModelEntry,
     ProviderGroup,
     _lru_cache,
     build_effective_registry,
@@ -24,7 +24,6 @@ from sec_review_framework.models.availability import (
     groups_to_dicts,
 )
 from sec_review_framework.models.catalog import ModelMetadata, ProviderSnapshot
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -562,7 +561,7 @@ class TestFetchedAtAndLastError:
 
     def test_fetched_at_iso_format(self):
         cfg = _make_api_key_cfg(model_name="gpt-4o")
-        dt = datetime(2026, 4, 23, 14, 5, 23, tzinfo=timezone.utc)
+        dt = datetime(2026, 4, 23, 14, 5, 23, tzinfo=UTC)
         snap = ProviderSnapshot(
             probe_status="fresh",
             model_ids=frozenset(["gpt-4o"]),

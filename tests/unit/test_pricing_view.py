@@ -5,8 +5,7 @@ from __future__ import annotations
 import pytest
 
 from sec_review_framework.cost.pricing_view import CatalogPricingView, PricingView
-from sec_review_framework.models.catalog import ModelMetadata, ProviderCatalog, ProviderSnapshot
-
+from sec_review_framework.models.catalog import ModelMetadata, ProviderSnapshot
 
 # ---------------------------------------------------------------------------
 # Helpers

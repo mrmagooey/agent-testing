@@ -7,9 +7,8 @@ temp SQLite DB and temp storage root.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -18,23 +17,15 @@ import sec_review_framework.coordinator as coord_module
 from sec_review_framework.coordinator import (
     AUDIT_URL_CHECK_EXEMPT_PREFIXES,
     ExperimentCoordinator,
-    ExperimentCostTracker,
     app,
 )
 from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
 from sec_review_framework.data.experiment import (
     ExperimentMatrix,
-    ReviewProfileName,
-    RunResult,
-    RunStatus,
-    StrategyName,
     ToolExtension,
-    ToolVariant,
-    VerificationVariant,
 )
 from sec_review_framework.db import Database
 from sec_review_framework.reporting.markdown import MarkdownReportGenerator
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -322,7 +313,6 @@ def test_get_labels_empty_for_unknown_dataset(coordinator_client):
 
 def test_get_labels_returns_labels_when_present(coordinator_client):
     import asyncio
-    from datetime import datetime, timezone
     client, c, tmp_path = coordinator_client
     # Seed dataset + label in DB (new DB-backed approach)
     asyncio.get_event_loop().run_until_complete(
@@ -1046,6 +1036,7 @@ async def test_upload_aggregate_cap_returns_413_and_cleans_staging(tmp_path: Pat
     the test body stays small.
     """
     import os
+
     from sec_review_framework.coordinator import _seed_builtin_strategies
 
     db = Database(tmp_path / "test.db")
@@ -1107,6 +1098,7 @@ async def test_upload_single_artifact_oversize_returns_413_and_cleans_staging(
     at the API level.  Uses a tiny cap (1024 bytes) so the test body stays small.
     """
     import os
+
     from sec_review_framework.coordinator import _seed_builtin_strategies
 
     db = Database(tmp_path / "test.db")

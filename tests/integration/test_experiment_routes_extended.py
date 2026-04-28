@@ -15,22 +15,16 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from fastapi.testclient import TestClient
 
 import sec_review_framework.coordinator as coord_module
 from sec_review_framework.coordinator import app
 from sec_review_framework.data.experiment import (
     ExperimentMatrix,
-    ReviewProfileName,
-    StrategyName,
-    ToolVariant,
-    VerificationVariant,
 )
 from sec_review_framework.db import Database
-from fastapi.testclient import TestClient
-
 from tests.integration.test_coordinator_api import (
     _make_coordinator,
-    _minimal_matrix,
 )
 
 

@@ -10,14 +10,12 @@ import pytest
 from sec_review_framework.data.strategy_bundle import (
     OrchestrationShape,
     OverrideRule,
-    ResolvedBundle,
     StrategyBundleDefault,
     StrategyBundleOverride,
     UserStrategy,
     canonical_json,
     resolve_bundle,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers

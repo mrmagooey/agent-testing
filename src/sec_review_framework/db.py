@@ -1,16 +1,16 @@
 """SQLite-based persistence for the coordinator service. Uses aiosqlite for async access."""
 
-import aiosqlite
 import hashlib
 import hmac
 import json
-import re
 import secrets
 import uuid
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+import aiosqlite
 
 
 class UploadTokenAlreadyExists(Exception):
@@ -247,7 +247,8 @@ class Database:
             """)
             # Ensure the singleton row exists.
             await db.execute("""
-                INSERT OR IGNORE INTO app_settings (id, allow_unavailable_models, evidence_assessor, evidence_judge_model)
+                INSERT OR IGNORE INTO app_settings
+                    (id, allow_unavailable_models, evidence_assessor, evidence_judge_model)
                 VALUES (1, 0, 'heuristic', NULL)
             """)
 
@@ -431,7 +432,7 @@ class Database:
         review_profile: str,
         verification_variant: str,
         estimated_cost_usd: float | None = None,
-        tool_extensions: "frozenset | Iterable[str] | None" = None,
+        tool_extensions: frozenset | Iterable[str] | None = None,
     ) -> None:
         if tool_extensions is None:
             ext_str = ""
@@ -924,7 +925,7 @@ class Database:
     # User strategies
     # ---------------------------------------------------------------------------
 
-    async def insert_user_strategy(self, strategy: "UserStrategy") -> None:
+    async def insert_user_strategy(self, strategy: UserStrategy) -> None:
         """Persist a UserStrategy to the database.
 
         Serialises the full UserStrategy via canonical_json so round-trips
@@ -952,7 +953,7 @@ class Database:
             )
             await db.commit()
 
-    async def get_user_strategy(self, strategy_id: str) -> "UserStrategy | None":
+    async def get_user_strategy(self, strategy_id: str) -> UserStrategy | None:
         """Return the UserStrategy with *strategy_id*, or None if not found."""
         from sec_review_framework.data.strategy_bundle import UserStrategy
 
@@ -967,7 +968,7 @@ class Database:
                     return None
                 return UserStrategy.model_validate_json(row["bundle_json"])
 
-    async def list_user_strategies(self) -> "list[UserStrategy]":
+    async def list_user_strategies(self) -> list[UserStrategy]:
         """Return all UserStrategy objects, ordered by created_at then id."""
         from sec_review_framework.data.strategy_bundle import UserStrategy
 

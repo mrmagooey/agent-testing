@@ -30,11 +30,7 @@ from sec_review_framework.data.evaluation import (
 )
 from sec_review_framework.data.experiment import (
     ExperimentMatrix,
-    ReviewProfileName,
     RunResult,
-    StrategyName,
-    ToolVariant,
-    VerificationVariant,
 )
 from sec_review_framework.data.findings import Severity, VulnClass
 from sec_review_framework.db import Database

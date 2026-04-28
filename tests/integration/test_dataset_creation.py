@@ -29,7 +29,6 @@ import sec_review_framework.coordinator as coord_module
 from sec_review_framework.coordinator import ExperimentCoordinator, app
 from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
 from sec_review_framework.db import Database
-from sec_review_framework.ground_truth.cve_importer import CVEImportSpec
 from sec_review_framework.reporting.markdown import MarkdownReportGenerator
 
 # ---------------------------------------------------------------------------
@@ -148,9 +147,10 @@ async def test_cve_import_persists_dataset_row(tmp_path: Path, db: Database):
     sha = _init_git_repo(repo_src)
 
     # Build a mock importer that pretends to clone + build labels
+    from uuid import uuid4
+
     from sec_review_framework.data.evaluation import GroundTruthLabel, GroundTruthSource
     from sec_review_framework.data.findings import Severity, VulnClass
-    from uuid import uuid4
 
     labels = [
         GroundTruthLabel(
@@ -200,9 +200,10 @@ async def test_cve_import_persists_labels_to_db(tmp_path: Path, db: Database):
     """import_cve persists labels to DB with correct dataset_name."""
     coord = _make_coordinator(tmp_path, db)
 
+    from uuid import uuid4
+
     from sec_review_framework.data.evaluation import GroundTruthLabel, GroundTruthSource
     from sec_review_framework.data.findings import Severity, VulnClass
-    from uuid import uuid4
 
     labels = [
         GroundTruthLabel(
@@ -262,9 +263,10 @@ async def test_cve_import_no_labels_json_written(tmp_path: Path, db: Database):
     """import_cve must NOT write any labels.json file to disk."""
     coord = _make_coordinator(tmp_path, db)
 
+    from uuid import uuid4
+
     from sec_review_framework.data.evaluation import GroundTruthLabel, GroundTruthSource
     from sec_review_framework.data.findings import Severity, VulnClass
-    from uuid import uuid4
 
     labels = [
         GroundTruthLabel(
@@ -498,9 +500,10 @@ async def test_no_labels_json_after_both_flows(tmp_path: Path, db: Database):
     """After CVE import and inject, storage_root has no labels.json/jsonl files."""
     coord = _make_coordinator(tmp_path, db)
 
+    from uuid import uuid4
+
     from sec_review_framework.data.evaluation import GroundTruthLabel, GroundTruthSource
     from sec_review_framework.data.findings import Severity, VulnClass
-    from uuid import uuid4
 
     labels = [
         GroundTruthLabel(

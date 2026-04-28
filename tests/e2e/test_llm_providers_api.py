@@ -11,16 +11,15 @@ import importlib
 import os
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
 
 from sec_review_framework.coordinator import ExperimentCoordinator, app
-from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
+from sec_review_framework.cost.calculator import CostCalculator
 from sec_review_framework.db import Database
 from sec_review_framework.reporting.generator import ReportGenerator
-
 
 # ---------------------------------------------------------------------------
 # Encryption key setup helpers
@@ -264,7 +263,7 @@ def test_probe_endpoint(client: TestClient):
 
 def test_probe_status_reflected_in_get(client: TestClient):
     """After POST creating a provider, GET shows the probe status."""
-    dto = _create_provider(client, name="probe-visible")
+    _create_provider(client, name="probe-visible")
 
     resp = client.get("/api/llm-providers")
     customs = resp.json()["custom"]

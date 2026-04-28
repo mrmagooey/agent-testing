@@ -14,7 +14,6 @@ from dataclasses import dataclass
 from sec_review_framework.config import ModelProviderConfig
 from sec_review_framework.models.catalog import ModelMetadata, ProviderSnapshot
 
-
 # ---------------------------------------------------------------------------
 # AuthSpec hierarchy
 # ---------------------------------------------------------------------------

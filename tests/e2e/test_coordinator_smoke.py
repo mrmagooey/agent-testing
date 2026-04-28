@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timezone
+
+# Reuse the FakeModelProvider from conftest by importing it directly
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -23,24 +25,19 @@ from sec_review_framework.coordinator import ExperimentCoordinator, app
 from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
 from sec_review_framework.data.experiment import (
     ExperimentMatrix,
-    ReviewProfileName,
     StrategyName,
     ToolVariant,
     VerificationVariant,
 )
 from sec_review_framework.db import Database
 from sec_review_framework.models.base import ModelResponse, RetryPolicy
+from sec_review_framework.reporting.generator import ReportGenerator
 from sec_review_framework.reporting.json_report import JSONReportGenerator
 from sec_review_framework.reporting.markdown import MarkdownReportGenerator
-from sec_review_framework.reporting.generator import ReportGenerator
 from sec_review_framework.worker import ExperimentWorker, ModelProviderFactory
 
-# Reuse the FakeModelProvider from conftest by importing it directly
-import sys
-import os
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from conftest import FakeModelProvider
-
 
 # ---------------------------------------------------------------------------
 # Combined reporter — writes both .md and .json matrix reports

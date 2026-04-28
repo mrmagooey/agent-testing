@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
-from sec_review_framework.data.evaluation import EvidenceQuality, MatchStatus
+from sec_review_framework.data.evaluation import EvidenceQuality
 from sec_review_framework.data.experiment import RunResult, RunStatus
 from sec_review_framework.reporting.generator import ReportGenerator
 
@@ -163,7 +163,7 @@ class JSONReportGenerator(ReportGenerator):
                 "name": dataset_name,
                 "version": dataset_version,
             },
-            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "generated_at": datetime.now(UTC).isoformat(),
             "runs": runs_data,
             "findings": findings_data,
             "dimension_analysis": dimension_analysis,

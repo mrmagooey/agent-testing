@@ -145,6 +145,7 @@ def test_experiment_configmap_e2e_values() -> None:
 def test_semgrep_enabled_flag_flows_through_deployment() -> None:
     """workerTools.semgrep.enabled flows into TOOL_EXT_SEMGREP_AVAILABLE on the coordinator."""
     import subprocess as _sp
+
     import yaml as _yaml
 
     chart_dir = str(REPO_ROOT / "helm" / "sec-review")

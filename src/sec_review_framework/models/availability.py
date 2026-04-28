@@ -9,13 +9,12 @@ The result is used by both GET /api/models and the submit-time validator.
 from __future__ import annotations
 
 import hashlib
-import os
 import re
 import threading
 from collections import OrderedDict
+from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Mapping
+from datetime import UTC, datetime
 
 from sec_review_framework.config import ModelProviderConfig
 from sec_review_framework.models.catalog import ProviderSnapshot
@@ -100,7 +99,8 @@ def _snapshots_hash(snapshots: dict[str, ProviderSnapshot]) -> str:
 def _registry_hash(registry: list[ModelProviderConfig]) -> str:
     """Stable hash of the registry list contents."""
     parts = [
-        f"{c.id}:{c.model_name}:{c.auth}:{c.api_key_env or ''}:{c.api_base or ''}:{c.display_name or ''}:{c.region or ''}"
+        f"{c.id}:{c.model_name}:{c.auth}:{c.api_key_env or ''}:"
+        f"{c.api_base or ''}:{c.display_name or ''}:{c.region or ''}"
         for c in registry
     ]
     return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
@@ -397,7 +397,7 @@ def groups_to_dicts(groups: list[ProviderGroup]) -> list[dict]:
         if g.fetched_at is not None:
             dt = g.fetched_at
             if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
+                dt = dt.replace(tzinfo=UTC)
             fetched_at_str = dt.strftime("%Y-%m-%dT%H:%M:%SZ")
         out.append({
             "provider": g.provider,

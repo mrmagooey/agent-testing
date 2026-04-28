@@ -15,10 +15,9 @@ import pytest
 
 from sec_review_framework.data.experiment import ToolExtension
 from sec_review_framework.tools.registry import (
-    ToolRegistry,
     _EXTENSION_BUILDERS,
+    ToolRegistry,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers

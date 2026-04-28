@@ -1,17 +1,16 @@
 """Evaluation and verification data models."""
 
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel
 
 from sec_review_framework.data.findings import Finding, Severity, VulnClass
 
-
 # --- Ground Truth ---
 
 
-class GroundTruthSource(str, Enum):
+class GroundTruthSource(StrEnum):
     CVE_PATCH = "cve_patch"
     INJECTED = "injected"
     MANUAL = "manual"
@@ -41,13 +40,13 @@ class GroundTruthLabel(BaseModel):
 # --- Evaluation ---
 
 
-class MatchStatus(str, Enum):
+class MatchStatus(StrEnum):
     TRUE_POSITIVE = "true_positive"
     FALSE_POSITIVE = "false_positive"
     UNLABELED_REAL = "unlabeled_real"
 
 
-class EvidenceQuality(str, Enum):
+class EvidenceQuality(StrEnum):
     STRONG = "strong"
     ADEQUATE = "adequate"
     WEAK = "weak"
@@ -104,7 +103,7 @@ class EvaluationResult(BaseModel):
 # --- Verification ---
 
 
-class VerificationOutcome(str, Enum):
+class VerificationOutcome(StrEnum):
     VERIFIED = "verified"
     REJECTED = "rejected"
     UNCERTAIN = "uncertain"

@@ -20,7 +20,6 @@ import pytest_asyncio
 
 from sec_review_framework.db import Database, _escape_fts_query
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

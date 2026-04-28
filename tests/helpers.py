@@ -8,7 +8,6 @@ Import from test files as::
 from __future__ import annotations
 
 import hashlib
-import json
 from datetime import datetime
 
 from sec_review_framework.data.experiment import BundleSnapshot

@@ -8,8 +8,7 @@ worker — we manipulate the filesystem and DB directly.
 from __future__ import annotations
 
 import asyncio
-import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -18,7 +17,6 @@ import pytest
 from sec_review_framework.coordinator import ExperimentCoordinator
 from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
 from sec_review_framework.data.experiment import (
-    BundleSnapshot,
     ExperimentRun,
     ReviewProfileName,
     RunResult,
@@ -28,14 +26,10 @@ from sec_review_framework.data.experiment import (
     VerificationVariant,
 )
 from sec_review_framework.data.findings import (
-    Finding,
-    Severity,
     StrategyOutput,
-    VulnClass,
 )
 from sec_review_framework.db import Database
 from sec_review_framework.reporting.markdown import MarkdownReportGenerator
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -75,7 +69,7 @@ def _make_run(experiment_id: str = EXPERIMENT_ID, run_id: str | None = None) -> 
         verification_variant=VerificationVariant.NONE,
         dataset_name=DATASET,
         dataset_version="1.0.0",
-        created_at=datetime(2026, 4, 18, tzinfo=timezone.utc),
+        created_at=datetime(2026, 4, 18, tzinfo=UTC),
     )
 
 
@@ -100,7 +94,7 @@ def _make_run_result(run: ExperimentRun, status: RunStatus = RunStatus.COMPLETED
         verification_tokens=0,
         estimated_cost_usd=0.01,
         duration_seconds=10.0,
-        completed_at=datetime(2026, 4, 18, 1, 0, 0, tzinfo=timezone.utc),
+        completed_at=datetime(2026, 4, 18, 1, 0, 0, tzinfo=UTC),
     )
 
 
@@ -371,8 +365,9 @@ async def test_reconcile_marks_stalled_job_as_failed(tmp_path: Path, temp_db: Da
     older than RUN_STALL_TIMEOUT_S should be transitioned to 'failed' and the
     Job should be deleted.
     """
+    from datetime import timedelta
+
     import sec_review_framework.coordinator as coord_module
-    from datetime import timezone as _tz, timedelta
 
     coord = _make_coordinator(tmp_path, temp_db)
     coord.storage_root.mkdir(parents=True, exist_ok=True)
@@ -380,7 +375,7 @@ async def test_reconcile_marks_stalled_job_as_failed(tmp_path: Path, temp_db: Da
 
     # Build a fake K8s BatchV1Api that returns one stale Job with active=1,
     # no succeeded/failed, and an empty pod list.
-    stale_start = datetime.now(_tz.utc) - timedelta(seconds=600)
+    stale_start = datetime.now(UTC) - timedelta(seconds=600)
 
     fake_job = MagicMock()
     fake_job.metadata.name = "exp-stalled-job"
@@ -459,30 +454,23 @@ def test_worker_atomic_write_no_tmp_remains(tmp_path: Path):
     After ExperimentWorker writes run_result.json, the .tmp sibling must not
     exist and the final file must deserialise back to a valid RunResult.
     """
-    from unittest.mock import MagicMock, patch
-    from sec_review_framework.worker import ExperimentWorker
+
     from sec_review_framework.data.experiment import (
-        ExperimentRun,
-        ReviewProfileName,
         RunResult,
         RunStatus,
-        StrategyName,
-        ToolVariant,
-        VerificationVariant,
     )
     from sec_review_framework.data.findings import StrategyOutput
-    from sec_review_framework.reporting.markdown import MarkdownReportGenerator
-    from datetime import datetime, timezone
+    from sec_review_framework.worker import ExperimentWorker
 
     run = _make_run()
     result = _make_run_result(run, RunStatus.COMPLETED)
 
     # Patch out the heavy bits so the worker only exercises the file-write path
-    mock_strategy_output = StrategyOutput(
+    StrategyOutput(
         findings=[], pre_dedup_count=0, post_dedup_count=0, dedup_log=[]
     )
 
-    worker = ExperimentWorker()
+    ExperimentWorker()
 
     output_dir = tmp_path / "output"
 
@@ -883,7 +871,6 @@ async def test_reconcile_k8s_job_list_exception_continues(
     coord_module.K8S_AVAILABLE = True
 
     dispatch_calls: list[str] = []
-    original_create = coord._create_k8s_job
 
     def _tracked_create(exp_id, r):
         dispatch_calls.append(r.id)

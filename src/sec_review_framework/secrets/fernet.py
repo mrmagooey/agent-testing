@@ -28,7 +28,8 @@ def _load_fernet() -> MultiFernet:
     if not raw.strip():
         raise RuntimeError(
             f"{_ENV_VAR} is not set. "
-            "Generate a key with: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
+            "Generate a key with: "
+            "python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
         )
     keys = [part.strip() for part in raw.split(",") if part.strip()]
     fernets: list[Fernet] = []

@@ -26,7 +26,7 @@ This test verifies:
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -35,9 +35,9 @@ import pytest
 # kubernetes client is optional; skip the whole module when absent.
 kubernetes = pytest.importorskip("kubernetes", reason="kubernetes package not installed")
 
-from sec_review_framework.coordinator import ExperimentCoordinator
-from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
-from sec_review_framework.data.experiment import (
+from sec_review_framework.coordinator import ExperimentCoordinator  # noqa: E402
+from sec_review_framework.cost.calculator import CostCalculator, ModelPricing  # noqa: E402
+from sec_review_framework.data.experiment import (  # noqa: E402
     ExperimentRun,
     ReviewProfileName,
     StrategyName,
@@ -45,8 +45,7 @@ from sec_review_framework.data.experiment import (
     ToolVariant,
     VerificationVariant,
 )
-from sec_review_framework.reporting.markdown import MarkdownReportGenerator
-
+from sec_review_framework.reporting.markdown import MarkdownReportGenerator  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -97,7 +96,7 @@ def _make_run(tool_extensions: frozenset[ToolExtension] = frozenset()) -> Experi
         verification_variant=VerificationVariant.NONE,
         dataset_name=DATASET,
         dataset_version="1.0.0",
-        created_at=datetime(2026, 4, 20, tzinfo=timezone.utc),
+        created_at=datetime(2026, 4, 20, tzinfo=UTC),
         tool_extensions=tool_extensions,
     )
 

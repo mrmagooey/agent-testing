@@ -12,6 +12,54 @@ from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
+from fastapi import FastAPI, Form, HTTPException, Query, Request, UploadFile
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, ValidationError
+
+from sec_review_framework.config import ModelProviderConfig, ToolExtensionAvailability
+from sec_review_framework.cost.calculator import CostCalculator
+from sec_review_framework.cost.pricing_view import CatalogPricingView
+from sec_review_framework.data.evaluation import GroundTruthLabel
+from sec_review_framework.data.experiment import (
+    ExperimentMatrix,
+    ExperimentStatus,
+    RunResult,
+    StrategyName,
+    ToolExtension,
+)
+from sec_review_framework.data.strategy_bundle import (
+    OrchestrationShape,
+    OverrideRule,
+    StrategyBundleDefault,
+    UserStrategy,
+)
+from sec_review_framework.db import Database
+from sec_review_framework.feedback.tracker import FeedbackTracker
+from sec_review_framework.ground_truth.cve_importer import (
+    CVECandidate as _CVECandidate,
+)
+from sec_review_framework.ground_truth.cve_importer import (
+    CVEDiscovery,
+    CVEImporter,
+    CVEImportSpec,
+    CVEResolver,
+    CVESelectionCriteria,
+)
+from sec_review_framework.ground_truth.vuln_injector import VulnInjector
+from sec_review_framework.llm_providers import router as llm_providers_router
+from sec_review_framework.models.aliases import rewrite_legacy_ids
+from sec_review_framework.models.availability import (
+    build_effective_registry,
+    build_id_to_status,
+    compute_availability,
+    flat_model_list,
+    groups_to_dicts,
+)
+from sec_review_framework.models.catalog import ProviderCatalog
+from sec_review_framework.models.probes import build_probes
+from sec_review_framework.profiles.review_profiles import BUILTIN_PROFILES
+
 RECONCILE_INTERVAL_S = int(os.environ.get("RECONCILE_INTERVAL_S", "5"))
 RUN_STALL_TIMEOUT_S = int(os.environ.get("RUN_STALL_TIMEOUT_S", "300"))
 
@@ -43,56 +91,6 @@ def _resolve_frontend_dist() -> Path:
 
 FRONTEND_DIST_DIR = _resolve_frontend_dist()
 
-from fastapi import FastAPI, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ValidationError
-
-from sec_review_framework.data.experiment import (
-    ExperimentStatus,
-    ExperimentMatrix,
-    ReviewProfileName,
-    RunResult,
-    StrategyName,
-    ToolExtension,
-    ToolVariant,
-    VerificationVariant,
-)
-from sec_review_framework.db import Database
-from sec_review_framework.profiles.review_profiles import BUILTIN_PROFILES, ProfileRegistry
-from sec_review_framework.feedback.tracker import FeedbackTracker
-from sec_review_framework.cost.calculator import CostCalculator
-from sec_review_framework.cost.pricing_view import CatalogPricingView
-from sec_review_framework.config import ToolExtensionAvailability
-from sec_review_framework.models.catalog import ProviderCatalog
-from sec_review_framework.models.probes import build_probes
-from sec_review_framework.models.availability import (
-    build_effective_registry,
-    compute_availability,
-    flat_model_list,
-    groups_to_dicts,
-    build_id_to_status,
-)
-from sec_review_framework.models.aliases import rewrite_legacy_ids
-from sec_review_framework.data.evaluation import GroundTruthLabel
-from sec_review_framework.ground_truth.cve_importer import (
-    CVECandidate as _CVECandidate,
-    CVEDiscovery,
-    CVEImportSpec,
-    CVEImporter,
-    CVEResolver,
-    CVESelectionCriteria,
-)
-from sec_review_framework.ground_truth.vuln_injector import VulnInjector
-from sec_review_framework.data.strategy_bundle import (
-    OrchestrationShape,
-    OverrideRule,
-    StrategyBundleDefault,
-    UserStrategy,
-    canonical_json,
-)
-from sec_review_framework.llm_providers import router as llm_providers_router
-
 logger = logging.getLogger(__name__)
 
 AUDIT_URL_CHECK_EXEMPT_PREFIXES = ("doc_", "ts_", "lsp_")
@@ -108,7 +106,8 @@ _TOOL_EXTENSION_LABELS: dict[ToolExtension, str] = {
 # Prometheus metrics (optional — prometheus-client is a coordinator dep)
 # ---------------------------------------------------------------------------
 try:
-    from prometheus_client import Counter as _Counter, make_asgi_app as _make_asgi_app
+    from prometheus_client import Counter as _Counter
+    from prometheus_client import make_asgi_app as _make_asgi_app
     _upload_counter = _Counter(
         "upload_total",
         "Worker result upload attempts by outcome",
@@ -119,7 +118,7 @@ except ImportError:  # pragma: no cover
     _PROMETHEUS_AVAILABLE = False
     # Stub counter so the handler code is unconditionally importable in tests.
     class _StubCounter:
-        def labels(self, **_kw: object) -> "_StubCounter":
+        def labels(self, **_kw: object) -> _StubCounter:
             return self
         def inc(self, _amount: float = 1) -> None:
             pass
@@ -219,7 +218,7 @@ class ExperimentCoordinator:
         # Per-instance TTL cache for get_trends (class-level dict would be shared across instances).
         self._trends_cache: dict[tuple, tuple[dict, float]] = {}
         # ProviderCatalog — set by the lifespan handler; None until startup completes.
-        self.catalog: "ProviderCatalog | None" = None  # type: ignore[name-defined]
+        self.catalog: ProviderCatalog | None = None  # type: ignore[name-defined]
 
     # ------------------------------------------------------------------
     # Experiment lifecycle
@@ -610,7 +609,7 @@ class ExperimentCoordinator:
             "cells": cell_list,
         }
 
-    async def handle_run_result_upload(self, run_id: str, request: "Request") -> dict:
+    async def handle_run_result_upload(self, run_id: str, request: Request) -> dict:
         """Handle a streamed multipart artifact upload from a worker pod.
 
         Flow:
@@ -625,6 +624,7 @@ class ExperimentCoordinator:
         """
         import time as _time
         import uuid as _uuid
+
         from multipart.multipart import MultipartParser as _MultipartParser
 
         t_start = _time.monotonic()
@@ -1292,11 +1292,10 @@ class ExperimentCoordinator:
 
         if start_time is not None:
             # start_time may be tz-aware; use utcnow with tzinfo for comparison
-            from datetime import timezone as _tz
-            now_utc = datetime.now(_tz.utc)
+            now_utc = datetime.now(UTC)
             # Make start_time tz-aware if needed
             if start_time.tzinfo is None:
-                start_time = start_time.replace(tzinfo=_tz.utc)
+                start_time = start_time.replace(tzinfo=UTC)
             age_seconds = (now_utc - start_time).total_seconds()
             if age_seconds < RUN_STALL_TIMEOUT_S:
                 return  # Too young to be declared stalled
@@ -1653,7 +1652,7 @@ class ExperimentCoordinator:
         b_experiment: str,
         b_run: str,
     ) -> dict:
-        from sec_review_framework.data.findings import FindingIdentity, Finding
+        from sec_review_framework.data.findings import Finding, FindingIdentity
 
         result_a_dict = await self.get_run_result(a_experiment, a_run)
         result_b_dict = await self.get_run_result(b_experiment, b_run)
@@ -2031,7 +2030,7 @@ class ExperimentCoordinator:
             )
         return self._cve_importer
 
-    def discover_cves(self, req: "DiscoverCVEsRequest") -> "list[CVECandidateResponse]":
+    def discover_cves(self, req: DiscoverCVEsRequest) -> list[CVECandidateResponse]:
         """Discover CVE candidates matching the provided criteria."""
         from sec_review_framework.data.findings import Severity, VulnClass
 
@@ -2076,7 +2075,7 @@ class ExperimentCoordinator:
             raise HTTPException(status_code=502, detail=f"CVE discovery failed: {exc}")
         return [CVECandidateResponse.from_candidate(c) for c in candidates]
 
-    def resolve_cve(self, cve_id: str) -> "CVECandidateResponse":
+    def resolve_cve(self, cve_id: str) -> CVECandidateResponse:
         """Resolve a single CVE by ID and return a scored candidate shape."""
         resolver = self._build_cve_resolver()
         resolved = resolver.resolve(cve_id)
@@ -2283,6 +2282,7 @@ class ExperimentCoordinator:
         seconds and invalidated whenever an experiment is finalised.
         """
         import time
+
         from sec_review_framework.feedback.tracker import _experiment_key
 
         cache_key = (dataset, limit, tool_ext, since, until)
@@ -2475,7 +2475,7 @@ class ExperimentCoordinator:
 
     async def import_experiment_bundle(
         self,
-        upload: "UploadFile",
+        upload: UploadFile,
         conflict_policy: str = "reject",
         rebuild_findings_index: bool = True,
     ) -> dict:
@@ -2485,7 +2485,8 @@ class ExperimentCoordinator:
         as ``scripts/backfill_findings_index.py``).
         """
         import tempfile as _tempfile
-        from sec_review_framework.bundle import async_apply_bundle, BundleConflictError
+
+        from sec_review_framework.bundle import BundleConflictError, async_apply_bundle
         from sec_review_framework.data.experiment import RunResult
 
         tmp_dir = self.storage_root / "tmp"
@@ -2578,7 +2579,7 @@ class ExperimentCoordinator:
         finally:
             tmp_path.unlink(missing_ok=True)
 
-    def effective_registry(self) -> list["ModelProviderConfig"]:  # type: ignore[name-defined]
+    def effective_registry(self) -> list[ModelProviderConfig]:
         """Return the probe-driven model registry.
 
         Builds ModelProviderConfig objects from the current ProviderCatalog
@@ -2679,7 +2680,7 @@ class ExperimentCoordinator:
 
         return problems
 
-    async def model_ids_from_matrix(self, matrix: "ExperimentMatrix") -> set[str]:
+    async def model_ids_from_matrix(self, matrix: ExperimentMatrix) -> set[str]:
         """Derive the set of model IDs referenced by a matrix's strategy_ids.
 
         For each strategy in ``matrix.strategy_ids``, loads the strategy from
@@ -2712,7 +2713,7 @@ class ExperimentCoordinator:
 
         return model_ids
 
-    async def enrich_model_configs(self, matrix: "ExperimentMatrix") -> dict[str, dict]:
+    async def enrich_model_configs(self, matrix: ExperimentMatrix) -> dict[str, dict]:
         """Return api_base/api_key enrichment for probe-discovered models in *matrix*.
 
         Derives the set of model IDs from the matrix's strategy_ids (loading
@@ -2951,7 +2952,7 @@ class CVECandidateResponse(BaseModel):
     fix_commit: str | None = None
 
     @classmethod
-    def from_candidate(cls, c: _CVECandidate) -> "CVECandidateResponse":
+    def from_candidate(cls, c: _CVECandidate) -> CVECandidateResponse:
         r = c.resolved
         advisory_url = None
         if r.repo_url and r.fix_commit_sha:
@@ -3018,7 +3019,7 @@ class StrategyValidateRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-async def _seed_builtin_strategies(db: "Database") -> None:
+async def _seed_builtin_strategies(db: Database) -> None:
     """Insert any builtin strategies that are not yet in the database."""
     from sec_review_framework.strategies.strategy_registry import load_default_registry
 
@@ -3286,7 +3287,7 @@ async def run_smoke_test() -> dict:
             status_code=412,
             detail="No models configured. Add a model before running smoke tests.",
         )
-    model_id = configured_models[0]["id"]
+    configured_models[0]["id"]
 
     # Pick the first available dataset; require at least one to be present
     datasets = await coordinator.list_datasets()
@@ -3859,6 +3860,7 @@ async def create_strategy(body: StrategyCreateRequest) -> UserStrategy:
 
     from fastapi.exceptions import RequestValidationError
     from pydantic import ValidationError as _ValidationError
+
     from sec_review_framework.data.strategy_bundle import _make_json_serializable
 
     # Compute stable id: user.<slug>.<6-char-hex-of-hash>
@@ -4031,7 +4033,6 @@ async def upload_run_result(run_id: str, request: Request) -> dict:
 # ---------------------------------------------------------------------------
 
 if _PROMETHEUS_AVAILABLE and _make_asgi_app is not None:
-    from starlette.routing import Mount
     _metrics_app = _make_asgi_app()
     app.mount("/metrics", _metrics_app)
 

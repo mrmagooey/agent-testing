@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import subprocess
+from datetime import UTC
 from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
@@ -17,7 +18,6 @@ from sec_review_framework.ground_truth.vuln_injector import (
     InjectionTemplate,
     VulnInjector,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
@@ -42,7 +42,7 @@ def _make_template(tmpl_id: str = "sqli_test") -> InjectionTemplate:
 
 
 def _make_label(tmpl_id: str = "sqli_test", dataset_version: str = "v1") -> GroundTruthLabel:
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     return GroundTruthLabel(
         id="label-abc",
@@ -57,7 +57,7 @@ def _make_label(tmpl_id: str = "sqli_test", dataset_version: str = "v1") -> Grou
         source=GroundTruthSource.INJECTED,
         source_ref=tmpl_id,
         confidence="confirmed",
-        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
         introduced_in_diff=None,
     )
 
@@ -231,7 +231,7 @@ def test_generate_multi_file_diff(clean_repo, datasets_root):
     )
 
     def _build_label(result, template, ver):
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         return GroundTruthLabel(
             id=f"label-{result.template_id}",
@@ -246,7 +246,7 @@ def test_generate_multi_file_diff(clean_repo, datasets_root):
             source=GroundTruthSource.INJECTED,
             source_ref=template.id,
             confidence="confirmed",
-            created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
         )
 
     mock_injector = MagicMock(spec=VulnInjector)
@@ -410,7 +410,13 @@ def test_generate_post_injection_commit_failure(clean_repo, datasets_root):
     def _run_side_effect(*args, **kwargs):
         cmd_args = args[0]
         # Trigger failure on the second git commit call (post-injection commit)
-        if isinstance(cmd_args, list) and len(cmd_args) > 0 and cmd_args[0] == "git" and len(cmd_args) > 1 and cmd_args[1] == "commit":
+        if (
+            isinstance(cmd_args, list)
+            and len(cmd_args) > 0
+            and cmd_args[0] == "git"
+            and len(cmd_args) > 1
+            and cmd_args[1] == "commit"
+        ):
             commit_count[0] += 1
             if commit_count[0] >= 2:
                 raise subprocess.CalledProcessError(1, cmd_args)

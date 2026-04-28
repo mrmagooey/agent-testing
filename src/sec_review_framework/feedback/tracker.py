@@ -1,6 +1,6 @@
 """Feedback tracker for cross-experiment comparison and false positive pattern detection."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from sec_review_framework.data.findings import FindingIdentity, VulnClass
 
@@ -194,7 +194,6 @@ class FeedbackTracker:
                     pass
 
         patterns: list[FalsePositivePattern] = []
-        seen_identities: dict[tuple, set[str]] = {}
 
         for (model_id, vuln_class), entries in groups.items():
             # Count unique identities (not just raw occurrences)

@@ -3,22 +3,22 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
 
 import sec_review_framework.coordinator as coord_module
 from sec_review_framework.coordinator import app
+from sec_review_framework.data.findings import Severity, VulnClass
 from sec_review_framework.db import Database
 from sec_review_framework.ground_truth.cve_importer import (
     CVECandidate as _CVECandidate,
+)
+from sec_review_framework.ground_truth.cve_importer import (
     ResolvedCVE,
 )
-from sec_review_framework.data.findings import Severity, VulnClass
-
 from tests.integration.test_coordinator_api import _make_coordinator
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

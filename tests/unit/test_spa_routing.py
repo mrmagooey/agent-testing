@@ -21,11 +21,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 import sec_review_framework.coordinator as coord_module
-from sec_review_framework.coordinator import ExperimentCoordinator, ExperimentCostTracker, app
+from sec_review_framework.coordinator import ExperimentCoordinator, app
 from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
 from sec_review_framework.db import Database
 from sec_review_framework.reporting.markdown import MarkdownReportGenerator
-
 
 # ---------------------------------------------------------------------------
 # Helpers — mirrors the pattern in tests/integration/test_coordinator_api.py
@@ -335,7 +334,6 @@ async def test_frontend_mount_registered_when_dist_exists(tmp_path: Path):
     dist.mkdir(parents=True)
     (dist / "index.html").write_text("<!DOCTYPE html><html><body>SPA</body></html>")
 
-    import importlib
 
     import sec_review_framework.coordinator as coord_mod
 

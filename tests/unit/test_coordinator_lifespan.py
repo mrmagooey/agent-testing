@@ -11,7 +11,6 @@ FastAPI stub so they remain independent of a live K8s cluster or real DB.
 
 from __future__ import annotations
 
-import asyncio
 import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -23,7 +22,6 @@ from sec_review_framework.coordinator import ExperimentCoordinator, lifespan
 from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
 from sec_review_framework.db import Database
 from sec_review_framework.reporting.markdown import MarkdownReportGenerator
-
 
 # ---------------------------------------------------------------------------
 # Helpers

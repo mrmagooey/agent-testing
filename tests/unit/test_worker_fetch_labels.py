@@ -15,11 +15,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from sec_review_framework.data.evaluation import GroundTruthLabel, GroundTruthSource
+from sec_review_framework.data.evaluation import GroundTruthLabel
 from sec_review_framework.data.experiment import ExperimentRun
-from sec_review_framework.data.findings import Severity, VulnClass
+from sec_review_framework.data.findings import VulnClass
 from sec_review_framework.worker import ExperimentWorker
-
 
 # ---------------------------------------------------------------------------
 # Helpers

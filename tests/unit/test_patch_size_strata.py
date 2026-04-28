@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sec_review_framework.data.evaluation import (
     EvidenceQuality,
@@ -33,7 +33,7 @@ def _label(id: str, patch_lines: int | None) -> GroundTruthLabel:
         description="x",
         source=GroundTruthSource.CVE_PATCH,
         confidence="confirmed",
-        created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        created_at=datetime(2024, 1, 1, tzinfo=UTC),
         patch_lines_changed=patch_lines,
     )
 

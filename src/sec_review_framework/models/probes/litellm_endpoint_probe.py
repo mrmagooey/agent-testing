@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import litellm
 
@@ -80,5 +80,5 @@ class LiteLLMEndpointProbe:
             probe_status="fresh",
             model_ids=model_ids,
             metadata=metadata,
-            fetched_at=datetime.now(timezone.utc),
+            fetched_at=datetime.now(UTC),
         )
