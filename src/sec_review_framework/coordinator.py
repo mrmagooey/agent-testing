@@ -172,6 +172,23 @@ class ExperimentCostTracker:
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _slug(path: str, max_len: int = 60) -> str:
+    """Coerce a relative file path into a safe run-ID slug.
+
+    Replaces path separators and non-alphanumeric characters with '-',
+    strips leading/trailing dashes, and truncates to *max_len* characters.
+    """
+    import re as _re
+    slug = _re.sub(r"[^a-z0-9]", "-", path.lower())
+    slug = slug.strip("-")
+    return slug[:max_len] or "file"
+
+
+# ---------------------------------------------------------------------------
 # Experiment coordinator
 # ---------------------------------------------------------------------------
 
@@ -233,11 +250,108 @@ class ExperimentCoordinator:
     # Experiment lifecycle
     # ------------------------------------------------------------------
 
+    async def _expand_benchmark_iteration(
+        self,
+        runs: list,
+        matrix,
+    ) -> list:
+        """Expand runs for datasets that declare per-test-file iteration.
+
+        When the dataset's ``metadata_json`` contains ``{"iteration":
+        "per-test-file"}``, each base run is fanned out into N runs — one per
+        file matched by ``test_glob`` (default ``**/*``).  The fan-out is
+        gated by ``matrix.allow_benchmark_iteration``; if the dataset requests
+        per-file iteration but the flag is False, a ``ValueError`` is raised.
+
+        For datasets without ``iteration`` in their metadata the original
+        *runs* list is returned unchanged (byte-identical behaviour).
+
+        Parameters
+        ----------
+        runs:
+            The base list produced by ``ExperimentMatrix.expand()``.
+        matrix:
+            The original ``ExperimentMatrix``; used to read
+            ``allow_benchmark_iteration`` and ``dataset_name``.
+
+        Returns
+        -------
+        list[ExperimentRun]
+            Either the original *runs* list (no iteration mode) or the
+            expanded list (one run per matched file × base run).
+
+        Raises
+        ------
+        ValueError
+            If the dataset requests per-test-file iteration but
+            ``matrix.allow_benchmark_iteration`` is False.
+        """
+        import glob as _glob
+        import json as _json
+
+        dataset_row = await self.db.get_dataset(matrix.dataset_name)
+        if dataset_row is None:
+            # Dataset not yet in DB (e.g. very early bootstrap); fall through.
+            return runs
+
+        try:
+            meta = _json.loads(dataset_row.get("metadata_json") or "{}")
+        except (ValueError, TypeError):
+            meta = {}
+
+        if meta.get("iteration") != "per-test-file":
+            return runs
+
+        # Dataset wants per-test-file iteration.
+        if not matrix.allow_benchmark_iteration:
+            raise ValueError(
+                f"Dataset {matrix.dataset_name!r} requests per-test-file iteration "
+                f"but the experiment was submitted without "
+                f"allow_benchmark_iteration=true.  Re-submit with that flag set to "
+                f"acknowledge the cost implications (~{len(runs)} strategy × N files "
+                f"agent invocations)."
+            )
+
+        test_glob = meta.get("test_glob") or "**/*"
+
+        # Resolve the glob against the materialized dataset repo.
+        repo_root = self.storage_root / "datasets" / matrix.dataset_name / "repo"
+        if not repo_root.exists():
+            raise ValueError(
+                f"Dataset {matrix.dataset_name!r} repo not found at {repo_root}; "
+                f"materialize the dataset before running per-test-file iteration."
+            )
+
+        matched_paths = sorted(repo_root.glob(test_glob))
+        # Only regular files — skip directories that may match the glob.
+        matched_files = [p for p in matched_paths if p.is_file()]
+        if not matched_files:
+            raise ValueError(
+                f"Dataset {matrix.dataset_name!r}: test_glob {test_glob!r} "
+                f"matched no files under {repo_root}."
+            )
+
+        # Fan out: for each base run × matched file, create a file-specific run.
+        expanded: list = []
+        for base_run in runs:
+            for file_path in matched_files:
+                rel = str(file_path.relative_to(repo_root))
+                file_run_id = f"{base_run.id}_file-{_slug(rel)}"
+                expanded.append(
+                    base_run.model_copy(update={
+                        "id": file_run_id,
+                        "target_file": rel,
+                    })
+                )
+        return expanded
+
     async def submit_experiment(self, matrix: ExperimentMatrix) -> str:
         from sec_review_framework.strategies.strategy_registry import build_registry_from_db
 
         registry = await build_registry_from_db(self.db)
         runs = matrix.expand(registry=registry)
+        # Expand per-test-file iteration if the dataset requests it.
+        runs = await self._expand_benchmark_iteration(runs, matrix)
         experiment_id = matrix.experiment_id
 
         await self.db.create_experiment(

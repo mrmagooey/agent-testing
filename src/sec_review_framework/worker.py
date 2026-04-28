@@ -34,6 +34,42 @@ from sec_review_framework.tools.registry import ToolRegistryFactory
 from sec_review_framework.verification.verifier import LLMVerifier
 
 
+class _SingleFileTargetCodebase(TargetCodebase):
+    """A TargetCodebase restricted to a single file.
+
+    Used by the per-test-file iteration mode: the whole repo is still
+    accessible via read_file (so the agent can follow imports), but
+    ``list_source_files()`` and ``get_file_tree()`` surface only the
+    target file so the agent's user prompt is scoped to it.
+    """
+
+    def __init__(self, repo_path: Path, target_file: str) -> None:
+        super().__init__(repo_path)
+        self._target_file = target_file
+
+    def list_source_files(self) -> list[str]:
+        """Return only the target file if it exists."""
+        return [self._target_file] if (self.repo_path / self._target_file).exists() else []
+
+    def get_file_tree(self) -> dict:
+        """Return a minimal tree containing only the target file."""
+        file_path = self.repo_path / self._target_file
+        if not file_path.exists():
+            return {"name": self._target_file, "type": "file", "size": 0, "language": None}
+        return {
+            "name": str(self.repo_path),
+            "type": "dir",
+            "children": [
+                {
+                    "name": self._target_file,
+                    "type": "file",
+                    "size": file_path.stat().st_size,
+                    "language": file_path.suffix.lstrip(".") or None,
+                }
+            ],
+        }
+
+
 class ModelProviderFactory:
     def create(self, model_id: str, provider_kwargs: dict) -> LiteLLMProvider:
         return LiteLLMProvider(model_name=model_id, **provider_kwargs)
@@ -198,7 +234,11 @@ class ExperimentWorker:
         return [GroundTruthLabel.model_validate(lbl) for lbl in raw_labels]
 
     def run(self, run: ExperimentRun, output_dir: Path, datasets_dir: Path) -> None:
-        target = TargetCodebase(datasets_dir / "targets" / run.dataset_name / "repo")
+        repo_path = datasets_dir / "targets" / run.dataset_name / "repo"
+        if run.target_file is not None:
+            target: TargetCodebase = _SingleFileTargetCodebase(repo_path, run.target_file)
+        else:
+            target = TargetCodebase(repo_path)
         labels = self._fetch_labels(run, datasets_dir)
         model = ModelProviderFactory().create(run.model_id, run.provider_kwargs)
 

@@ -120,6 +120,11 @@ class ExperimentRun(BaseModel):
     repetition_index: int = 0
     created_at: datetime | None = None
 
+    # Per-test-file iteration: when set, the worker scopes its review to this
+    # single file path relative to the dataset repo root.  None means the
+    # whole repo is reviewed (default / existing behaviour).
+    target_file: str | None = None
+
     # HTTP result transport fields.  Populated at config-write time when
     # result_transport == "http"; excluded from DB config_json persistence via
     # Field(exclude=True).  upload_url and upload_token are None for "pvc" runs.
@@ -187,6 +192,12 @@ class ExperimentMatrix(BaseModel):
     # Submit-time override: when True, skip availability validation.
     # Excluded from serialisation so it never reaches the DB or on-disk config JSON.
     allow_unavailable_models: bool = Field(default=False, exclude=True)
+
+    # Cost-gate: must be explicitly set to True to permit per-test-file
+    # iteration for datasets that declare ``iteration: "per-test-file"`` in
+    # their metadata_json.  Excluded from serialisation for the same reason as
+    # allow_unavailable_models — it is a submit-time guard, not a run config.
+    allow_benchmark_iteration: bool = Field(default=False, exclude=True)
 
     def expand(
         self,
