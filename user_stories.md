@@ -959,6 +959,43 @@ Eight tests:
 
 **Result**: 16/16 pass across chromium and firefox.
 
+### 38. Browser back/forward restores Findings filter state
+
+**Spec:** `frontend/e2e/findings-back-forward.spec.ts` (commit pending)
+
+> As a security researcher exploring findings across runs, I want my
+> browser Back and Forward buttons to restore the filter state of my
+> previous and next views — so I can compare two filter sets without
+> re-typing them or losing my context.
+
+Covers `Findings.tsx`'s URL-as-source-of-truth filter model. Unlike
+RunDetail (which uses `setSearchParams(..., { replace: true })`),
+the global Findings page uses default push semantics so each filter
+toggle creates a history entry. Five tests:
+
+- `goBack()` after applying `severity=critical` → URL clears the
+  param, the useEffect re-fires GET `/api/findings` without it, and
+  the chip class returns to the unselected state
+- `goForward()` re-applies the dropped filter and re-fires the GET
+- Two filter changes accumulate (different keys merge, same key
+  replaces); `goBack()` twice unwinds them step-by-step
+- Deep-linked URL `?severity=critical&vuln_class=sqli` renders both
+  chips as selected on mount and the initial GET carries both params
+- Deep-linked URL → `goto('/')` → `goBack()` correctly remounts the
+  page with the filter restored (regression guard for stack restore
+  after a remount, not just within one mount)
+
+**Technique**: passive request capture via `page.on('request', …)`
+into a `requestUrls[]` array — does NOT register a second
+`page.route` so `mockApi`'s base handler keeps serving findings.
+Each transition uses `expect.poll(() => urls.length).toBeGreaterThan(prev)`
+to wait for the post-back/forward re-fetch, then asserts on
+`urls.at(-1)`. Selected-chip detection uses class match
+(`bg-amber-600`) since the production code does not set
+`aria-pressed`.
+
+**Result**: 10/10 pass across chromium and firefox.
+
 ---
 
 ## Candidate stories for future iterations
