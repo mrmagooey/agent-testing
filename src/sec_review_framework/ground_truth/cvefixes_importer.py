@@ -18,6 +18,9 @@ from pathlib import Path
 import yaml
 
 from sec_review_framework.db import Database
+from sec_review_framework.ground_truth._source_check_migration import (
+    ensure_source_check_includes,
+)
 
 # ---------------------------------------------------------------------------
 # Expected CVEfixes schema tables / columns (raise early if missing)
@@ -228,7 +231,7 @@ async def import_cvefixes(
         CVEfixesImportResult with counts and any per-CVE errors.
     """
     # --- Run the source CHECK migration first so 'cvefixes' is accepted ---
-    await _migrate_source_check(db)
+    await ensure_source_check_includes(db, "cvefixes")
 
     result = CVEfixesImportResult()
 
@@ -522,116 +525,10 @@ def _fetch_cwe_ids(con: sqlite3.Connection, cve_id: str) -> list[str]:
 # ---------------------------------------------------------------------------
 # Source CHECK migration
 # ---------------------------------------------------------------------------
-
-_SOURCE_VALUES = ("cve_patch", "injected", "manual", "benchmark", "cvefixes")
-_SOURCE_CHECK_SQL = (
-    "CHECK (source IN ('cve_patch','injected','manual','benchmark','cvefixes'))"
-)
-
-
-async def _migrate_source_check(db: Database) -> None:
-    """Idempotent migration: extend dataset_labels.source CHECK to include 'cvefixes'.
-
-    SQLite does not support ALTER TABLE … MODIFY COLUMN, so we use the
-    standard table-rebuild pattern:
-      1. Check whether 'cvefixes' is already accepted (probe INSERT + ROLLBACK).
-      2. If not, rebuild dataset_labels with the extended CHECK constraint.
-    """
-    import aiosqlite
-
-    async with aiosqlite.connect(db.db_path) as conn:
-        await conn.execute("PRAGMA foreign_keys = OFF")
-
-        # Quick probe: try inserting a row with source='cvefixes' inside a
-        # savepoint; if it succeeds the constraint already allows it.
-        already_migrated = False
-        try:
-            await conn.execute("SAVEPOINT probe_cvefixes_source")
-            # We use a deliberately invalid dataset_name to ensure we don't
-            # accidentally commit a real row; the FK is OFF so the INSERT will
-            # succeed or fail solely on the CHECK constraint.
-            await conn.execute(
-                """
-                INSERT INTO dataset_labels (
-                    id, dataset_name, dataset_version, file_path,
-                    line_start, line_end, cwe_id, vuln_class, severity,
-                    description, source, confidence, created_at
-                ) VALUES (
-                    '_probe_cvefixes', '_probe_ds', 'v0', 'probe.py',
-                    1, 1, 'CWE-0', 'other', 'LOW',
-                    'probe', 'cvefixes', 'HIGH', '2000-01-01T00:00:00'
-                )
-                """
-            )
-            await conn.execute("ROLLBACK TO SAVEPOINT probe_cvefixes_source")
-            await conn.execute("RELEASE SAVEPOINT probe_cvefixes_source")
-            already_migrated = True
-        except Exception:
-            try:
-                await conn.execute("ROLLBACK TO SAVEPOINT probe_cvefixes_source")
-                await conn.execute("RELEASE SAVEPOINT probe_cvefixes_source")
-            except Exception:
-                pass
-
-        if already_migrated:
-            await conn.execute("PRAGMA foreign_keys = ON")
-            return
-
-        # Rebuild dataset_labels with the extended CHECK constraint.
-        await conn.execute("BEGIN")
-        try:
-            # 1. Create new table with updated CHECK
-            await conn.execute(
-                f"""
-                CREATE TABLE dataset_labels_new (
-                    id                   TEXT PRIMARY KEY,
-                    dataset_name         TEXT NOT NULL REFERENCES datasets(name) ON DELETE CASCADE,
-                    dataset_version      TEXT NOT NULL,
-                    file_path            TEXT NOT NULL,
-                    line_start           INTEGER NOT NULL,
-                    line_end             INTEGER NOT NULL,
-                    cwe_id               TEXT NOT NULL,
-                    vuln_class           TEXT NOT NULL,
-                    severity             TEXT NOT NULL,
-                    description          TEXT NOT NULL,
-                    source               TEXT NOT NULL {_SOURCE_CHECK_SQL},
-                    source_ref           TEXT,
-                    confidence           TEXT NOT NULL,
-                    created_at           TEXT NOT NULL,
-                    notes                TEXT,
-                    introduced_in_diff   INTEGER,
-                    patch_lines_changed  INTEGER
-                )
-                """
-            )
-
-            # 2. Copy existing data
-            await conn.execute(
-                """
-                INSERT INTO dataset_labels_new
-                SELECT * FROM dataset_labels
-                """
-            )
-
-            # 3. Drop old table and rename
-            await conn.execute("DROP TABLE dataset_labels")
-            await conn.execute(
-                "ALTER TABLE dataset_labels_new RENAME TO dataset_labels"
-            )
-
-            # 4. Recreate indexes
-            await conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_dataset_labels_dataset "
-                "ON dataset_labels(dataset_name, dataset_version)"
-            )
-            await conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_dataset_labels_cwe "
-                "ON dataset_labels(cwe_id)"
-            )
-
-            await conn.execute("COMMIT")
-        except Exception:
-            await conn.execute("ROLLBACK")
-            raise
-
-        await conn.execute("PRAGMA foreign_keys = ON")
+# Delegated to the shared helper in _source_check_migration.py so that all
+# importers (CVEfixes, CrossVul, future Bandit / SARD, …) share one
+# implementation of the SQLite table-rebuild pattern.
+#
+# import_cvefixes() calls:
+#   await ensure_source_check_includes(db, "cvefixes")
+# (imported at the top of this module)
