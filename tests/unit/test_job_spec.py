@@ -8,7 +8,7 @@ auto-propagate Job labels to pods.  The fix adds ``metadata`` to
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -26,7 +26,6 @@ from sec_review_framework.data.experiment import (
 )
 from sec_review_framework.db import Database
 from sec_review_framework.reporting.markdown import MarkdownReportGenerator
-
 
 EXPERIMENT_ID = "test-experiment-job-spec"
 MODEL_ID = "fake-model"
@@ -63,7 +62,7 @@ def _make_run(result_transport: str = "http") -> ExperimentRun:
         verification_variant=VerificationVariant.NONE,
         dataset_name="test-ds",
         dataset_version="1.0.0",
-        created_at=datetime(2026, 4, 18, tzinfo=timezone.utc),
+        created_at=datetime(2026, 4, 18, tzinfo=UTC),
         result_transport=result_transport,  # type: ignore[arg-type]
     )
 

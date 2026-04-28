@@ -24,7 +24,7 @@ import shutil
 import tracemalloc
 import zipfile
 from pathlib import Path
-from unittest.mock import patch, AsyncMock
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -34,7 +34,6 @@ from sec_review_framework.bundle import (
     BundleConflictError,
     async_apply_bundle,
     async_write_bundle,
-    apply_bundle,
     read_manifest,
     write_bundle,
 )
@@ -42,7 +41,6 @@ from sec_review_framework.coordinator import ExperimentCoordinator, app
 from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
 from sec_review_framework.db import Database
 from sec_review_framework.reporting.markdown import MarkdownReportGenerator
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -748,9 +746,8 @@ def test_post_import_findings_count_via_api(coordinator_client):
 @pytest.mark.asyncio
 async def test_retention_skips_bundle_dirs(tmp_path: Path):
     """Retention loop must not delete experiment dirs that contain a .secrev.zip bundle."""
-    from datetime import timedelta, UTC
-    from datetime import datetime
-    import sec_review_framework.coordinator as _coord
+    from datetime import UTC, datetime, timedelta
+
 
     storage_root = tmp_path / "storage"
     db = Database(tmp_path / "test.db")
@@ -989,7 +986,7 @@ async def test_partial_failure_cleanup(tmp_path: Path):
 
     exp_id = "cleanup-exp"
     run_id = "run-cl1"
-    await _seed_db(db, db_exp_id := exp_id, run_ids=[run_id])
+    await _seed_db(db, exp_id, run_ids=[run_id])
     _create_experiment_on_disk(storage_root, exp_id, run_id)
 
     out_path = tmp_path / "export.secrev.zip"

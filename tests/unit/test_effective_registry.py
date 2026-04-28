@@ -7,10 +7,8 @@ from probe data, with no YAML involved.
 
 from __future__ import annotations
 
-from sec_review_framework.config import ModelProviderConfig
 from sec_review_framework.models.availability import build_effective_registry
 from sec_review_framework.models.catalog import ModelMetadata, ProviderSnapshot
-
 
 # ---------------------------------------------------------------------------
 # Snapshot helpers

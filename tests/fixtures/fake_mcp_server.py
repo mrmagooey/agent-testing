@@ -1,12 +1,10 @@
 """Minimal MCP server for testing. Advertises one tool: `echo`."""
 
 import asyncio
-import sys
 
+from mcp import types
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp import types
-
 
 app = Server("fake-test-server")
 

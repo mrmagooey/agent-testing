@@ -30,8 +30,8 @@ Usage::
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-from typing import Sequence
+from collections.abc import Sequence
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 from sec_review_framework.models.catalog import ModelMetadata, ProviderCatalog, ProviderSnapshot
@@ -98,7 +98,7 @@ def fresh_snapshot(
         probe_status="fresh",
         model_ids=frozenset(ids),
         metadata=metadata,
-        fetched_at=datetime.now(timezone.utc),
+        fetched_at=datetime.now(UTC),
     )
 
 
@@ -158,7 +158,7 @@ def stale_snapshot(
             kwargs["region"] = _BEDROCK_REGIONS.get(mid, "us-east-1")
         metadata[mid] = ModelMetadata(**kwargs)
 
-    fetched_at = datetime.now(timezone.utc) - timedelta(seconds=age_seconds)
+    fetched_at = datetime.now(UTC) - timedelta(seconds=age_seconds)
 
     return ProviderSnapshot(
         probe_status="stale",

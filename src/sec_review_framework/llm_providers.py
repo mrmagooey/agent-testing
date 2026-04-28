@@ -25,7 +25,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, field_validator
 
 logger = logging.getLogger(__name__)
 

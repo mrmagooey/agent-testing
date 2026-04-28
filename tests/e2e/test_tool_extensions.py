@@ -29,8 +29,11 @@ import sys
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
+
+if TYPE_CHECKING:
+    from sec_review_framework.data.strategy_bundle import UserStrategy
 
 import pytest
 from fastapi.testclient import TestClient
@@ -44,11 +47,7 @@ from sec_review_framework.data.evaluation import (
 )
 from sec_review_framework.data.experiment import (
     ExperimentMatrix,
-    ReviewProfileName,
-    StrategyName,
     ToolExtension,
-    ToolVariant,
-    VerificationVariant,
 )
 from sec_review_framework.data.findings import Severity, VulnClass
 from sec_review_framework.db import Database
@@ -68,7 +67,7 @@ DATASET_NAME = "ext-smoke-dataset"
 DATASET_VERSION = "1.0.0"
 
 
-def _make_ext_strategy(strategy_id: str, extensions: frozenset[ToolExtension]) -> "UserStrategy":
+def _make_ext_strategy(strategy_id: str, extensions: frozenset[ToolExtension]) -> UserStrategy:
     """Build a UserStrategy whose default bundle carries the requested tool_extensions."""
     from sec_review_framework.data.strategy_bundle import (
         OrchestrationShape,

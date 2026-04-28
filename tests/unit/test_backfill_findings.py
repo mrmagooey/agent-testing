@@ -6,31 +6,28 @@ row count + shapes. Idempotent: second run yields same count.
 
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 import pytest_asyncio
 
-from sec_review_framework.db import Database
 from sec_review_framework.data.experiment import (
     ExperimentRun,
+    ReviewProfileName,
     RunResult,
     RunStatus,
     StrategyName,
     ToolVariant,
-    ReviewProfileName,
     VerificationVariant,
 )
-from sec_review_framework.data.evaluation import EvaluationResult, VerificationResult
 from sec_review_framework.data.findings import (
     Finding,
     Severity,
-    VulnClass,
     StrategyOutput,
+    VulnClass,
 )
-from sec_review_framework.data.experiment import BundleSnapshot as PromptSnapshot
+from sec_review_framework.db import Database
 
 
 def _make_run_result(

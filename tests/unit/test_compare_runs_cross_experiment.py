@@ -5,17 +5,15 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from unittest.mock import patch
-from datetime import datetime
 
 import pytest
 from fastapi.testclient import TestClient
 
 import sec_review_framework.coordinator as coord_module
-from sec_review_framework.coordinator import app, ExperimentCoordinator
+from sec_review_framework.coordinator import ExperimentCoordinator, app
 from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
 from sec_review_framework.db import Database
 from sec_review_framework.reporting.markdown import MarkdownReportGenerator
-
 
 # ---------------------------------------------------------------------------
 # Helpers

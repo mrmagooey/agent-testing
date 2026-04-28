@@ -34,7 +34,7 @@ pytestmark = pytest.mark.skipif(not _TREE_SITTER_AVAILABLE, reason=_SKIP_REASON)
 _QUERY_CAPTURES_SUPPORTED = False
 if _TREE_SITTER_AVAILABLE:
     try:
-        from tree_sitter import Language, Parser, Query
+        from tree_sitter import Query
         _QUERY_CAPTURES_SUPPORTED = hasattr(Query, "captures")
     except Exception:
         pass
@@ -377,6 +377,7 @@ class TestDispatch:
 class TestBuildServer:
     def _call_tool(self, app: Any, name: str, arguments: dict) -> Any:
         import asyncio
+
         import mcp.types as mcp_types
         from mcp.types import CallToolRequest
 
@@ -396,8 +397,9 @@ class TestBuildServer:
             loop.close()
 
     def test_handle_call_tool_wraps_path_escape_as_text(self, py_repo: Path) -> None:
-        from sec_review_framework.tools.extensions.tree_sitter_server import build_server
         from mcp.types import TextContent
+
+        from sec_review_framework.tools.extensions.tree_sitter_server import build_server
 
         app = build_server(py_repo)
         result = self._call_tool(app, "get_ast", {"path": "../../etc/passwd"})
@@ -407,8 +409,9 @@ class TestBuildServer:
         assert "Error" in content[0].text
 
     def test_handle_call_tool_wraps_unsupported_lang_as_text(self, tmp_path: Path) -> None:
-        from sec_review_framework.tools.extensions.tree_sitter_server import build_server
         from mcp.types import TextContent
+
+        from sec_review_framework.tools.extensions.tree_sitter_server import build_server
 
         (tmp_path / "data.txt").write_text("hello\n")
         app = build_server(tmp_path)
@@ -419,8 +422,9 @@ class TestBuildServer:
         assert "Error" in content[0].text
 
     def test_handle_call_tool_get_ast_success(self, py_repo: Path) -> None:
-        from sec_review_framework.tools.extensions.tree_sitter_server import build_server
         from mcp.types import TextContent
+
+        from sec_review_framework.tools.extensions.tree_sitter_server import build_server
 
         app = build_server(py_repo)
         result = self._call_tool(app, "get_ast", {"path": "app.py"})
@@ -431,8 +435,10 @@ class TestBuildServer:
 
     def test_handle_call_tool_list_tools_returns_four_tools(self, py_repo: Path) -> None:
         import asyncio
-        from sec_review_framework.tools.extensions.tree_sitter_server import build_server
+
         from mcp.types import ListToolsRequest
+
+        from sec_review_framework.tools.extensions.tree_sitter_server import build_server
 
         app = build_server(py_repo)
         handler = app.request_handlers[ListToolsRequest]

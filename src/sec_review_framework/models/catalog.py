@@ -20,7 +20,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from typing import Literal, Protocol
 
 logger = logging.getLogger(__name__)
@@ -210,7 +210,7 @@ class ProviderCatalog:
                 # Check whether the stale data is still within the allowed age.
                 if prior.fetched_at is not None:
                     age = (
-                        datetime.now(timezone.utc) - prior.fetched_at
+                        datetime.now(UTC) - prior.fetched_at
                     ).total_seconds()
                     if age > self._max_stale_seconds:
                         logger.warning(

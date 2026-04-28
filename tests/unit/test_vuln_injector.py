@@ -1,9 +1,9 @@
 """Unit tests for VulnInjector."""
 
-import yaml
 import pytest
+import yaml
 
-from sec_review_framework.ground_truth.vuln_injector import VulnInjector, InjectionTemplate
+from sec_review_framework.ground_truth.vuln_injector import VulnInjector
 
 
 @pytest.fixture

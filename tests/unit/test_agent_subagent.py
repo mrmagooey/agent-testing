@@ -32,10 +32,10 @@ from sec_review_framework.agent.subagent import (  # noqa: E402
     SubagentDeps,
     SubagentOutput,
     _check_caps,
-    resolve_role,
     _run_child_sync,
     make_invoke_subagent_batch_tool,
     make_invoke_subagent_tool,
+    resolve_role,
 )
 from sec_review_framework.data.strategy_bundle import (  # noqa: E402
     OrchestrationShape,

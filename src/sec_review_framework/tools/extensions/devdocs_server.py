@@ -40,9 +40,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from mcp import types
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp import types
 
 logger = logging.getLogger(__name__)
 

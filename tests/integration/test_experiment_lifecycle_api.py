@@ -21,10 +21,6 @@ import sec_review_framework.coordinator as coord_module
 from sec_review_framework.coordinator import app
 from sec_review_framework.data.experiment import (
     ExperimentMatrix,
-    ReviewProfileName,
-    StrategyName,
-    ToolVariant,
-    VerificationVariant,
 )
 from sec_review_framework.db import Database
 from tests.integration.test_coordinator_api import _make_coordinator

@@ -1,12 +1,12 @@
 """Unit tests for LLMVerifier."""
 
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
-from sec_review_framework.verification.verifier import LLMVerifier
 from sec_review_framework.data.evaluation import VerificationOutcome
+from sec_review_framework.verification.verifier import LLMVerifier
 
 
 @pytest.fixture

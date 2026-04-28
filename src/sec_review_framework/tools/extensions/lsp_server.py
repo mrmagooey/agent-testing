@@ -33,9 +33,9 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from mcp import types
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp import types
 
 logger = logging.getLogger(__name__)
 
@@ -299,7 +299,7 @@ class LSPSession:
 
         try:
             return await asyncio.wait_for(fut, timeout=15.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             self._pending.pop(req_id, None)
             raise RuntimeError(f"LSP request {method!r} timed out for {self.language_id}")
 
@@ -457,7 +457,7 @@ class LSPMultiplexer:
 
         try:
             resolved = self._resolve_path(file_path)
-        except (ValueError, FileNotFoundError) as e:
+        except (ValueError, FileNotFoundError):
             raise  # Security constraint — propagate path-escape errors to the caller.
 
         try:
@@ -627,7 +627,10 @@ def build_server(workspace_root: Path) -> tuple[Server, LSPMultiplexer]:
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "file_path": {"type": "string", "description": "File path (relative to workspace root or absolute)."},
+                        "file_path": {
+                            "type": "string",
+                            "description": "File path (relative to workspace root or absolute).",
+                        },
                         "line": {"type": "integer", "description": "Zero-based line number."},
                         "character": {"type": "integer", "description": "Zero-based character offset."},
                     },
@@ -644,10 +647,17 @@ def build_server(workspace_root: Path) -> tuple[Server, LSPMultiplexer]:
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "file_path": {"type": "string", "description": "File path (relative to workspace root or absolute)."},
+                        "file_path": {
+                            "type": "string",
+                            "description": "File path (relative to workspace root or absolute).",
+                        },
                         "line": {"type": "integer", "description": "Zero-based line number."},
                         "character": {"type": "integer", "description": "Zero-based character offset."},
-                        "include_declaration": {"type": "boolean", "description": "Include the declaration site. Default false.", "default": False},
+                        "include_declaration": {
+                            "type": "boolean",
+                            "description": "Include the declaration site. Default false.",
+                            "default": False,
+                        },
                     },
                     "required": ["file_path", "line", "character"],
                 },
@@ -662,7 +672,10 @@ def build_server(workspace_root: Path) -> tuple[Server, LSPMultiplexer]:
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "file_path": {"type": "string", "description": "File path (relative to workspace root or absolute)."},
+                        "file_path": {
+                            "type": "string",
+                            "description": "File path (relative to workspace root or absolute).",
+                        },
                         "line": {"type": "integer", "description": "Zero-based line number."},
                         "character": {"type": "integer", "description": "Zero-based character offset."},
                     },
@@ -679,7 +692,10 @@ def build_server(workspace_root: Path) -> tuple[Server, LSPMultiplexer]:
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "file_path": {"type": "string", "description": "File path (relative to workspace root or absolute)."},
+                        "file_path": {
+                            "type": "string",
+                            "description": "File path (relative to workspace root or absolute).",
+                        },
                     },
                     "required": ["file_path"],
                 },

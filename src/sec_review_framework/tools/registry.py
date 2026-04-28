@@ -126,12 +126,12 @@ class ToolRegistry:
 
 # Dispatch table for optional tool extensions.  Chunks 3-5 populate this via
 # register_extension_builder(); left empty here so Chunk 2 ships a clean scaffold.
-_EXTENSION_BUILDERS: dict[ToolExtension, Callable[["ToolRegistry", Any], None]] = {}
+_EXTENSION_BUILDERS: dict[ToolExtension, Callable[[ToolRegistry, Any], None]] = {}
 
 
 def register_extension_builder(
     ext: ToolExtension,
-    builder: Callable[["ToolRegistry", Any], None],
+    builder: Callable[[ToolRegistry, Any], None],
 ) -> None:
     """Register a builder for a ToolExtension so create() can invoke it.
 

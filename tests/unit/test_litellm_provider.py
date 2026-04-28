@@ -3,22 +3,19 @@
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from sec_review_framework.models.litellm_provider import LiteLLMProvider
 from sec_review_framework.models.base import (
     Message,
-    ModelResponse,
     ProviderError,
     ProviderRateLimitError,
     RetryPolicy,
     ToolDefinition,
 )
-
+from sec_review_framework.models.litellm_provider import LiteLLMProvider
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -277,6 +274,7 @@ def test_rate_limit_error_raises_provider_rate_limit_error():
     """RateLimitError from litellm is converted and raised (as ProviderRateLimitError
     or wrapped in MaxRetriesExceeded when max_retries=0)."""
     import litellm as _litellm
+
     from sec_review_framework.models.base import MaxRetriesExceeded
 
     provider = _make_provider()
@@ -303,6 +301,7 @@ def test_rate_limit_error_raises_provider_rate_limit_error():
 def test_rate_limit_error_with_retry_after_header_parsed():
     """retry-after header is parsed and stored on the ProviderRateLimitError."""
     import litellm as _litellm
+
     from sec_review_framework.models.base import MaxRetriesExceeded
 
     provider = _make_provider()

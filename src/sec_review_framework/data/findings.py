@@ -1,12 +1,12 @@
 """Finding data models — the core output of all scan strategies."""
 
-from enum import Enum
+from enum import StrEnum
 from typing import NamedTuple
 
 from pydantic import BaseModel
 
 
-class Severity(str, Enum):
+class Severity(StrEnum):
     CRITICAL = "critical"
     HIGH = "high"
     MEDIUM = "medium"
@@ -14,7 +14,7 @@ class Severity(str, Enum):
     INFO = "info"
 
 
-class VulnClass(str, Enum):
+class VulnClass(StrEnum):
     SQLI = "sqli"
     XSS = "xss"
     SSRF = "ssrf"
@@ -48,7 +48,7 @@ class FindingIdentity(NamedTuple):
     line_bucket: int
 
     @classmethod
-    def from_finding(cls, finding: "Finding") -> "FindingIdentity":
+    def from_finding(cls, finding: Finding) -> FindingIdentity:
         bucket = (finding.line_start or 0) // LINE_BUCKET_SIZE
         return cls(file_path=finding.file_path, vuln_class=finding.vuln_class, line_bucket=bucket)
 

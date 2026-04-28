@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import sys
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -119,7 +118,11 @@ class MCPClient:
                 {
                     "name": tool.name,
                     "description": tool.description or "",
-                    "inputSchema": tool.inputSchema.model_dump() if hasattr(tool.inputSchema, "model_dump") else dict(tool.inputSchema),
+                    "inputSchema": (
+                        tool.inputSchema.model_dump()
+                        if hasattr(tool.inputSchema, "model_dump")
+                        else dict(tool.inputSchema)
+                    ),
                 }
             )
         return out
@@ -143,7 +146,7 @@ class MCPClient:
     # Context-manager protocol
     # ------------------------------------------------------------------
 
-    def __enter__(self) -> "MCPClient":
+    def __enter__(self) -> MCPClient:
         self.start()
         return self
 
@@ -224,7 +227,7 @@ class MCPToolAdapter(Tool):
 
 
 def register_mcp_tools(
-    registry: "ToolRegistry",
+    registry: ToolRegistry,
     client: MCPClient,
     name_prefix: str = "",
     name_filter: Callable[[str], bool] | None = None,

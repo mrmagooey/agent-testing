@@ -15,14 +15,11 @@ This test:
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
-import pytest
-
-from sec_review_framework.tools.registry import ToolCallRecord, ToolCallAuditLog
+from sec_review_framework.tools.registry import ToolCallAuditLog, ToolCallRecord
 from sec_review_framework.worker import ExperimentWorker
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -34,7 +31,7 @@ def _make_record(**overrides) -> ToolCallRecord:
         call_id="call-abc123",
         tool_name="read_file",
         input={"path": "/src/main.py"},
-        timestamp=datetime(2024, 6, 1, 12, 0, 0, tzinfo=timezone.utc),
+        timestamp=datetime(2024, 6, 1, 12, 0, 0, tzinfo=UTC),
         duration_ms=42,
         output_truncated=False,
     )

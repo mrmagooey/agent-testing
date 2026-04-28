@@ -19,7 +19,6 @@ import sys
 import textwrap
 import warnings
 
-
 # ---------------------------------------------------------------------------
 # Helper: run a snippet in a fresh Python interpreter
 # ---------------------------------------------------------------------------

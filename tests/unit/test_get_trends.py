@@ -2,37 +2,30 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from sec_review_framework.coordinator import ExperimentCoordinator, _compute_trend_summary
 from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
+from sec_review_framework.data.evaluation import EvaluationResult
 from sec_review_framework.data.experiment import (
-    BundleSnapshot,
     ExperimentRun,
     ReviewProfileName,
     RunResult,
     RunStatus,
     StrategyName,
-    ToolExtension,
     ToolVariant,
     VerificationVariant,
 )
 from sec_review_framework.data.findings import (
-    Finding,
-    Severity,
     StrategyOutput,
-    VulnClass,
 )
-from sec_review_framework.data.evaluation import EvaluationResult, MatchedFinding, GroundTruthLabel
 from sec_review_framework.db import Database
 from sec_review_framework.reporting.markdown import MarkdownReportGenerator
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -192,10 +185,10 @@ class TestGetTrends:
         ])
         coord = _make_coordinator(tmp_path, db)
 
-        r1 = _make_result_with_key(
+        _make_result_with_key(
             tmp_storage, "b1", model_id="gpt-4o", f1=0.8
         )
-        r2 = _make_result_with_key(
+        _make_result_with_key(
             tmp_storage, "b1", model_id="claude-3", f1=0.7
         )
 
@@ -347,7 +340,7 @@ class TestGetTrends:
         _write_result_for(tmp_storage, "b1", dataset=DATASET, model_id="gpt-4o", f1=0.8)
 
         # Populate cache
-        result1 = await coord.get_trends(dataset=DATASET)
+        await coord.get_trends(dataset=DATASET)
         assert len(coord._trends_cache) > 0
 
         # Finalize (which should clear cache)
@@ -368,8 +361,9 @@ class TestTrendsEndpoint:
     def test_dataset_required_400(self):
         """GET /trends without dataset param returns 400."""
         from fastapi.testclient import TestClient
-        from sec_review_framework.coordinator import app, coordinator as _coord
+
         import sec_review_framework.coordinator as coord_mod
+        from sec_review_framework.coordinator import app
 
         # Stub coordinator
         mock_coord = MagicMock()
@@ -385,8 +379,9 @@ class TestTrendsEndpoint:
     def test_valid_dataset_proxies_to_coordinator(self):
         """GET /trends?dataset=foo calls coordinator.get_trends."""
         from fastapi.testclient import TestClient
-        from sec_review_framework.coordinator import app
+
         import sec_review_framework.coordinator as coord_mod
+        from sec_review_framework.coordinator import app
 
         mock_coord = MagicMock()
         mock_coord.get_trends = AsyncMock(return_value={
@@ -412,8 +407,9 @@ class TestTrendsEndpoint:
     def test_limit_above_max_is_rejected(self):
         """GET /trends?limit=999999 returns 422 (Query bound violation)."""
         from fastapi.testclient import TestClient
-        from sec_review_framework.coordinator import app
+
         import sec_review_framework.coordinator as coord_mod
+        from sec_review_framework.coordinator import app
 
         original = coord_mod.coordinator
         coord_mod.coordinator = MagicMock()
@@ -427,8 +423,9 @@ class TestTrendsEndpoint:
     def test_invalid_since_date_is_rejected(self):
         """GET /trends with non-ISO since returns 400."""
         from fastapi.testclient import TestClient
-        from sec_review_framework.coordinator import app
+
         import sec_review_framework.coordinator as coord_mod
+        from sec_review_framework.coordinator import app
 
         original = coord_mod.coordinator
         coord_mod.coordinator = MagicMock()
@@ -443,8 +440,9 @@ class TestTrendsEndpoint:
     def test_invalid_until_date_is_rejected(self):
         """GET /trends with non-ISO until returns 400."""
         from fastapi.testclient import TestClient
-        from sec_review_framework.coordinator import app
+
         import sec_review_framework.coordinator as coord_mod
+        from sec_review_framework.coordinator import app
 
         original = coord_mod.coordinator
         coord_mod.coordinator = MagicMock()
@@ -486,7 +484,7 @@ def _write_result_for(
         verification_variant=VerificationVariant.NONE,
         dataset_name=dataset,
         dataset_version="1.0.0",
-        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
         tool_extensions=ext,
     )
     evaluation = _make_evaluation(f1=f1)

@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import MagicMock
-
-import pytest
 
 from sec_review_framework.data.experiment import (
     ExperimentRun,
@@ -18,7 +16,6 @@ from sec_review_framework.data.experiment import (
 )
 from sec_review_framework.data.findings import Finding, Severity, VulnClass
 from sec_review_framework.feedback.tracker import ExperimentComparison, FeedbackTracker, _experiment_key
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -50,7 +47,7 @@ def _make_run(
         verification_variant=VerificationVariant.NONE,
         dataset_name="test-ds",
         dataset_version="1.0.0",
-        created_at=datetime(2026, 4, 16, tzinfo=timezone.utc),
+        created_at=datetime(2026, 4, 16, tzinfo=UTC),
         tool_extensions=tool_extensions or frozenset(),
     )
     run.findings = findings or []

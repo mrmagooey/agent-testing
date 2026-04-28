@@ -37,12 +37,8 @@ from sec_review_framework.data.experiment import (
     ExperimentMatrix,
     ExperimentRun,
     PromptSnapshot,
-    ReviewProfileName,
     RunResult,
     RunStatus,
-    StrategyName,
-    ToolVariant,
-    VerificationVariant,
 )
 from sec_review_framework.data.findings import Severity, StrategyOutput, VulnClass
 from sec_review_framework.data.strategy_bundle import (

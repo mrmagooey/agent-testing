@@ -9,16 +9,13 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import MagicMock
 
 from sec_review_framework.data.experiment import ToolExtension
 from sec_review_framework.tools.registry import (
-    ToolRegistry,
     _EXTENSION_BUILDERS,
+    ToolRegistry,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers

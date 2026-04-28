@@ -5,12 +5,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
 from sec_review_framework.data.experiment import RunStatus, ToolExtension
 from sec_review_framework.reporting.json_report import JSONReportGenerator
 from sec_review_framework.reporting.markdown import MarkdownReportGenerator
-
 
 # ---------------------------------------------------------------------------
 # MarkdownReportGenerator
@@ -25,7 +22,7 @@ class TestMarkdownReportGenerator:
 
     def test_render_run_contains_precision_recall(self, sample_run_result, tmp_path: Path):
         # Attach a minimal evaluation so the Metrics Summary is rendered.
-        from sec_review_framework.data.evaluation import EvaluationResult, MatchedFinding
+        from sec_review_framework.data.evaluation import EvaluationResult
 
         ev = EvaluationResult(
             experiment_id="test",

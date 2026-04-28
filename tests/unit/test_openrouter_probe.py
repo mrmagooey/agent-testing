@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -98,6 +97,7 @@ async def test_openrouter_probe_metadata_context_length(monkeypatch):
         return_value=mock_client,
     ):
         from importlib import reload
+
         import sec_review_framework.models.probes.openrouter_probe as mod
         reload(mod)
 

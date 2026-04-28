@@ -15,13 +15,12 @@ Expected metrics: TP=1, FP=1, FN=1, precision=0.5, recall=0.5
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-from tests.conftest import FakeModelProvider
 from sec_review_framework.data.evaluation import GroundTruthLabel, GroundTruthSource
 from sec_review_framework.data.experiment import (
     ExperimentRun,
@@ -35,7 +34,7 @@ from sec_review_framework.data.experiment import (
 from sec_review_framework.data.findings import Severity, VulnClass
 from sec_review_framework.models.base import ModelResponse, RetryPolicy
 from sec_review_framework.worker import ExperimentWorker, ModelProviderFactory
-
+from tests.conftest import FakeModelProvider
 
 # ---------------------------------------------------------------------------
 # Canned LLM response: 1 TP (SQLi in views.py) + 1 FP (wrong file)
@@ -54,7 +53,7 @@ I have analysed the codebase. Here are my findings:
     "cwe_ids": ["CWE-89"],
     "severity": "high",
     "title": "SQL Injection in search view",
-    "description": "User-supplied input is concatenated directly into a SQL query string, allowing an attacker to inject arbitrary SQL.",
+    "description": "User input concatenated into SQL query, enabling injection.",
     "recommendation": "Use parameterised queries or an ORM.",
     "confidence": 0.95
   },
@@ -102,7 +101,7 @@ def smoke_labels() -> list[GroundTruthLabel]:
             description="SQL injection via string formatting in query parameter",
             source=GroundTruthSource.INJECTED,
             confidence="confirmed",
-            created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            created_at=datetime(2024, 1, 1, tzinfo=UTC),
         ),
         GroundTruthLabel(
             id="lbl-secret-001",
@@ -116,7 +115,7 @@ def smoke_labels() -> list[GroundTruthLabel]:
             description="Hardcoded secret key in auth module",
             source=GroundTruthSource.INJECTED,
             confidence="confirmed",
-            created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            created_at=datetime(2024, 1, 1, tzinfo=UTC),
         ),
     ]
 
@@ -194,7 +193,7 @@ def smoke_run(smoke_dirs) -> ExperimentRun:
         verification_variant=VerificationVariant.NONE,
         dataset_name=smoke_dirs["dataset_name"],
         dataset_version=smoke_dirs["dataset_version"],
-        created_at=datetime(2026, 4, 16, tzinfo=timezone.utc),
+        created_at=datetime(2026, 4, 16, tzinfo=UTC),
     )
 
 

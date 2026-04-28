@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -19,13 +19,11 @@ from sec_review_framework.data.experiment import (
 from sec_review_framework.data.findings import (
     Finding,
     Severity,
-    StrategyOutput,
     VulnClass,
 )
 from sec_review_framework.feedback.tracker import FeedbackTracker
 from sec_review_framework.profiles.review_profiles import BUILTIN_PROFILES, ProfileRegistry
 from sec_review_framework.prompts.registry import PromptRegistry
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -48,7 +46,7 @@ def _make_experiment_run(
         verification_variant=VerificationVariant.NONE,
         dataset_name="test-ds",
         dataset_version="1.0.0",
-        created_at=datetime(2026, 4, 16, tzinfo=timezone.utc),
+        created_at=datetime(2026, 4, 16, tzinfo=UTC),
     )
 
 
@@ -197,12 +195,11 @@ class TestPromptRegistry:
     raw prompt strings.
     """
 
-    def _make_snapshot(self) -> "BundleSnapshot":  # noqa: F821
+    def _make_snapshot(self) -> BundleSnapshot:  # noqa: F821
         from tests.helpers import make_test_bundle_snapshot
         return make_test_bundle_snapshot()
 
     def test_save_and_load_round_trip(self, tmp_path: Path):
-        from sec_review_framework.data.experiment import BundleSnapshot
 
         registry = PromptRegistry(config_root=tmp_path)
         snapshot = self._make_snapshot()
@@ -220,13 +217,14 @@ class TestPromptRegistry:
         assert ids == []
 
     def test_list_snapshots_populated_after_save(self, tmp_path: Path):
+        from datetime import datetime as _dt
+
         from sec_review_framework.data.experiment import BundleSnapshot
         from sec_review_framework.data.strategy_bundle import (
             OrchestrationShape,
             StrategyBundleDefault,
             UserStrategy,
         )
-        from datetime import datetime as _dt
 
         def _snap(sid: str) -> BundleSnapshot:
             s = UserStrategy(

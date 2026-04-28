@@ -7,7 +7,6 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, model_validator
 
-
 # --- Shared ---
 
 
@@ -32,7 +31,7 @@ class ModelProviderConfig(BaseModel):
     display_name: str | None = None
 
     @model_validator(mode="after")
-    def _validate_auth(self) -> "ModelProviderConfig":
+    def _validate_auth(self) -> ModelProviderConfig:
         if self.auth == "api_key" and not self.api_key_env and self.api_base is None:
             raise ValueError(
                 f"model {self.id}: api_key_env required when auth='api_key' and api_base is not set"
@@ -60,7 +59,7 @@ class RetryConfig(BaseModel):
     providers: dict[str, RetryPolicyConfig] = {}
 
     @classmethod
-    def from_yaml(cls, path: Path) -> "RetryConfig":
+    def from_yaml(cls, path: Path) -> RetryConfig:
         return cls.model_validate(load_yaml(path))
 
     def for_provider(self, provider: str) -> RetryPolicyConfig:
@@ -75,7 +74,7 @@ class ConcurrencyConfig(BaseModel):
     per_model: dict[str, int] = {}
 
     @classmethod
-    def from_yaml(cls, path: Path) -> "ConcurrencyConfig":
+    def from_yaml(cls, path: Path) -> ConcurrencyConfig:
         return cls.model_validate(load_yaml(path))
 
     def cap_for(self, model_id: str) -> int:
@@ -94,7 +93,7 @@ class PricingConfig(BaseModel):
     models: dict[str, ModelPricingConfig]
 
     @classmethod
-    def from_yaml(cls, path: Path) -> "PricingConfig":
+    def from_yaml(cls, path: Path) -> PricingConfig:
         return cls.model_validate(load_yaml(path))
 
 
@@ -123,7 +122,7 @@ class CoordinatorConfig(BaseModel):
     jobs: JobConfig = JobConfig()
 
     @classmethod
-    def from_yaml(cls, path: Path) -> "CoordinatorConfig":
+    def from_yaml(cls, path: Path) -> CoordinatorConfig:
         return cls.model_validate(load_yaml(path))
 
 
@@ -165,7 +164,7 @@ class ExperimentFileConfig(BaseModel):
     output_root: str = "outputs/"
 
     @classmethod
-    def from_yaml(cls, path: Path) -> "ExperimentFileConfig":
+    def from_yaml(cls, path: Path) -> ExperimentFileConfig:
         return cls.model_validate(load_yaml(path))
 
 
@@ -213,5 +212,5 @@ class VulnClassesConfig(BaseModel):
     vuln_classes: dict[str, VulnClassDefinition]
 
     @classmethod
-    def from_yaml(cls, path: Path) -> "VulnClassesConfig":
+    def from_yaml(cls, path: Path) -> VulnClassesConfig:
         return cls.model_validate(load_yaml(path))

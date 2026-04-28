@@ -11,7 +11,6 @@ from sec_review_framework.profiles.review_profiles import (
     ReviewProfile,
 )
 
-
 # ---------------------------------------------------------------------------
 # BUILTIN_PROFILES coverage — every known profile resolves
 # ---------------------------------------------------------------------------

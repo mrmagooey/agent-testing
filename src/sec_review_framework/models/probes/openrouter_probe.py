@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import httpx
 
@@ -66,5 +66,5 @@ class OpenRouterProbe:
             probe_status="fresh",
             model_ids=model_ids,
             metadata=metadata,
-            fetched_at=datetime.now(timezone.utc),
+            fetched_at=datetime.now(UTC),
         )

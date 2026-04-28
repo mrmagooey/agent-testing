@@ -9,7 +9,6 @@ import yaml
 
 from sec_review_framework.ground_truth.vuln_injector import VulnInjector
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -154,7 +153,7 @@ class TestAnchorModes:
         source = repo / "views.py"
         source.write_text("def search(request):\n    pass\n")
 
-        result = injector.inject(
+        injector.inject(
             repo_path=repo,
             template_id="before_mode_template",
             target_file="views.py",
@@ -162,8 +161,8 @@ class TestAnchorModes:
         modified = source.read_text()
         lines = modified.splitlines()
         # "vuln_code" line should appear before "def search"
-        vuln_idx = next(i for i, l in enumerate(lines) if "vuln_code" in l)
-        search_idx = next(i for i, l in enumerate(lines) if "def search" in l)
+        vuln_idx = next(i for i, ln in enumerate(lines) if "vuln_code" in ln)
+        search_idx = next(i for i, ln in enumerate(lines) if "def search" in ln)
         assert vuln_idx < search_idx
 
     def test_replace_mode_replaces_anchor_line(self, tmp_path, replace_template_data):
@@ -203,7 +202,7 @@ class TestAnchorModes:
         source = repo / "views.py"
         source.write_text("def process(request):\n    pass\n")
 
-        result = injector.inject(
+        injector.inject(
             repo_path=repo,
             template_id="fallback_mode",
             target_file="views.py",

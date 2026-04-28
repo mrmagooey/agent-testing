@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -15,7 +15,6 @@ from sec_review_framework.data.evaluation import (
 from sec_review_framework.data.findings import Finding, Severity, VulnClass
 from sec_review_framework.evaluation.evaluator import FileLevelEvaluator
 from sec_review_framework.strategies.common import deduplicate
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -69,7 +68,7 @@ def _make_label(
         description="Test label",
         source=GroundTruthSource.INJECTED,
         confidence="confirmed",
-        created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        created_at=datetime(2024, 1, 1, tzinfo=UTC),
     )
 
 

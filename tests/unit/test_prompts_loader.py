@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
 import pytest
 
 from sec_review_framework.prompts.loader import load_system_prompt, load_user_prompt
-
 
 # ---------------------------------------------------------------------------
 # load_system_prompt — happy path

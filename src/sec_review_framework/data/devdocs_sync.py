@@ -39,9 +39,10 @@ import json
 import logging
 import time
 import urllib.request
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Callable, IO, Any
+from typing import IO, Any
 
 logger = logging.getLogger(__name__)
 
@@ -137,14 +138,14 @@ def _sync_docset(
         "downloaded": downloaded,
         "skipped": skipped,
         "errors": errors,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
     }
 
 
 def _write_manifest(root: Path, results: list[dict[str, Any]]) -> None:
     """Write (or overwrite) _manifest.json with sync results and metadata."""
     manifest = {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "base_url": _DEVDOCS_BASE_URL,
         "docsets": results,
     }

@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-import os
-
 import pytest
 from cryptography.fernet import Fernet, InvalidToken, MultiFernet
 
 import sec_review_framework.secrets.fernet as fernet_mod
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -244,6 +241,7 @@ def test_load_fernet_keys_trimmed_of_whitespace(monkeypatch):
 
 
 def test_invalid_token_exported():
-    from sec_review_framework.secrets.fernet import InvalidToken as ModuleInvalidToken
     from cryptography.fernet import InvalidToken as CryptoInvalidToken
+
+    from sec_review_framework.secrets.fernet import InvalidToken as ModuleInvalidToken
     assert ModuleInvalidToken is CryptoInvalidToken

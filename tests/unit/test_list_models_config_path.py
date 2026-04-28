@@ -12,7 +12,6 @@ from sec_review_framework.coordinator import ExperimentCoordinator
 from sec_review_framework.cost.calculator import CostCalculator
 from sec_review_framework.db import Database
 from sec_review_framework.models.catalog import ModelMetadata, ProviderSnapshot
-
 from tests.fixtures.provider_snapshots import fake_catalog as _fake_catalog
 
 

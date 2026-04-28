@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import threading
-import time
 
 import pytest
 
 from sec_review_framework.coordinator import ExperimentCostTracker
-
 
 # ---------------------------------------------------------------------------
 # Basic behaviour

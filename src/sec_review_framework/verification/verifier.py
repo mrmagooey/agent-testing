@@ -48,9 +48,9 @@ class Verifier(ABC):
     def verify(
         self,
         candidates: list[Finding],
-        target: "TargetCodebase",
-        model: "ModelProvider",
-        tools: "ToolRegistry",
+        target: TargetCodebase,
+        model: ModelProvider,
+        tools: ToolRegistry,
     ) -> VerificationResult: ...
 
 
@@ -60,9 +60,9 @@ class LLMVerifier(Verifier):
     def verify(
         self,
         candidates: list[Finding],
-        target: "TargetCodebase",
-        model: "ModelProvider",
-        tools: "ToolRegistry",
+        target: TargetCodebase,
+        model: ModelProvider,
+        tools: ToolRegistry,
     ) -> VerificationResult:
         if not candidates:
             return VerificationResult(

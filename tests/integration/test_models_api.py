@@ -14,6 +14,7 @@ Covers:
 
 from __future__ import annotations
 
+from datetime import UTC
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -22,11 +23,10 @@ from fastapi.testclient import TestClient
 
 import sec_review_framework.coordinator as coord_module
 from sec_review_framework.coordinator import ExperimentCoordinator, app
-from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
+from sec_review_framework.cost.calculator import CostCalculator
 from sec_review_framework.db import Database
 from sec_review_framework.models.catalog import ModelMetadata, ProviderCatalog, ProviderSnapshot
 from sec_review_framework.reporting.markdown import MarkdownReportGenerator
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -325,14 +325,14 @@ def test_grouped_shape_has_required_fields(_ctx, monkeypatch):
     client, c = _ctx
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
 
-    from datetime import datetime, timezone as tz
+    from datetime import datetime
 
     c.catalog = _fake_catalog({
         "openai": ProviderSnapshot(
             probe_status="fresh",
             model_ids=frozenset(["gpt-4o"]),
             metadata={"gpt-4o": ModelMetadata(id="gpt-4o", raw_id="gpt-4o")},
-            fetched_at=datetime(2026, 4, 23, 14, 5, 23, tzinfo=tz.utc),
+            fetched_at=datetime(2026, 4, 23, 14, 5, 23, tzinfo=UTC),
             last_error=None,
         )
     })
@@ -359,14 +359,14 @@ def test_fetched_at_and_last_error_serialised(_ctx, monkeypatch):
     client, c = _ctx
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
 
-    from datetime import datetime, timezone as tz
+    from datetime import datetime
 
     c.catalog = _fake_catalog({
         "openai": ProviderSnapshot(
             probe_status="stale",
             model_ids=frozenset(["gpt-4o"]),
             metadata={"gpt-4o": ModelMetadata(id="gpt-4o", raw_id="gpt-4o")},
-            fetched_at=datetime(2026, 4, 23, 14, 5, 23, tzinfo=tz.utc),
+            fetched_at=datetime(2026, 4, 23, 14, 5, 23, tzinfo=UTC),
             last_error="connection timeout",
         )
     })
@@ -394,7 +394,6 @@ def test_fetched_at_null_when_no_snapshot_time(_ctx):
         )
     })
 
-    import os
     resp = client.get("/models", headers={})
     # Need key set to get models
     assert resp.status_code == 200

@@ -11,17 +11,9 @@ from pathlib import Path
 
 import pytest
 
-# Fixture directory relative to the tests package root.
-_FIXTURES_ROOT = Path(__file__).parent.parent / "fixtures" / "devdocs"
-
-
-# ---------------------------------------------------------------------------
-# Import the server module under test
-# ---------------------------------------------------------------------------
-
 from sec_review_framework.tools.extensions.devdocs_server import (
+    _INDEX_CACHE,
     _dispatch,
-    _discover_docsets,
     _html_to_text,
     _load_index,
     _score_entry,
@@ -30,8 +22,10 @@ from sec_review_framework.tools.extensions.devdocs_server import (
     _tool_search,
     _validate_path,
     _validate_slug,
-    _INDEX_CACHE,
 )
+
+# Fixture directory relative to the tests package root.
+_FIXTURES_ROOT = Path(__file__).parent.parent / "fixtures" / "devdocs"
 
 
 @pytest.fixture(autouse=True)

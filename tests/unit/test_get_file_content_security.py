@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException
 
 from sec_review_framework.coordinator import ExperimentCoordinator as Coordinator
-
 
 # ---------------------------------------------------------------------------
 # Helpers

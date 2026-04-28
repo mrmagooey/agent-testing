@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 __all__ = ["build_semgrep_tools"]
 
 
-def build_semgrep_tools(registry: "ToolRegistry", target: Any) -> None:
+def build_semgrep_tools(registry: ToolRegistry, target: Any) -> None:
     """Build and register run_semgrep backed by the semgrep binary.
 
     Parameters

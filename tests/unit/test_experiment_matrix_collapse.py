@@ -12,11 +12,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
-import pytest
-
 from sec_review_framework.data.experiment import (
     ExperimentMatrix,
-    ExperimentRun,
     ToolExtension,
 )
 from sec_review_framework.data.strategy_bundle import (
@@ -27,7 +24,6 @@ from sec_review_framework.data.strategy_bundle import (
     UserStrategy,
 )
 from sec_review_framework.strategies.strategy_registry import StrategyRegistry
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -328,7 +324,6 @@ def test_tool_extensions_derived_from_strategy_default_bundle():
 
 def test_tool_extensions_union_of_default_and_overrides():
     """run.tool_extensions must be the union of default and all override tool_extensions."""
-    from sec_review_framework.data.strategy_bundle import StrategyBundleOverride
 
     bundle = StrategyBundleDefault(
         system_prompt="sys",

@@ -51,7 +51,7 @@ _DEFAULT_DEVDOCS_ROOT = "/data/devdocs"
 # ---------------------------------------------------------------------------
 
 
-def build_devdocs_tools(registry: "ToolRegistry", target: Any) -> None:
+def build_devdocs_tools(registry: ToolRegistry, target: Any) -> None:
     """Build and register doc_* tools backed by the DevDocs offline MCP subprocess.
 
     Parameters

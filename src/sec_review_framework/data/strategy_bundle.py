@@ -10,20 +10,19 @@ from __future__ import annotations
 import fnmatch
 import json
 from datetime import datetime
-from enum import Enum
+from enum import Enum, StrEnum
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from sec_review_framework.data.findings import VulnClass
 
-
 # ---------------------------------------------------------------------------
 # Orchestration shape
 # ---------------------------------------------------------------------------
 
 
-class OrchestrationShape(str, Enum):
+class OrchestrationShape(StrEnum):
     """Enum tag carried by every UserStrategy.
 
     Retained for back-compat deserialization. New code should not BRANCH on
@@ -167,7 +166,7 @@ class UserStrategy(BaseModel):
     is_builtin: bool = False
 
     @model_validator(mode="after")
-    def _validate_overrides(self) -> "UserStrategy":
+    def _validate_overrides(self) -> UserStrategy:
         shape = self.orchestration_shape
 
         # Shapes that must have no overrides

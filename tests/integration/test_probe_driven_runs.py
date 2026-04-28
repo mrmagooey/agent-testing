@@ -10,12 +10,11 @@ Phase 3 update: uses strategy_ids API; model IDs are derived from strategy bundl
 
 from __future__ import annotations
 
+import json
 import socket
 import threading
 from collections.abc import Iterator
 from pathlib import Path
-
-import json
 
 import pytest
 
@@ -26,7 +25,6 @@ from sec_review_framework.db import Database
 from sec_review_framework.models.catalog import ProviderCatalog
 from sec_review_framework.models.probes.litellm_endpoint_probe import LiteLLMEndpointProbe
 from sec_review_framework.reporting.markdown import MarkdownReportGenerator
-
 from tests.helpers import make_smoke_strategy
 
 # ---------------------------------------------------------------------------

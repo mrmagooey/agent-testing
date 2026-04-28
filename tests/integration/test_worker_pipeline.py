@@ -8,14 +8,12 @@ from __future__ import annotations
 
 import json
 import resource
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-import httpx
 
-from tests.conftest import FakeModelProvider
 from sec_review_framework.data.experiment import (
     ExperimentRun,
     ReviewProfileName,
@@ -27,7 +25,7 @@ from sec_review_framework.data.experiment import (
 )
 from sec_review_framework.models.base import ModelResponse, RetryPolicy
 from sec_review_framework.worker import ExperimentWorker
-
+from tests.conftest import FakeModelProvider
 
 # ---------------------------------------------------------------------------
 # Canned finding JSON that the fake model will return
@@ -137,7 +135,7 @@ def base_run() -> ExperimentRun:
         verification_variant=VerificationVariant.NONE,
         dataset_name="test-dataset",
         dataset_version="1.0.0",
-        created_at=datetime(2026, 4, 16, tzinfo=timezone.utc),
+        created_at=datetime(2026, 4, 16, tzinfo=UTC),
     )
 
 
@@ -149,6 +147,7 @@ def _run_worker(
 ) -> Path:
     """Patch ModelProviderFactory to return our FakeModelProvider, then run worker."""
     from unittest.mock import patch
+
     from sec_review_framework.worker import ModelProviderFactory
 
     fake = FakeModelProvider(responses, retry_policy=RetryPolicy(max_retries=0))
@@ -191,7 +190,7 @@ def test_worker_writes_findings_jsonl(base_run, datasets_dir, tmp_path):
     findings_file = output_dir / "findings.jsonl"
     assert findings_file.exists()
 
-    lines = [l for l in findings_file.read_text().splitlines() if l.strip()]
+    lines = [ln for ln in findings_file.read_text().splitlines() if ln.strip()]
     assert len(lines) == 1
 
     finding = json.loads(lines[0])
@@ -222,7 +221,7 @@ def test_worker_writes_conversation_jsonl(base_run, datasets_dir, tmp_path):
     conv_file = output_dir / "conversation.jsonl"
     assert conv_file.exists()
     # At least one turn must be logged
-    lines = [l for l in conv_file.read_text().splitlines() if l.strip()]
+    lines = [ln for ln in conv_file.read_text().splitlines() if ln.strip()]
     assert len(lines) >= 1
 
 
@@ -232,9 +231,10 @@ def test_worker_writes_conversation_jsonl(base_run, datasets_dir, tmp_path):
 
 def test_worker_failed_strategy_captured(datasets_dir, tmp_path):
     """When the strategy raises, the worker captures the error and writes FAILED status."""
-    from unittest.mock import patch, MagicMock
-    from sec_review_framework.worker import ModelProviderFactory
+    from unittest.mock import patch
+
     from sec_review_framework.models.base import RetryPolicy
+    from sec_review_framework.worker import ModelProviderFactory
 
     run = ExperimentRun(
         id="experiment-fail_single_agent",
@@ -293,8 +293,9 @@ def test_worker_creates_output_dir(base_run, datasets_dir, tmp_path):
 def test_worker_dispatches_builtin_single_agent(datasets_dir, tmp_path):
     """Worker with builtin.single_agent strategy_id calls run_strategy."""
     from unittest.mock import patch
-    from sec_review_framework.worker import ModelProviderFactory
+
     from sec_review_framework.data.findings import StrategyOutput
+    from sec_review_framework.worker import ModelProviderFactory
 
     run = ExperimentRun(
         id="test-dispatch_builtin.single_agent",
@@ -340,6 +341,7 @@ def test_worker_dispatches_builtin_single_agent(datasets_dir, tmp_path):
 def test_worker_unknown_strategy_id_raises(datasets_dir, tmp_path):
     """Worker with an unknown strategy_id raises a clear KeyError."""
     from unittest.mock import patch
+
     from sec_review_framework.worker import ModelProviderFactory
 
     run = ExperimentRun(
@@ -528,7 +530,7 @@ def test_worker_upload_raises_after_max_retries(base_run, datasets_dir, tmp_path
         return MagicMock(status_code=500, text="Internal Server Error")
 
     run = _make_http_run(base_run, "http://coordinator/api/internal/runs/r1/result", "tok123")
-    output_dir = tmp_path / "output" / run.id
+    tmp_path / "output" / run.id
     fake = FakeModelProvider([_canned_response(EMPTY_FINDINGS_JSON)], retry_policy=RetryPolicy(max_retries=0))
 
     with patch.object(ModelProviderFactory, "create", lambda self, mid, mkw: fake):
@@ -555,7 +557,7 @@ def test_worker_http_upload_memory_bounded(base_run, datasets_dir, tmp_path):
     This is a scaled-down version of the 100MB test; peak RSS limit is 200 MB.
     We mock the actual HTTP call so we're testing our streaming logic, not httpx.
     """
-    from sec_review_framework.worker import ModelProviderFactory, ExperimentWorker
+    from sec_review_framework.worker import ExperimentWorker
 
     # Create a 10 MB conversation.jsonl in a temp dir to simulate worker output
     local_dir = tmp_path / "local-artifacts"
@@ -580,7 +582,7 @@ def test_worker_http_upload_memory_bounded(base_run, datasets_dir, tmp_path):
         # Consume the file iterables to simulate real streaming
         for _name, fh_tuple in files:
             _fname, fh, _ct = fh_tuple
-            while chunk := fh.read(65536):
+            while fh.read(65536):
                 pass
         return MagicMock(status_code=200, text="OK")
 
@@ -628,8 +630,9 @@ def test_worker_sast_first_strategy_includes_semgrep_tool(datasets_dir, tmp_path
     unified runner.py (no longer a separate class).
     """
     from unittest.mock import patch
-    from sec_review_framework.worker import ModelProviderFactory
+
     from sec_review_framework.data.findings import StrategyOutput
+    from sec_review_framework.worker import ModelProviderFactory
 
     run = ExperimentRun(
         id="test-sast-ext",

@@ -7,7 +7,6 @@ import litellm
 import pytest
 
 from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
-from sec_review_framework.cost.pricing_view import PricingView
 
 
 @pytest.fixture

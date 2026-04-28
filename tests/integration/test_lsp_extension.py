@@ -88,8 +88,8 @@ class TestLspExtensionIntegration:
 
     def test_build_registers_lsp_tools(self, py_repo: Path) -> None:
         """build_lsp_tools should register at least one lsp_* tool."""
-        from sec_review_framework.tools.registry import ToolRegistry
         from sec_review_framework.tools.extensions.lsp_ext import build_lsp_tools
+        from sec_review_framework.tools.registry import ToolRegistry
 
         target = _make_target(py_repo)
         registry = ToolRegistry()
@@ -104,8 +104,8 @@ class TestLspExtensionIntegration:
 
     def test_all_five_tools_registered(self, py_repo: Path) -> None:
         """All five LSP tools should be exposed with the lsp_ prefix."""
-        from sec_review_framework.tools.registry import ToolRegistry
         from sec_review_framework.tools.extensions.lsp_ext import build_lsp_tools
+        from sec_review_framework.tools.registry import ToolRegistry
 
         target = _make_target(py_repo)
         registry = ToolRegistry()
@@ -126,8 +126,8 @@ class TestLspExtensionIntegration:
 
     def test_document_symbols_finds_helper_and_caller(self, py_repo: Path) -> None:
         """lsp_document_symbols on example.py should include both 'helper' and 'caller'."""
-        from sec_review_framework.tools.registry import ToolRegistry
         from sec_review_framework.tools.extensions.lsp_ext import build_lsp_tools
+        from sec_review_framework.tools.registry import ToolRegistry
 
         target = _make_target(py_repo)
         registry = ToolRegistry()
@@ -156,8 +156,8 @@ class TestLspExtensionIntegration:
         """lsp_definition on the 'helper' call inside 'caller' (line 4, col 11)
         should resolve back to line 0 where 'helper' is defined.
         """
-        from sec_review_framework.tools.registry import ToolRegistry
         from sec_review_framework.tools.extensions.lsp_ext import build_lsp_tools
+        from sec_review_framework.tools.registry import ToolRegistry
 
         target = _make_target(py_repo)
         registry = ToolRegistry()
@@ -190,9 +190,9 @@ class TestLspExtensionIntegration:
 
     def test_registry_close_shuts_down_client(self, py_repo: Path) -> None:
         """After registry.close(), the MCPClient should be marked closed."""
-        from sec_review_framework.tools.registry import ToolRegistry
         from sec_review_framework.tools.extensions.lsp_ext import build_lsp_tools
         from sec_review_framework.tools.mcp_bridge import MCPClient
+        from sec_review_framework.tools.registry import ToolRegistry
 
         target = _make_target(py_repo)
         registry = ToolRegistry()
@@ -217,8 +217,8 @@ class TestLspExtensionIntegration:
 
     def test_unknown_file_extension_returns_error_json(self, py_repo: Path) -> None:
         """Calling lsp_definition on an unsupported file type should return an error dict."""
-        from sec_review_framework.tools.registry import ToolRegistry
         from sec_review_framework.tools.extensions.lsp_ext import build_lsp_tools
+        from sec_review_framework.tools.registry import ToolRegistry
 
         # Write a YAML file — no LSP backend configured for it.
         (py_repo / "config.yaml").write_text("key: value\n", encoding="utf-8")

@@ -46,7 +46,7 @@ def _security_filter(tool_name: str) -> bool:
 # Builder
 # ---------------------------------------------------------------------------
 
-def build_tree_sitter_tools(registry: "ToolRegistry", target: Any) -> None:
+def build_tree_sitter_tools(registry: ToolRegistry, target: Any) -> None:
     """Build and register ts_* tools backed by a tree-sitter MCP subprocess.
 
     Parameters

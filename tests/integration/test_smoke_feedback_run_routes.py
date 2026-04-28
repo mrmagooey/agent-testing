@@ -17,9 +17,7 @@ from fastapi.testclient import TestClient
 import sec_review_framework.coordinator as coord_module
 from sec_review_framework.coordinator import app
 from sec_review_framework.db import Database
-
 from sec_review_framework.models.catalog import ModelMetadata, ProviderCatalog, ProviderSnapshot
-
 from tests.integration.test_coordinator_api import _make_coordinator
 
 
@@ -216,7 +214,7 @@ def test_smoke_test_returns_409_when_already_running(coordinator_client):
 async def test_smoke_test_allows_new_after_previous_completes(tmp_path: Path):
     """POST /smoke-test succeeds after the previous smoke experiment is completed."""
     from unittest.mock import patch as _patch
-    import sec_review_framework.coordinator as _coord_mod
+
 
     db = Database(tmp_path / "test.db")
     await db.init()
@@ -361,8 +359,8 @@ def test_get_run_404_message_is_informative(coordinator_client):
 @pytest.mark.asyncio
 async def test_get_run_shape_after_submit(tmp_path: Path):
     """A submitted run's detail endpoint returns expected shape fields."""
-    from sec_review_framework.data.experiment import ExperimentMatrix
     from sec_review_framework.coordinator import _seed_builtin_strategies
+    from sec_review_framework.data.experiment import ExperimentMatrix
 
     db = Database(tmp_path / "test.db")
     await db.init()

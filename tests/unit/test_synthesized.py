@@ -6,18 +6,14 @@ and all AuthSpec variants (ApiKeyAuth, AwsAuth, NoAuth).
 
 from __future__ import annotations
 
-import pytest
-
 from sec_review_framework.models.catalog import ModelMetadata, ProviderSnapshot
 from sec_review_framework.models.synthesized import (
     ApiKeyAuth,
-    AuthSpec,
     AwsAuth,
     NoAuth,
     deterministic_display_name,
     synthesize_configs_from_snapshot,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers

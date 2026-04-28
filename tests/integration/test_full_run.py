@@ -7,30 +7,22 @@ cluster is required.
 
 from __future__ import annotations
 
-import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 
 from sec_review_framework.coordinator import ExperimentCoordinator, ExperimentCostTracker
 from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
 from sec_review_framework.data.experiment import (
-    BundleSnapshot,
     ExperimentMatrix,
     ExperimentRun,
-    ReviewProfileName,
     RunResult,
     RunStatus,
-    StrategyName,
-    ToolVariant,
-    VerificationVariant,
 )
 from sec_review_framework.data.findings import StrategyOutput
 from sec_review_framework.db import Database
 from sec_review_framework.reporting.markdown import MarkdownReportGenerator
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -97,7 +89,7 @@ def _run_result_json(run: ExperimentRun) -> str:
         verification_tokens=0,
         estimated_cost_usd=0.01,
         duration_seconds=10.0,
-        completed_at=datetime(2026, 4, 16, tzinfo=timezone.utc),
+        completed_at=datetime(2026, 4, 16, tzinfo=UTC),
     )
     return result.model_dump_json(indent=2)
 

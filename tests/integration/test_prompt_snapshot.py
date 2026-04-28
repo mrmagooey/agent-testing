@@ -9,7 +9,7 @@ stored instead).
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -19,7 +19,6 @@ from fastapi.testclient import TestClient
 import sec_review_framework.coordinator as coord_module
 from sec_review_framework.coordinator import ExperimentCoordinator, app
 from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
-from sec_review_framework.data.evaluation import EvaluationResult
 from sec_review_framework.data.experiment import (
     BundleSnapshot,
     ExperimentRun,
@@ -33,7 +32,6 @@ from sec_review_framework.data.experiment import (
 from sec_review_framework.data.findings import StrategyOutput
 from sec_review_framework.db import Database
 from sec_review_framework.reporting.markdown import MarkdownReportGenerator
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -75,7 +73,7 @@ def _write_run_with_snapshot(
         verification_variant=VerificationVariant.NONE,
         dataset_name="test-dataset",
         dataset_version="1.0.0",
-        created_at=datetime(2026, 4, 1, tzinfo=timezone.utc),
+        created_at=datetime(2026, 4, 1, tzinfo=UTC),
     )
     snapshot = make_test_bundle_snapshot()
     result = RunResult(
@@ -95,7 +93,7 @@ def _write_run_with_snapshot(
         verification_tokens=0,
         estimated_cost_usd=0.01,
         duration_seconds=5.0,
-        completed_at=datetime(2026, 4, 1, 1, 0, 0, tzinfo=timezone.utc),
+        completed_at=datetime(2026, 4, 1, 1, 0, 0, tzinfo=UTC),
     )
     out_dir = storage_root / "outputs" / experiment_id / run_id
     out_dir.mkdir(parents=True)

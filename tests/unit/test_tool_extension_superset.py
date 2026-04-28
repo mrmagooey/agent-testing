@@ -23,7 +23,6 @@ from sec_review_framework.data.strategy_bundle import (
 )
 from sec_review_framework.worker import check_tool_extension_superset
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

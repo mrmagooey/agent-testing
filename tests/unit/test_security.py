@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
 
 from sec_review_framework.tools.doc_lookup import DocLookupTool
-from sec_review_framework.tools.registry import ToolCallAuditLog, ToolRegistry
+from sec_review_framework.tools.registry import ToolRegistry
 from sec_review_framework.tools.repo_access import GrepTool, ListDirectoryTool, ReadFileTool
-
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import types
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -28,7 +28,6 @@ from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
 from sec_review_framework.data.experiment import (
     ExperimentRun,
     ReviewProfileName,
-    RunStatus,
     StrategyName,
     ToolVariant,
     VerificationVariant,
@@ -85,7 +84,7 @@ def _make_run(run_id: str | None = None) -> ExperimentRun:
         verification_variant=VerificationVariant.NONE,
         dataset_name=DATASET,
         dataset_version="1.0.0",
-        created_at=datetime(2026, 4, 18, tzinfo=timezone.utc),
+        created_at=datetime(2026, 4, 18, tzinfo=UTC),
     )
 
 
@@ -135,7 +134,7 @@ async def test_check_stalled_job_uses_core_v1_api(tmp_path: Path, temp_db: Datab
     await temp_db.update_run(run.id, status="running")
 
     # Build a stale job (active=1, no live pods, age > timeout)
-    stale_start = datetime.now(timezone.utc) - timedelta(seconds=600)
+    stale_start = datetime.now(UTC) - timedelta(seconds=600)
 
     fake_job = MagicMock()
     fake_job.metadata.name = "exp-stalled-job"

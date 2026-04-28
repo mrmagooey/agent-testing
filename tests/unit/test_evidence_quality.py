@@ -1,6 +1,6 @@
 """Unit tests for EvidenceQualityAssessor (heuristic variant)."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -36,7 +36,7 @@ def _make_label(
         description="SQL injection via unsanitized input",
         source=GroundTruthSource.CVE_PATCH,
         confidence="confirmed",
-        created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        created_at=datetime(2024, 1, 1, tzinfo=UTC),
     )
 
 

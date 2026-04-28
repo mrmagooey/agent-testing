@@ -92,9 +92,9 @@ def test_list_directory_dirs_listed_before_files(repo: Path):
     """Directories should appear before regular files in the listing."""
     tool = ListDirectoryTool(repo)
     result = tool.invoke({"path": "."})
-    lines = [l.strip() for l in result.splitlines() if l.strip()]
-    dir_indices = [i for i, l in enumerate(lines) if l.startswith("/")]
-    file_indices = [i for i, l in enumerate(lines) if not l.startswith("/")]
+    lines = [ln.strip() for ln in result.splitlines() if ln.strip()]
+    dir_indices = [i for i, ln in enumerate(lines) if ln.startswith("/")]
+    file_indices = [i for i, ln in enumerate(lines) if not ln.startswith("/")]
     if dir_indices and file_indices:
         # All dir entries should come before all file entries.
         assert max(dir_indices) < min(file_indices)
@@ -126,7 +126,7 @@ def test_grep_max_results_limit(repo: Path):
     tool = GrepTool(repo)
     result = tool.invoke({"pattern": "match_", "max_results": 5})
     # Should have truncation notice or a small number of lines.
-    lines = [l for l in result.splitlines() if "match_" in l]
+    lines = [ln for ln in result.splitlines() if "match_" in ln]
     assert len(lines) <= 5 or "[output truncated]" in result
 
 

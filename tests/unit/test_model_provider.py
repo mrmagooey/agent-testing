@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections import deque
-from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -18,7 +17,6 @@ from sec_review_framework.models.base import (
     RetryPolicy,
     ToolDefinition,
 )
-
 
 # ---------------------------------------------------------------------------
 # Test provider implementation
@@ -289,7 +287,7 @@ def test_complete_holds_log_lock_during_append_sequence():
             self._inner = _threading.Lock()
             self.acquire_count = 0
 
-        def __enter__(self) -> "_SpyLock":
+        def __enter__(self) -> _SpyLock:
             self.acquire_count += 1
             self._inner.acquire()
             return self

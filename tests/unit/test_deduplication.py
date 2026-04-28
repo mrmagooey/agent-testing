@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import pytest
-
-from sec_review_framework.data.findings import Finding, Severity, StrategyOutput, VulnClass
+from sec_review_framework.data.findings import Finding, Severity, VulnClass
 from sec_review_framework.strategies.common import deduplicate
-
 
 # ---------------------------------------------------------------------------
 # Helpers

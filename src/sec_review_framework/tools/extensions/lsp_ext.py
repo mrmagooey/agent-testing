@@ -56,7 +56,7 @@ def _lsp_tool_filter(tool_name: str) -> bool:
 # Builder
 # ---------------------------------------------------------------------------
 
-def build_lsp_tools(registry: "ToolRegistry", target: Any) -> None:
+def build_lsp_tools(registry: ToolRegistry, target: Any) -> None:
     """Build and register lsp_* tools backed by the LSP multiplexer MCP subprocess.
 
     Parameters

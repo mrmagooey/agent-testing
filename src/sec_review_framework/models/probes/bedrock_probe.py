@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sec_review_framework.models.catalog import ModelMetadata, ProviderSnapshot
 
@@ -123,5 +123,5 @@ class BedrockProbe:
             probe_status="fresh",
             model_ids=frozenset(per_id.keys()),
             metadata=per_id,
-            fetched_at=datetime.now(timezone.utc),
+            fetched_at=datetime.now(UTC),
         )

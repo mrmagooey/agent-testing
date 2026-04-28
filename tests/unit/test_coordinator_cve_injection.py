@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-import json
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
-from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
 
 import sec_review_framework.coordinator as coord_module
-from sec_review_framework.coordinator import app, ExperimentCoordinator
+from sec_review_framework.coordinator import ExperimentCoordinator, app
 from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
 from sec_review_framework.data.evaluation import GroundTruthLabel, GroundTruthSource
 from sec_review_framework.data.findings import Severity, VulnClass
@@ -61,7 +60,7 @@ def _make_label(idx: int = 0) -> GroundTruthLabel:
         source=GroundTruthSource.CVE_PATCH,
         source_ref="CVE-2023-00001",
         confidence="confirmed",
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )
 
 
@@ -115,7 +114,6 @@ def test_import_cve_persists_labels_to_db(coordinator_client):
 
 def test_import_cve_idempotent_second_call_fails_409(coordinator_client):
     """A second import_cve for the same dataset name returns 409 (duplicate PK)."""
-    import asyncio
     client, c, tmp_path = coordinator_client
     labels = [_make_label(0)]
     with patch.object(c, "_build_cve_importer") as mock_builder:

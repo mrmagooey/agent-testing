@@ -2,32 +2,37 @@
 
 import hashlib
 from datetime import UTC, datetime
-from enum import Enum
-from typing import Literal
+from enum import StrEnum
+from typing import TYPE_CHECKING, Literal
+
 from pydantic import BaseModel, Field, field_serializer
 
 from sec_review_framework.data.evaluation import EvaluationResult, VerificationResult
 from sec_review_framework.data.findings import Finding, StrategyOutput
 
+if TYPE_CHECKING:
+    from sec_review_framework.data.strategy_bundle import UserStrategy
+    from sec_review_framework.strategies.strategy_registry import StrategyRegistry
 
-class ToolVariant(str, Enum):
+
+class ToolVariant(StrEnum):
     WITH_TOOLS = "with_tools"
     WITHOUT_TOOLS = "without_tools"
 
 
-class ToolExtension(str, Enum):
+class ToolExtension(StrEnum):
     DEVDOCS = "devdocs"
     LSP = "lsp"
     SEMGREP = "semgrep"
     TREE_SITTER = "tree_sitter"
 
 
-class VerificationVariant(str, Enum):
+class VerificationVariant(StrEnum):
     NONE = "none"
     WITH_VERIFICATION = "with_verification"
 
 
-class StrategyName(str, Enum):
+class StrategyName(StrEnum):
     SINGLE_AGENT = "single_agent"
     PER_FILE = "per_file"
     PER_VULN_CLASS = "per_vuln_class"
@@ -35,7 +40,7 @@ class StrategyName(str, Enum):
     DIFF_REVIEW = "diff_review"
 
 
-class ReviewProfileName(str, Enum):
+class ReviewProfileName(StrEnum):
     DEFAULT = "default"
     STRICT = "strict"
     COMPREHENSIVE = "comprehensive"
@@ -57,7 +62,7 @@ class BundleSnapshot(BaseModel):
     bundle_json: str  # canonical JSON of the full UserStrategy
 
     @classmethod
-    def capture(cls, strategy: "UserStrategy") -> "BundleSnapshot":  # type: ignore[name-defined]
+    def capture(cls, strategy: UserStrategy) -> BundleSnapshot:
         """Build a BundleSnapshot from a UserStrategy.
 
         Parameters
@@ -131,7 +136,7 @@ class ExperimentRun(BaseModel):
         return self.verifier_model_id or self.model_id
 
 
-class RunStatus(str, Enum):
+class RunStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
     COMPLETED = "completed"
@@ -185,7 +190,7 @@ class ExperimentMatrix(BaseModel):
 
     def expand(
         self,
-        registry: "StrategyRegistry | None" = None,  # type: ignore[name-defined]
+        registry: StrategyRegistry | None = None,
     ) -> list[ExperimentRun]:
         """Expand the matrix into a flat list of ExperimentRun objects.
 
