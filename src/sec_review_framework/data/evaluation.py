@@ -5,7 +5,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel
 
-from sec_review_framework.data.findings import Finding, Severity, VulnClass
+from sec_review_framework.data.findings import Finding, Severity, VulnClass  # noqa: F401  (VulnClass kept for re-export)
 
 # --- Ground Truth ---
 
@@ -28,7 +28,13 @@ class GroundTruthLabel(BaseModel):
     line_start: int
     line_end: int
     cwe_id: str
-    vuln_class: VulnClass
+    # Ground-truth labels accept any vuln_class slug, including the broader set
+    # defined in config/vuln_classes.yaml that goes beyond the agent-facing
+    # VulnClass enum (which is grounded in prompt language). Validation is
+    # delegated to the YAML registry rather than a strict enum so benchmark
+    # categories like 'pathtraver', 'crypto', 'reflection_injection' load
+    # without forcing every enum addition through prompt-template churn.
+    vuln_class: str
     severity: Severity
     description: str
     source: GroundTruthSource
