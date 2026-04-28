@@ -352,3 +352,30 @@ async def test_delete_experiment_idempotent_for_missing(tmp_path: Path):
             with TestClient(app, raise_server_exceptions=True) as client:
                 resp = client.delete("/experiments/does-not-exist-at-all")
                 assert resp.status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_delete_experiment_invalidates_trends_cache(tmp_path: Path):
+    """DELETE /experiments/<id> invalidates the in-memory trends cache.
+
+    Otherwise a deleted completed experiment continues to appear in the
+    /trends graph for up to _TRENDS_CACHE_TTL_S (60s) until the TTL fires.
+    """
+    db = Database(tmp_path / "test.db")
+    await db.init()
+    c = _make_coordinator(tmp_path, db)
+
+    # Seed the cache with a sentinel entry so we can confirm it gets cleared.
+    c._trends_cache[("test-dataset", 10, None, None, None)] = ({"sentinel": True}, 1e18)
+    assert len(c._trends_cache) == 1
+
+    with patch.object(coord_module, "coordinator", c):
+        with patch.object(c, "reconcile", return_value=None):
+            with TestClient(app, raise_server_exceptions=True) as client:
+                resp = client.delete("/experiments/any-id")
+                assert resp.status_code == 204
+
+    assert c._trends_cache == {}, (
+        "delete_experiment must invalidate the trends cache; otherwise the "
+        "deleted experiment lingers on the trends graph for up to 60s."
+    )

@@ -952,6 +952,9 @@ class ExperimentCoordinator:
                 run_config.unlink()
         # Remove all DB rows for the experiment (findings → runs → experiment).
         await self.db.delete_experiment(experiment_id)
+        # Invalidate trends cache so a deleted completed experiment stops
+        # appearing in the graph immediately instead of within the 60s TTL.
+        self._invalidate_trends_cache()
 
     # ------------------------------------------------------------------
     # Reconciliation (called at startup)

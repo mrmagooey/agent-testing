@@ -1493,6 +1493,36 @@ non-positive value before it reaches the computation. The existing
 
 **Result**: 53/53 coordinator-API tests pass on main.
 
+### 51. Delete experiment invalidates the trends cache
+
+**Backend fix:** `src/sec_review_framework/coordinator.py`
+**Backend test:** `tests/integration/test_experiment_routes_extended.py` (+1)
+
+> As an admin who just deleted a stale experiment, I want the
+> trends graph to immediately stop showing data from that
+> experiment — currently the trends are cached for up to 60 seconds
+> and a deleted completed experiment continues to appear until the
+> cache expires.
+
+**The bug**: `coordinator.delete_experiment` (after iter 45's DB
+cleanup) tore down filesystem outputs, run rows, and findings — but
+never called `_invalidate_trends_cache()`. The trends endpoint
+caches `(dataset, limit, tool_ext, since, until) → result` for
+`_TRENDS_CACHE_TTL_S = 60s`. So a freshly-deleted completed
+experiment continued to appear in the trends graph until the cache
+expired naturally. Lower-priority than data correctness but a real
+"why is the deleted thing still there" UX surprise.
+
+**The fix**: one-line — call `self._invalidate_trends_cache()` at
+the end of `delete_experiment`, alongside the existing call site in
+`finalize_experiment` (line 907).
+
+**Test**: pre-seed the cache with a sentinel entry, DELETE any id,
+assert the cache is empty afterwards. Demonstrably fails on the
+unfixed code (sentinel survives the delete).
+
+**Result**: 16/16 routes-extended tests pass.
+
 ---
 
 ## Candidate stories for future iterations
