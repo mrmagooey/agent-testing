@@ -15,6 +15,7 @@ import StrategyViewer from './pages/StrategyViewer'
 import StrategyEditor from './pages/StrategyEditor'
 import ExperimentImport from './pages/ExperimentImport'
 import Settings from './pages/Settings'
+import NotFound from './pages/NotFound'
 import ThemeToggle from './components/ThemeToggle'
 
 const NAV_LINKS = [
@@ -127,6 +128,7 @@ export default function App() {
             <Route path="/findings" element={<Findings />} />
             <Route path="/feedback" element={<Feedback />} />
             <Route path="/settings" element={<Settings />} />
+            <Route path="*" element={<NotFound />} />
           </Routes>
         </main>
       </div>

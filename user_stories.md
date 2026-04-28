@@ -1043,6 +1043,39 @@ backend honour the user-visible promise.
 **Result**: 28/28 unit tests pass; broader coordinator-API slice
 (107 tests) green; first cross-stack iteration of this loop.
 
+### 40. Mistyped or stale URLs render a clear 404 page
+
+**Frontend feature + spec:** `frontend/src/pages/NotFound.tsx` (new),
+`frontend/src/App.tsx` (wired), `frontend/e2e/not-found.spec.ts`
+(5 tests / 10 across browsers) — commit pending.
+
+> As a user mistyping a URL or following a stale link, I want a
+> clear 'Page not found' message instead of an empty page, so I
+> know what happened and have a path back to the app's main routes.
+
+**The bug**: `App.tsx` (lines 105-135) defines explicit routes but
+no `<Route path="*">`. The backend (`coordinator.py:3169-3183`)
+serves the SPA shell for any `Accept: text/html` GET, so unknown
+URLs reach React Router and silently render an empty `<main>` under
+the persistent NavBar. Users saw nav chrome with nothing inside it.
+
+**The fix**: a 32-line `NotFound` component that uses
+`useLocation()` to render the path the user actually typed, plus
+two react-router `<Link>`s (Back to dashboard, Findings) for client-
+side navigation. Wired as the LAST `<Route path="*">` in App.tsx.
+
+**Tests**:
+- Unknown path renders the heading
+- The current path is reflected back in the message body
+- "Back to dashboard" link navigates to `/` and shows the dashboard
+- NavBar is still visible on the 404 page (layout shell preserved)
+- Deep nested unknown path (`/experiments/abc/runs/xyz/zzz-not-real`)
+  also falls through to the catch-all — guards against a future bug
+  where someone collapses a route into a wildcard segment
+
+**Result**: 10/10 pass on chromium and firefox; typecheck clean;
+no regressions in dashboard/nav smoke slice.
+
 ---
 
 ## Candidate stories for future iterations
