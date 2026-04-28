@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -94,6 +95,12 @@ FRONTEND_DIST_DIR = _resolve_frontend_dist()
 logger = logging.getLogger(__name__)
 
 AUDIT_URL_CHECK_EXEMPT_PREFIXES = ("doc_", "ts_", "lsp_")
+
+# Bare YYYY-MM-DD values from <input type="date"> are normalised to end-of-day
+# inclusive when used as `created_to`, so a "Created to: April 20" filter
+# includes findings created at any time on that date instead of silently
+# excluding them via lexicographic comparison against ISO-8601 timestamps.
+_DATE_ONLY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 _TOOL_EXTENSION_LABELS: dict[ToolExtension, str] = {
     ToolExtension.DEVDOCS: "DevDocs",
@@ -1525,6 +1532,10 @@ class ExperimentCoordinator:
         if created_from:
             filters["created_from"] = created_from
         if created_to:
+            if _DATE_ONLY_RE.match(created_to):
+                # Bare YYYY-MM-DD from <input type="date"> — treat as end-of-day
+                # inclusive so findings created any time on that date are included.
+                created_to = f"{created_to}T23:59:59.999999"
             filters["created_to"] = created_to
 
         total, items = await self.db.query_findings(

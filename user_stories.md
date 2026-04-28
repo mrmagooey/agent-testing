@@ -1076,6 +1076,50 @@ side navigation. Wired as the LAST `<Route path="*">` in App.tsx.
 **Result**: 10/10 pass on chromium and firefox; typecheck clean;
 no regressions in dashboard/nav smoke slice.
 
+### 41. Date-only `created_to` filter is end-of-day inclusive
+
+**Backend fix:** `src/sec_review_framework/coordinator.py`
+**Backend tests:** `tests/unit/test_coordinator_findings_search.py`
+(+2 tests; commit pending)
+
+> As a security researcher filtering findings by date on the
+> Findings page, when I set 'Created to: April 20' I expect findings
+> created at any time on April 20 to be included in the results —
+> not silently dropped because the backend treats my bare-date input
+> as midnight.
+
+**The bug**: The frontend uses `<input type="date">` (`FindingsFilterBar.tsx:141-148`)
+which produces values like `2026-04-20` (no time component). The backend
+ran `WHERE f.created_at <= '2026-04-20'`, but `created_at` is stored as
+full ISO-8601 (e.g. `2026-04-20T14:30:00+00:00`). SQLite TEXT comparison
+is lexicographic: any same-day timestamp sorts GREATER than the bare date,
+so a finding created on April 20 was silently EXCLUDED when the user
+asked for "up to April 20." Iter 39's `test_date_range_filter` worked
+around this with `T23:59:59`; this iteration is the actual fix.
+
+**Asymmetry note**: `created_from=YYYY-MM-DD` was already correct.
+`'2026-04-20T00:00:00' >= '2026-04-20'` is TRUE (longer string with content
+after the prefix sorts greater). Only `created_to` needed normalisation.
+
+**The fix**: in `coordinator.search_findings_global`, when `created_to`
+matches `_DATE_ONLY_RE` (`^\d{4}-\d{2}-\d{2}$`), extend it to
+`{date}T23:59:59.999999` before passing to the DB layer. Full-timestamp
+inputs pass through verbatim so callers can still do strict sub-day
+filtering. Fix lives at the API-contract boundary in `coordinator.py`,
+not in `db.py` — keeps the DB layer purely mechanical.
+
+**Tests added**:
+- `test_date_range_to_bare_date_inclusive` — `created_to=2026-04-20`
+  must include `date-in2` (Apr 20 at midnight). Demonstrably fails on
+  pre-fix code.
+- `test_date_range_to_full_timestamp_unchanged` — `created_to=2026-04-19T23:59:59`
+  must EXCLUDE Apr 20 findings. Verifies the regex doesn't trigger on
+  full timestamps and strict comparison still works.
+
+**Result**: 30/30 unit tests pass; iter 39's existing `test_date_range_filter`
+(which used the verbose workaround) continues to pass since full-timestamp
+inputs aren't normalised.
+
 ---
 
 ## Candidate stories for future iterations

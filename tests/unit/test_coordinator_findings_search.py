@@ -531,6 +531,55 @@ def test_date_range_filter(date_range_client):
     assert body["total"] == 2
 
 
+def test_date_range_to_bare_date_inclusive(date_range_client):
+    """A bare YYYY-MM-DD created_to value includes findings on that date.
+
+    This guards against the lexicographic-truncation bug: with raw SQL
+    `f.created_at <= '2026-04-20'`, a finding stamped '2026-04-20T00:00:00+00:00'
+    would be excluded because `'...T00:00:00...' > '2026-04-20'` lexicographically.
+    The coordinator normalises bare-date `created_to` to end-of-day so the user's
+    intent ("up to and including April 20") is honoured.
+
+    The frontend's <input type="date"> always produces bare YYYY-MM-DD values, so
+    this is the actual UX path.
+    """
+    resp = date_range_client.get(
+        "/api/findings?created_from=2026-04-15&created_to=2026-04-20"
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    ids = {item["id"] for item in body["items"]}
+    # date-in2 is at exactly 2026-04-20T00:00:00+00:00 — must be included.
+    assert "date-in2" in ids, (
+        f"date-in2 (Apr 20 00:00) missing from results — bare-date created_to "
+        f"normalisation broken. Got: {ids}"
+    )
+    # date-late at 2026-04-25 must still be excluded.
+    assert "date-late" not in ids
+    assert ids == {"date-in1", "date-in2"}
+
+
+def test_date_range_to_full_timestamp_unchanged(date_range_client):
+    """A created_to with explicit time is NOT normalised — strict comparison stands.
+
+    The bare-date normalisation only triggers on YYYY-MM-DD; full timestamps pass
+    through verbatim so callers can still do strict sub-day filtering.
+    """
+    # date-in2 is at 2026-04-20T00:00:00. Asking for created_to before that should exclude it.
+    resp = date_range_client.get(
+        "/api/findings?created_from=2026-04-10&created_to=2026-04-19T23:59:59"
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    ids = {item["id"] for item in body["items"]}
+    # date-early (Apr 10) and date-in1 (Apr 15) included; date-in2 (Apr 20) excluded.
+    assert "date-in2" not in ids, (
+        f"Strict timestamp filter should exclude Apr 20 finding when end is Apr 19 23:59:59; "
+        f"got {ids}"
+    )
+    assert ids == {"date-early", "date-in1"}
+
+
 # ---------------------------------------------------------------------------
 # Combined-filters AND test
 # ---------------------------------------------------------------------------
