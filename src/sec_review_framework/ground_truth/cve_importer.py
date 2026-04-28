@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 from uuid import uuid4
 
 import httpx
@@ -26,7 +27,7 @@ class CVESelectionCriteria(BaseModel):
     languages: list[str] = ["python", "javascript", "go", "java", "ruby"]
     vuln_classes: list[VulnClass] | None = None
     cwe_ids: list[str] | None = None
-    min_severity: Severity = Severity.MEDIUM
+    min_severity: Severity = Severity.LOW
     max_severity: Severity = Severity.CRITICAL
     max_files_changed: int = 5
     max_lines_changed: int = 200
@@ -66,6 +67,25 @@ class CVECandidate(BaseModel):
     score_breakdown: dict[str, float]
     importable: bool
     rejection_reason: str | None = None
+
+
+class DiscoveryIssue(BaseModel):
+    level: Literal["error", "warning", "info"]
+    message: str
+    detail: str | None = None  # e.g. CVE ID, ecosystem name, exception class
+
+
+class DiscoveryStats(BaseModel):
+    scanned: int = 0       # advisories returned by GitHub Advisory DB across all ecosystems
+    resolved: int = 0      # successfully resolved to repo+commit
+    rejected: int = 0      # passed resolution but failed scoring/filters
+    returned: int = 0      # final candidate count
+
+
+class DiscoveryResult(BaseModel):
+    candidates: list[CVECandidate]
+    issues: list[DiscoveryIssue]
+    stats: DiscoveryStats
 
 
 class CVEImportSpec(BaseModel):
@@ -166,7 +186,8 @@ class CVEResolver:
                         repo_url, fix_commit = self._parse_github_commit_url(url)
                         return self._build_resolved(cve_id, nvd, repo_url, fix_commit)
 
-        except Exception:
+        except httpx.HTTPError:
+            # Network/HTTP errors during resolution — caller handles as a warning issue.
             pass
 
         return None
@@ -402,16 +423,18 @@ class CVEDiscovery:
         self,
         criteria: CVESelectionCriteria,
         max_results: int = 50,
-    ) -> list[CVECandidate]:
+    ) -> DiscoveryResult:
         """
         1. Query GitHub Advisory DB with ecosystem + severity filters
         2. For each advisory, resolve to get repo + fix commit
         3. Filter by patch size, repo size, language
         4. Score remaining candidates
-        5. Return top N ranked by score
+        5. Return top N ranked by score, with issues and stats
         """
-        raw_advisories = self._search_advisories(criteria)
+        raw_advisories, issues = self._search_advisories(criteria)
+        stats = DiscoveryStats(scanned=len(raw_advisories))
         candidates: list[CVECandidate] = []
+        no_fix_count = 0
 
         for advisory in raw_advisories:
             cve_id = advisory.get("cve_id")
@@ -419,21 +442,41 @@ class CVEDiscovery:
                 continue
             try:
                 resolved = self.resolver.resolve(cve_id)
-            except Exception:
+            except Exception as exc:
+                issues.append(DiscoveryIssue(
+                    level="warning",
+                    message=f"Failed to resolve {cve_id}",
+                    detail=f"{type(exc).__name__}: {exc}",
+                ))
                 continue
             if not resolved:
+                no_fix_count += 1
                 continue
+            stats.resolved += 1
             candidate = self._evaluate(resolved, criteria)
             if candidate.score > 0:
                 candidates.append(candidate)
+            else:
+                stats.rejected += 1
+
+        if no_fix_count:
+            issues.append(DiscoveryIssue(
+                level="info",
+                message=f"{no_fix_count} advisories had no resolvable GitHub fix commit",
+            ))
 
         candidates.sort(key=lambda c: c.score, reverse=True)
-        return candidates[:max_results]
+        page = candidates[:max_results]
+        stats.returned = len(page)
+        return DiscoveryResult(candidates=page, issues=issues, stats=stats)
 
-    def _search_advisories(self, criteria: CVESelectionCriteria) -> list[dict]:
+    def _search_advisories(
+        self, criteria: CVESelectionCriteria
+    ) -> tuple[list[dict], list[DiscoveryIssue]]:
         """Query GitHub Advisory DB for each language ecosystem."""
         ecosystems = self._languages_to_ecosystems(criteria.languages)
         results: list[dict] = []
+        issues: list[DiscoveryIssue] = []
         for ecosystem in ecosystems:
             try:
                 resp = self.resolver.client.get(
@@ -447,9 +490,19 @@ class CVEDiscovery:
                 )
                 if resp.is_success:
                     results.extend(resp.json())
-            except httpx.HTTPError:
-                continue
-        return results
+                else:
+                    issues.append(DiscoveryIssue(
+                        level="warning",
+                        message=f"Advisory query failed for ecosystem '{ecosystem}'",
+                        detail=f"HTTP {resp.status_code}",
+                    ))
+            except httpx.HTTPError as exc:
+                issues.append(DiscoveryIssue(
+                    level="warning",
+                    message=f"Advisory query failed for ecosystem '{ecosystem}'",
+                    detail=f"{type(exc).__name__}: {exc}",
+                ))
+        return results, issues
 
     def _evaluate(
         self, resolved: ResolvedCVE, criteria: CVESelectionCriteria

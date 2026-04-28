@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import CVEDiscovery from '../../pages/CVEDiscovery'
-import type { CVECandidate } from '../../api/client'
+import type { CVECandidate, DiscoverCVEsResponse } from '../../api/client'
 
 vi.mock('../../api/client', () => ({
   discoverCVEs: vi.fn(),
@@ -48,6 +48,26 @@ function makeCandidate(overrides: Partial<CVECandidate> = {}): CVECandidate {
     lines_changed: 42,
     importable: true,
     description: 'SQL injection vulnerability in login handler',
+    ...overrides,
+  }
+}
+
+function makeDiscoverResponse(
+  candidates: CVECandidate[],
+  overrides: Partial<DiscoverCVEsResponse> = {},
+): DiscoverCVEsResponse {
+  return {
+    candidates,
+    page: 1,
+    page_size: 25,
+    total: candidates.length,
+    stats: {
+      scanned: candidates.length,
+      resolved: candidates.length,
+      rejected: 0,
+      returned: candidates.length,
+    },
+    issues: [],
     ...overrides,
   }
 }
@@ -109,10 +129,12 @@ describe('CVEDiscovery — initial render', () => {
 
 describe('CVEDiscovery — Search tab: data-load success', () => {
   it('shows candidate table after successful search', async () => {
-    mockDiscoverCVEs.mockResolvedValue([
-      makeCandidate({ cve_id: 'CVE-2024-001' }),
-      makeCandidate({ cve_id: 'CVE-2024-002', language: 'java' }),
-    ])
+    mockDiscoverCVEs.mockResolvedValue(
+      makeDiscoverResponse([
+        makeCandidate({ cve_id: 'CVE-2024-001' }),
+        makeCandidate({ cve_id: 'CVE-2024-002', language: 'java' }),
+      ]),
+    )
 
     renderCVEDiscovery()
 
@@ -126,7 +148,7 @@ describe('CVEDiscovery — Search tab: data-load success', () => {
   })
 
   it('passes selected filters to discoverCVEs', async () => {
-    mockDiscoverCVEs.mockResolvedValue([])
+    mockDiscoverCVEs.mockResolvedValue(makeDiscoverResponse([]))
 
     renderCVEDiscovery()
 
@@ -150,7 +172,7 @@ describe('CVEDiscovery — Search tab: data-load success', () => {
 
 describe('CVEDiscovery — Search tab: empty state', () => {
   it('does not show candidate table when search returns empty array', async () => {
-    mockDiscoverCVEs.mockResolvedValue([])
+    mockDiscoverCVEs.mockResolvedValue(makeDiscoverResponse([]))
 
     renderCVEDiscovery()
 
@@ -162,8 +184,8 @@ describe('CVEDiscovery — Search tab: empty state', () => {
     expect(screen.queryByTestId('cve-candidate-table')).not.toBeInTheDocument()
   })
 
-  it('shows empty-state message when search returns no candidates', async () => {
-    mockDiscoverCVEs.mockResolvedValue([])
+  it('shows empty-state message when search returns no candidates and no issues', async () => {
+    mockDiscoverCVEs.mockResolvedValue(makeDiscoverResponse([]))
 
     renderCVEDiscovery()
 
@@ -176,9 +198,27 @@ describe('CVEDiscovery — Search tab: empty state', () => {
   })
 
   it('does not show empty-state on initial render before any search', () => {
-    mockDiscoverCVEs.mockResolvedValue([])
+    mockDiscoverCVEs.mockResolvedValue(makeDiscoverResponse([]))
 
     renderCVEDiscovery()
+
+    expect(screen.queryByText(/No candidates matched/)).not.toBeInTheDocument()
+  })
+
+  it('does not show empty-state when there are issues (issues communicate the reason)', async () => {
+    mockDiscoverCVEs.mockResolvedValue(
+      makeDiscoverResponse([], {
+        issues: [{ level: 'warning', message: 'Advisory query failed for ecosystem pip', detail: 'HTTP 401' }],
+      }),
+    )
+
+    renderCVEDiscovery()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Search CVEs' }))
+
+    await waitFor(() => {
+      expect(mockDiscoverCVEs).toHaveBeenCalled()
+    })
 
     expect(screen.queryByText(/No candidates matched/)).not.toBeInTheDocument()
   })
@@ -198,9 +238,238 @@ describe('CVEDiscovery — Search tab: error state', () => {
   })
 })
 
+describe('CVEDiscovery — Search tab: stats summary', () => {
+  it('shows stats summary when results are returned', async () => {
+    mockDiscoverCVEs.mockResolvedValue(
+      makeDiscoverResponse([makeCandidate()], {
+        stats: { scanned: 100, resolved: 53, rejected: 47, returned: 1 },
+        total: 1,
+      }),
+    )
+
+    renderCVEDiscovery()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Search CVEs' }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('discovery-stats')).toBeInTheDocument()
+    })
+    const stats = screen.getByTestId('discovery-stats')
+    expect(stats.textContent).toMatch(/100/)
+    expect(stats.textContent).toMatch(/53/)
+    expect(stats.textContent).toMatch(/47/)
+  })
+
+  it('does not show stats summary before a search', () => {
+    renderCVEDiscovery()
+    expect(screen.queryByTestId('discovery-stats')).not.toBeInTheDocument()
+  })
+})
+
+describe('CVEDiscovery — Search tab: issues panel', () => {
+  it('renders warning issues with role=alert', async () => {
+    mockDiscoverCVEs.mockResolvedValue(
+      makeDiscoverResponse([], {
+        issues: [
+          { level: 'warning', message: 'Advisory query failed for ecosystem pip', detail: 'HTTP 401' },
+        ],
+      }),
+    )
+
+    renderCVEDiscovery()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Search CVEs' }))
+
+    await waitFor(() => {
+      expect(screen.getByText(/Advisory query failed for ecosystem pip/)).toBeInTheDocument()
+    })
+    // The li element has role=alert; find it by role (multiple may exist from other alerts)
+    const alerts = screen.getAllByRole('alert')
+    expect(alerts.some((el) => el.textContent?.includes('Advisory query failed for ecosystem pip'))).toBe(true)
+  })
+
+  it('renders error issues with role=alert', async () => {
+    mockDiscoverCVEs.mockResolvedValue(
+      makeDiscoverResponse([], {
+        issues: [{ level: 'error', message: 'Auth failed', detail: '401' }],
+      }),
+    )
+
+    renderCVEDiscovery()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Search CVEs' }))
+
+    await waitFor(() => {
+      expect(screen.getByText(/Auth failed/)).toBeInTheDocument()
+    })
+    const alerts = screen.getAllByRole('alert')
+    expect(alerts.some((el) => el.textContent?.includes('Auth failed'))).toBe(true)
+  })
+
+  it('does not render issues panel when issues list is empty', async () => {
+    mockDiscoverCVEs.mockResolvedValue(makeDiscoverResponse([makeCandidate()]))
+
+    renderCVEDiscovery()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Search CVEs' }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('cve-candidate-table')).toBeInTheDocument()
+    })
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+})
+
+describe('CVEDiscovery — Search tab: pagination', () => {
+  it('does not show pagination when total <= pageSize', async () => {
+    mockDiscoverCVEs.mockResolvedValue(
+      makeDiscoverResponse([makeCandidate()], { total: 1, page_size: 25 }),
+    )
+
+    renderCVEDiscovery()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Search CVEs' }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('cve-candidate-table')).toBeInTheDocument()
+    })
+    expect(screen.queryByRole('button', { name: 'Previous page' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Next page' })).not.toBeInTheDocument()
+  })
+
+  it('shows pagination controls when total > pageSize', async () => {
+    mockDiscoverCVEs.mockResolvedValue(
+      makeDiscoverResponse(
+        Array.from({ length: 25 }, (_, i) => makeCandidate({ cve_id: `CVE-2024-${i}` })),
+        { total: 53, page: 1, page_size: 25 },
+      ),
+    )
+
+    renderCVEDiscovery()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Search CVEs' }))
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Previous page' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Next page' })).toBeInTheDocument()
+    })
+  })
+
+  it('Prev button is disabled on page 1', async () => {
+    mockDiscoverCVEs.mockResolvedValue(
+      makeDiscoverResponse(
+        Array.from({ length: 25 }, (_, i) => makeCandidate({ cve_id: `CVE-2024-${i}` })),
+        { total: 53, page: 1, page_size: 25 },
+      ),
+    )
+
+    renderCVEDiscovery()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Search CVEs' }))
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Previous page' })).toBeDisabled()
+    })
+  })
+
+  it('Next button is disabled on last page', async () => {
+    // Navigate to last page (page 3 of 3) by clicking Next twice
+    const page1Data = makeDiscoverResponse(
+      Array.from({ length: 25 }, (_, i) => makeCandidate({ cve_id: `CVE-2024-p1-${i}` })),
+      { total: 53, page: 1, page_size: 25 },
+    )
+    const page2Data = makeDiscoverResponse(
+      Array.from({ length: 25 }, (_, i) => makeCandidate({ cve_id: `CVE-2024-p2-${i}` })),
+      { total: 53, page: 2, page_size: 25 },
+    )
+    const page3Data = makeDiscoverResponse(
+      Array.from({ length: 3 }, (_, i) => makeCandidate({ cve_id: `CVE-2024-p3-${i}` })),
+      { total: 53, page: 3, page_size: 25 },
+    )
+    mockDiscoverCVEs
+      .mockResolvedValueOnce(page1Data)
+      .mockResolvedValueOnce(page2Data)
+      .mockResolvedValueOnce(page3Data)
+
+    renderCVEDiscovery()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Search CVEs' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Next page' })).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next page' }))
+    await waitFor(() => expect(mockDiscoverCVEs).toHaveBeenCalledTimes(2))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next page' }))
+    await waitFor(() => expect(mockDiscoverCVEs).toHaveBeenCalledTimes(3))
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Next page' })).toBeDisabled()
+    })
+  })
+
+  it('clicking Next re-fetches with incremented page number', async () => {
+    const page1 = makeDiscoverResponse(
+      Array.from({ length: 25 }, (_, i) => makeCandidate({ cve_id: `CVE-2024-${i}` })),
+      { total: 53, page: 1, page_size: 25 },
+    )
+    const page2 = makeDiscoverResponse(
+      Array.from({ length: 25 }, (_, i) => makeCandidate({ cve_id: `CVE-2024-p2-${i}` })),
+      { total: 53, page: 2, page_size: 25 },
+    )
+    mockDiscoverCVEs.mockResolvedValueOnce(page1).mockResolvedValueOnce(page2)
+
+    renderCVEDiscovery()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Search CVEs' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Next page' })).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next page' }))
+
+    await waitFor(() => expect(mockDiscoverCVEs).toHaveBeenCalledTimes(2))
+    expect(mockDiscoverCVEs).toHaveBeenLastCalledWith(
+      expect.objectContaining({ page: 2 }),
+    )
+  })
+
+  it('clicking Prev re-fetches with decremented page number', async () => {
+    const page2 = makeDiscoverResponse(
+      Array.from({ length: 25 }, (_, i) => makeCandidate({ cve_id: `CVE-2024-${i}` })),
+      { total: 53, page: 2, page_size: 25 },
+    )
+    const page1 = makeDiscoverResponse(
+      Array.from({ length: 25 }, (_, i) => makeCandidate({ cve_id: `CVE-2024-p1-${i}` })),
+      { total: 53, page: 1, page_size: 25 },
+    )
+    // First search → page 2, then Next → page 3 (not used), first Next → page 2
+    // More straightforward: start on page 2 by going next once, then click prev
+    const page1Initial = makeDiscoverResponse(
+      Array.from({ length: 25 }, (_, i) => makeCandidate({ cve_id: `CVE-2024-init-${i}` })),
+      { total: 53, page: 1, page_size: 25 },
+    )
+    mockDiscoverCVEs
+      .mockResolvedValueOnce(page1Initial)
+      .mockResolvedValueOnce(page2)
+      .mockResolvedValueOnce(page1)
+
+    renderCVEDiscovery()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Search CVEs' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Next page' })).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next page' }))
+    await waitFor(() => expect(mockDiscoverCVEs).toHaveBeenCalledTimes(2))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Previous page' }))
+    await waitFor(() => expect(mockDiscoverCVEs).toHaveBeenCalledTimes(3))
+    expect(mockDiscoverCVEs).toHaveBeenLastCalledWith(
+      expect.objectContaining({ page: 1 }),
+    )
+  })
+})
+
 describe('CVEDiscovery — Search tab: import interaction', () => {
   it('calls importCVE when import is triggered from the table', async () => {
-    mockDiscoverCVEs.mockResolvedValue([makeCandidate({ cve_id: 'CVE-2024-999' })])
+    mockDiscoverCVEs.mockResolvedValue(makeDiscoverResponse([makeCandidate({ cve_id: 'CVE-2024-999' })]))
     mockImportCVE.mockResolvedValue({
       name: 'cve-2024-999',
       source: 'cve',

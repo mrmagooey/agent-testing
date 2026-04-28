@@ -47,6 +47,7 @@ from sec_review_framework.ground_truth.cve_importer import (
     CVEImportSpec,
     CVEResolver,
     CVESelectionCriteria,
+    DiscoveryResult as _DiscoveryResult,
 )
 from sec_review_framework.ground_truth.vuln_injector import VulnInjector
 from sec_review_framework.llm_providers import router as llm_providers_router
@@ -2096,7 +2097,7 @@ class ExperimentCoordinator:
             )
         return self._cve_importer
 
-    def discover_cves(self, req: DiscoverCVEsRequest) -> list[CVECandidateResponse]:
+    def discover_cves(self, req: DiscoverCVEsRequest) -> DiscoverCVEsResponse:
         """Discover CVE candidates matching the provided criteria."""
         from sec_review_framework.data.findings import Severity, VulnClass
 
@@ -2128,6 +2129,16 @@ class ExperimentCoordinator:
             raise HTTPException(
                 status_code=400,
                 detail="max_results must be ≤ 500",
+            )
+        if req.page < 1:
+            raise HTTPException(
+                status_code=400,
+                detail="page must be ≥ 1",
+            )
+        if not (1 <= req.page_size <= 100):
+            raise HTTPException(
+                status_code=400,
+                detail="page_size must be between 1 and 100",
             )
 
         criteria_kwargs: dict = {}
@@ -2166,10 +2177,36 @@ class ExperimentCoordinator:
         resolver = self._build_cve_resolver()
         discovery = CVEDiscovery(resolver=resolver)
         try:
-            candidates = discovery.discover(criteria, max_results=req.max_results)
+            result = discovery.discover(criteria, max_results=req.max_results)
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"CVE discovery failed: {exc}")
-        return [CVECandidateResponse.from_candidate(c) for c in candidates]
+
+        total = len(result.candidates)
+        start = (req.page - 1) * req.page_size
+        page_candidates = result.candidates[start : start + req.page_size]
+
+        return DiscoverCVEsResponse(
+            candidates=[CVECandidateResponse.from_candidate(c) for c in page_candidates],
+            page=req.page,
+            page_size=req.page_size,
+            total=total,
+            stats=DiscoveryStatsResponse(
+                scanned=result.stats.scanned,
+                resolved=result.stats.resolved,
+                rejected=result.stats.rejected,
+                # Reflect the page actually being returned, not the pre-pagination
+                # cap — otherwise the UI's "showing N" line is wrong on page 2+.
+                returned=len(page_candidates),
+            ),
+            issues=[
+                DiscoveryIssueResponse(
+                    level=issue.level,
+                    message=issue.message,
+                    detail=issue.detail,
+                )
+                for issue in result.issues
+            ],
+        )
 
     def resolve_cve(self, cve_id: str) -> CVECandidateResponse:
         """Resolve a single CVE by ID and return a scored candidate shape."""
@@ -3037,6 +3074,8 @@ class DiscoverCVEsRequest(BaseModel):
     date_from: str | None = None
     date_to: str | None = None
     max_results: int = 50
+    page: int = 1
+    page_size: int = 25
 
 
 class CVECandidateResponse(BaseModel):
@@ -3075,6 +3114,28 @@ class CVECandidateResponse(BaseModel):
             advisory_url=advisory_url,
             fix_commit=r.fix_commit_sha or None,
         )
+
+
+class DiscoveryIssueResponse(BaseModel):
+    level: str
+    message: str
+    detail: str | None = None
+
+
+class DiscoveryStatsResponse(BaseModel):
+    scanned: int
+    resolved: int
+    rejected: int
+    returned: int
+
+
+class DiscoverCVEsResponse(BaseModel):
+    candidates: list[CVECandidateResponse]
+    page: int
+    page_size: int
+    total: int       # total candidates before pagination slice
+    stats: DiscoveryStatsResponse
+    issues: list[DiscoveryIssueResponse]
 
 
 AVG_TOKENS_PER_KLOC = 1400  # prompt + completion, calibrated empirically
@@ -3755,11 +3816,11 @@ async def list_datasets() -> list[dict]:
 
 
 @app.post("/datasets/discover-cves")
-def discover_cves(req: DiscoverCVEsRequest) -> list[CVECandidateResponse]:
+def discover_cves(req: DiscoverCVEsRequest) -> DiscoverCVEsResponse:
     """Search for CVE candidates matching the given criteria.
 
     Makes external calls to GitHub Advisory DB, OSV.dev, and/or NVD.
-    Returns an empty list when no candidates match (never 404).
+    Returns an empty candidates list when no candidates match (never 404).
     """
     return coordinator.discover_cves(req)
 

@@ -15,6 +15,8 @@ from sec_review_framework.ground_truth.cve_importer import (
     CVEImportSpec,
     CVEResolver,
     CVESelectionCriteria,
+    DiscoveryIssue,
+    DiscoveryResult,
     ResolvedCVE,
 )
 
@@ -526,3 +528,124 @@ class TestLanguagesToEcosystems:
     def test_mixed_known_unknown(self):
         ecosystems = CVEDiscovery._languages_to_ecosystems(["python", "cobol"])
         assert ecosystems == ["pip"]
+
+
+# ---------------------------------------------------------------------------
+# CVESelectionCriteria — default min_severity
+# ---------------------------------------------------------------------------
+
+
+class TestCVESelectionCriteriaDefaults:
+    def test_min_severity_default_is_low(self):
+        criteria = CVESelectionCriteria()
+        assert criteria.min_severity == Severity.LOW
+
+
+# ---------------------------------------------------------------------------
+# CVEDiscovery.discover() — DiscoveryResult shape and issues
+# ---------------------------------------------------------------------------
+
+
+class TestCVEDiscoveryDiscover:
+    def _make_discovery(self) -> CVEDiscovery:
+        resolver = _make_resolver()
+        return CVEDiscovery(resolver=resolver)
+
+    def test_discover_returns_discovery_result(self):
+        """discover() now returns DiscoveryResult, not a bare list."""
+        discovery = self._make_discovery()
+        # Mock _search_advisories to return empty (no ecosystem calls)
+        discovery._search_advisories = MagicMock(return_value=([], []))
+        result = discovery.discover(CVESelectionCriteria())
+        assert isinstance(result, DiscoveryResult)
+        assert isinstance(result.candidates, list)
+        assert isinstance(result.issues, list)
+        assert result.stats.scanned == 0
+
+    def test_discover_ecosystem_http_error_produces_warning_issue(self):
+        """An HTTPError on one ecosystem produces a warning issue."""
+        resolver = _make_resolver()
+        resolver.client.get = MagicMock(side_effect=httpx.HTTPError("connection refused"))
+        discovery = CVEDiscovery(resolver=resolver)
+        result = discovery.discover(CVESelectionCriteria(languages=["python"]))
+        warning_issues = [i for i in result.issues if i.level == "warning"]
+        assert len(warning_issues) >= 1
+        assert "pip" in warning_issues[0].message
+
+    def test_discover_non_2xx_response_produces_warning_issue(self):
+        """A non-2xx HTTP response for an ecosystem produces a warning issue."""
+        resolver = _make_resolver()
+        mock_resp = MagicMock()
+        mock_resp.is_success = False
+        mock_resp.status_code = 401
+        resolver.client.get = MagicMock(return_value=mock_resp)
+        discovery = CVEDiscovery(resolver=resolver)
+        result = discovery.discover(CVESelectionCriteria(languages=["python"]))
+        warning_issues = [i for i in result.issues if i.level == "warning"]
+        assert len(warning_issues) >= 1
+        assert "pip" in warning_issues[0].message
+        assert "401" in (warning_issues[0].detail or "")
+
+    def test_discover_resolve_exception_produces_warning_issue(self):
+        """An unexpected exception during resolve() becomes a per-CVE warning issue."""
+        resolver = _make_resolver()
+        # Make _search_advisories return a valid advisory with a CVE ID
+        advisory = {"cve_id": "CVE-2024-99999", "severity": "high"}
+        # Make resolver.resolve() raise an unexpected error (not HTTPError)
+        resolver.resolve = MagicMock(side_effect=ValueError("unexpected parse error"))
+        discovery = CVEDiscovery(resolver=resolver)
+        discovery._search_advisories = MagicMock(return_value=([advisory], []))
+        result = discovery.discover(CVESelectionCriteria())
+        warning_issues = [i for i in result.issues if i.level == "warning"]
+        assert len(warning_issues) == 1
+        assert "CVE-2024-99999" in warning_issues[0].message
+        assert "ValueError" in (warning_issues[0].detail or "")
+
+    def test_discover_no_fix_commit_emits_aggregated_info_issue(self):
+        """Advisories that resolve to None (no fix commit) produce an info-level issue."""
+        resolver = _make_resolver()
+        advisory = {"cve_id": "CVE-2024-11111", "severity": "high"}
+        resolver.resolve = MagicMock(return_value=None)
+        discovery = CVEDiscovery(resolver=resolver)
+        discovery._search_advisories = MagicMock(return_value=([advisory], []))
+        result = discovery.discover(CVESelectionCriteria())
+        info_issues = [i for i in result.issues if i.level == "info"]
+        assert len(info_issues) == 1
+        assert "1" in info_issues[0].message
+
+    def test_discover_stats_populated_correctly(self):
+        """stats.scanned, resolved, rejected, returned are all set."""
+        resolver = _make_resolver()
+        resolved_cve = _make_resolved_cve()
+        # One advisory that resolves successfully and passes scoring
+        advisory = {"cve_id": "CVE-2023-00001"}
+        resolver.resolve = MagicMock(return_value=resolved_cve)
+        discovery = CVEDiscovery(resolver=resolver)
+        discovery._search_advisories = MagicMock(return_value=([advisory], []))
+        result = discovery.discover(CVESelectionCriteria())
+        assert result.stats.scanned == 1
+        assert result.stats.resolved == 1
+        assert result.stats.returned == len(result.candidates)
+
+    def test_discover_resolver_http_error_is_caught_by_loop(self):
+        """httpx.HTTPError from resolver.resolve() is re-raised (no longer swallowed) and
+        caught by the per-CVE handler in discover()."""
+        resolver = _make_resolver()
+        advisory = {"cve_id": "CVE-2024-77777"}
+        # The tightened resolve() no longer catches non-httpx exceptions, but
+        # httpx.HTTPError is still caught inside resolve() and returns None.
+        # We test here that if something propagates out, the discover loop handles it.
+        resolver.resolve = MagicMock(side_effect=RuntimeError("bug in resolver"))
+        discovery = CVEDiscovery(resolver=resolver)
+        discovery._search_advisories = MagicMock(return_value=([advisory], []))
+        result = discovery.discover(CVESelectionCriteria())
+        # Should not crash; the RuntimeError becomes a warning issue
+        assert any(i.level == "warning" for i in result.issues)
+
+    def test_resolve_propagates_non_http_errors(self):
+        """CVEResolver.resolve() no longer swallows non-httpx exceptions like ValueError."""
+        resolver = _make_resolver()
+        # Patch _query_ghsa to raise a non-httpx exception (simulates a bug)
+        resolver._query_ghsa = MagicMock(side_effect=ValueError("unexpected data shape"))
+        with pytest.raises(ValueError, match="unexpected data shape"):
+            resolver.resolve("CVE-2024-12345")

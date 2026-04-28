@@ -103,6 +103,28 @@ export interface CVECandidate {
   fix_commit?: string
 }
 
+export interface DiscoveryIssue {
+  level: 'error' | 'warning' | 'info'
+  message: string
+  detail?: string | null
+}
+
+export interface DiscoveryStats {
+  scanned: number
+  resolved: number
+  rejected: number
+  returned: number
+}
+
+export interface DiscoverCVEsResponse {
+  candidates: CVECandidate[]
+  page: number
+  page_size: number
+  total: number
+  stats: DiscoveryStats
+  issues: DiscoveryIssue[]
+}
+
 export interface ExperimentConfig {
   dataset: string
   models: string[]
@@ -440,8 +462,8 @@ export async function listDatasets(): Promise<Dataset[]> {
   }))
 }
 
-export function discoverCVEs(criteria: Record<string, unknown>): Promise<CVECandidate[]> {
-  return apiFetch<CVECandidate[]>('/datasets/discover-cves', {
+export function discoverCVEs(criteria: Record<string, unknown>): Promise<DiscoverCVEsResponse> {
+  return apiFetch<DiscoverCVEsResponse>('/datasets/discover-cves', {
     method: 'POST',
     body: JSON.stringify(criteria),
   })

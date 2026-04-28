@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { discoverCVEs, resolveCVE, importCVE, type CVECandidate } from '../api/client'
+import { discoverCVEs, resolveCVE, importCVE, type CVECandidate, type DiscoverCVEsResponse } from '../api/client'
 import CVECandidateTable from '../components/CVECandidateTable'
 import PageDescription from '../components/PageDescription'
 import { chipClasses } from '../components/ToggleChip'
@@ -21,9 +21,11 @@ export default function CVEDiscovery() {
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [searching, setSearching] = useState(false)
-  const [candidates, setCandidates] = useState<CVECandidate[]>([])
+  const [result, setResult] = useState<DiscoverCVEsResponse | null>(null)
   const [searchError, setSearchError] = useState<string | null>(null)
   const [hasSearched, setHasSearched] = useState(false)
+  const [page, setPage] = useState(1)
+  const [pageSize] = useState(25)
 
   // Resolve tab state
   const [cveId, setCveId] = useState('')
@@ -38,8 +40,7 @@ export default function CVEDiscovery() {
     setter(list.includes(item) ? list.filter((i) => i !== item) : [...list, item])
   }
 
-  const handleSearch = async (e: React.FormEvent) => {
-    e.preventDefault()
+  const doSearch = async (targetPage: number) => {
     setSearching(true)
     setSearchError(null)
     setImportError(null)
@@ -53,13 +54,26 @@ export default function CVEDiscovery() {
       if (patchSizeMax) criteria.patch_size_max = parseInt(patchSizeMax, 10)
       if (dateFrom) criteria.date_from = dateFrom
       if (dateTo) criteria.date_to = dateTo
-      const result = await discoverCVEs(criteria)
-      setCandidates(result)
+      criteria.page = targetPage
+      criteria.page_size = pageSize
+      const r = await discoverCVEs(criteria)
+      setResult(r)
+      setPage(targetPage)
     } catch (err) {
       setSearchError(err instanceof Error ? err.message : 'Search failed')
     } finally {
       setSearching(false)
     }
+  }
+
+  const handleSearch = async (e: React.FormEvent) => {
+    e.preventDefault()
+    await doSearch(1)
+  }
+
+  const handleFilterChange = () => {
+    // Reset page whenever filters change (before new search)
+    setPage(1)
   }
 
   const handleResolve = async () => {
@@ -70,8 +84,8 @@ export default function CVEDiscovery() {
     setImportSuccess(false)
     setImportError(null)
     try {
-      const result = await resolveCVE(cveId.trim())
-      setResolved(result)
+      const r = await resolveCVE(cveId.trim())
+      setResolved(r)
     } catch (err) {
       setResolveError(err instanceof Error ? err.message : 'Resolution failed')
     } finally {
@@ -104,6 +118,8 @@ export default function CVEDiscovery() {
       setImporting(false)
     }
   }
+
+  const totalPages = result ? Math.max(1, Math.ceil(result.total / pageSize)) : 1
 
   const tabs = [
     { key: 'search' as const, label: 'Search' },
@@ -142,14 +158,14 @@ export default function CVEDiscovery() {
             <div>
               <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Languages</p>
               <div className="flex flex-wrap items-center gap-2">
-                <AnyButton active={languages.length === 0} onClick={() => setLanguages([])} />
+                <AnyButton active={languages.length === 0} onClick={() => { setLanguages([]); handleFilterChange() }} />
                 {LANGUAGES.map((l) => (
                   <ToggleChip
                     key={l}
                     label={l}
                     value={l}
                     checked={languages.includes(l)}
-                    onChange={() => toggleItem(languages, setLanguages, l)}
+                    onChange={() => { toggleItem(languages, setLanguages, l); handleFilterChange() }}
                   />
                 ))}
               </div>
@@ -158,14 +174,14 @@ export default function CVEDiscovery() {
             <div>
               <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Vuln Classes</p>
               <div className="flex flex-wrap items-center gap-2">
-                <AnyButton active={vulnClasses.length === 0} onClick={() => setVulnClasses([])} />
+                <AnyButton active={vulnClasses.length === 0} onClick={() => { setVulnClasses([]); handleFilterChange() }} />
                 {VULN_CLASSES.map((v) => (
                   <ToggleChip
                     key={v}
                     label={v}
                     value={v}
                     checked={vulnClasses.includes(v)}
-                    onChange={() => toggleItem(vulnClasses, setVulnClasses, v)}
+                    onChange={() => { toggleItem(vulnClasses, setVulnClasses, v); handleFilterChange() }}
                   />
                 ))}
               </div>
@@ -174,14 +190,14 @@ export default function CVEDiscovery() {
             <div>
               <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Severity</p>
               <div className="flex flex-wrap items-center gap-2">
-                <AnyButton active={severities.length === 0} onClick={() => setSeverities([])} />
+                <AnyButton active={severities.length === 0} onClick={() => { setSeverities([]); handleFilterChange() }} />
                 {SEVERITIES.map((s) => (
                   <ToggleChip
                     key={s}
                     label={s}
                     value={s}
                     checked={severities.includes(s)}
-                    onChange={() => toggleItem(severities, setSeverities, s)}
+                    onChange={() => { toggleItem(severities, setSeverities, s); handleFilterChange() }}
                   />
                 ))}
               </div>
@@ -194,7 +210,7 @@ export default function CVEDiscovery() {
                   type="number"
                   min={0}
                   value={patchSizeMin}
-                  onChange={(e) => setPatchSizeMin(e.target.value)}
+                  onChange={(e) => { setPatchSizeMin(e.target.value); handleFilterChange() }}
                   className="w-full text-sm rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-2 py-1"
                 />
               </div>
@@ -204,7 +220,7 @@ export default function CVEDiscovery() {
                   type="number"
                   min={1}
                   value={patchSizeMax}
-                  onChange={(e) => setPatchSizeMax(e.target.value)}
+                  onChange={(e) => { setPatchSizeMax(e.target.value); handleFilterChange() }}
                   className="w-full text-sm rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-2 py-1"
                 />
               </div>
@@ -213,7 +229,7 @@ export default function CVEDiscovery() {
                 <input
                   type="date"
                   value={dateFrom}
-                  onChange={(e) => setDateFrom(e.target.value)}
+                  onChange={(e) => { setDateFrom(e.target.value); handleFilterChange() }}
                   className="w-full text-sm rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-2 py-1"
                 />
               </div>
@@ -222,7 +238,7 @@ export default function CVEDiscovery() {
                 <input
                   type="date"
                   value={dateTo}
-                  onChange={(e) => setDateTo(e.target.value)}
+                  onChange={(e) => { setDateTo(e.target.value); handleFilterChange() }}
                   className="w-full text-sm rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-2 py-1"
                 />
               </div>
@@ -249,9 +265,65 @@ export default function CVEDiscovery() {
             </div>
           )}
 
-          {candidates.length > 0 ? (
-            <CVECandidateTable candidates={candidates} onImport={handleImport} />
-          ) : hasSearched && !searching && !searchError ? (
+          {/* Issues panel */}
+          {result && result.issues.length > 0 && (
+            <ul className="space-y-1" aria-label="Discovery issues">
+              {result.issues.map((issue, i) => (
+                <li
+                  key={i}
+                  role={issue.level === 'info' ? undefined : 'alert'}
+                  className={`p-2 rounded text-sm ${
+                    issue.level === 'error'
+                      ? 'bg-red-50 dark:bg-red-950 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800'
+                      : issue.level === 'warning'
+                      ? 'bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800'
+                      : 'bg-gray-50 dark:bg-gray-900 text-gray-600 dark:text-gray-400 border border-gray-200 dark:border-gray-700'
+                  }`}
+                >
+                  <span className="font-medium capitalize">{issue.level}:</span> {issue.message}
+                  {issue.detail && (
+                    <span className="ml-1 opacity-70 font-mono text-xs">({issue.detail})</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {result && result.candidates.length > 0 ? (
+            <>
+              {/* Stats summary */}
+              <p className="text-sm text-gray-500 dark:text-gray-400" data-testid="discovery-stats">
+                Scanned {result.stats.scanned} advisories — resolved {result.stats.resolved}, rejected {result.stats.rejected}, showing {result.candidates.length} of {result.total}
+              </p>
+
+              <CVECandidateTable candidates={result.candidates} onImport={handleImport} />
+
+              {/* Pagination */}
+              {result.total > pageSize && (
+                <div className="flex items-center gap-3 justify-end text-sm">
+                  <button
+                    onClick={() => doSearch(page - 1)}
+                    disabled={page <= 1 || searching}
+                    className="px-3 py-1 rounded border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 disabled:opacity-40 hover:bg-gray-50 dark:hover:bg-gray-800"
+                    aria-label="Previous page"
+                  >
+                    Prev
+                  </button>
+                  <span className="text-gray-600 dark:text-gray-400">
+                    Page {page} of {totalPages}
+                  </span>
+                  <button
+                    onClick={() => doSearch(page + 1)}
+                    disabled={page >= totalPages || searching}
+                    className="px-3 py-1 rounded border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 disabled:opacity-40 hover:bg-gray-50 dark:hover:bg-gray-800"
+                    aria-label="Next page"
+                  >
+                    Next
+                  </button>
+                </div>
+              )}
+            </>
+          ) : result && result.candidates.length === 0 && result.issues.length === 0 && hasSearched && !searching && !searchError ? (
             <div className="p-3 rounded-lg bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 text-sm text-gray-600 dark:text-gray-400">
               No candidates matched. Most public advisories are rejected because they lack a resolvable GitHub fix commit. Try a specific CVE on the Resolve tab.
             </div>

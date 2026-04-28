@@ -14,6 +14,9 @@ from sec_review_framework.data.findings import Severity, VulnClass
 from sec_review_framework.db import Database
 from sec_review_framework.ground_truth.cve_importer import (
     CVECandidate as _CVECandidate,
+    DiscoveryIssue,
+    DiscoveryResult,
+    DiscoveryStats,
 )
 from sec_review_framework.ground_truth.cve_importer import (
     ResolvedCVE,
@@ -67,24 +70,61 @@ def _make_candidate(resolved: ResolvedCVE | None = None) -> _CVECandidate:
     )
 
 
+def _empty_discovery_result() -> DiscoveryResult:
+    return DiscoveryResult(
+        candidates=[],
+        issues=[],
+        stats=DiscoveryStats(scanned=0, resolved=0, rejected=0, returned=0),
+    )
+
+
+def _discovery_result_from_candidates(
+    candidates: list[_CVECandidate],
+) -> DiscoveryResult:
+    return DiscoveryResult(
+        candidates=candidates,
+        issues=[],
+        stats=DiscoveryStats(
+            scanned=len(candidates),
+            resolved=len(candidates),
+            rejected=0,
+            returned=len(candidates),
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # POST /datasets/discover-cves — happy path
 # ---------------------------------------------------------------------------
 
 
 def test_discover_cves_returns_200_with_candidate_list(coordinator_client):
-    """Happy path: mocked discovery returns candidates in the flat frontend shape."""
+    """Happy path: mocked discovery returns candidates in the new envelope shape."""
     client, c = coordinator_client
     candidate = _make_candidate()
-    with patch.object(c, "discover_cves", return_value=[
-        coord_module.CVECandidateResponse.from_candidate(candidate)
-    ]):
+    with patch.object(c, "discover_cves", return_value=coord_module.DiscoverCVEsResponse(
+        candidates=[coord_module.CVECandidateResponse.from_candidate(candidate)],
+        page=1,
+        page_size=25,
+        total=1,
+        stats=coord_module.DiscoveryStatsResponse(scanned=1, resolved=1, rejected=0, returned=1),
+        issues=[],
+    )):
         resp = client.post("/datasets/discover-cves", json={"languages": ["python"]})
     assert resp.status_code == 200
     data = resp.json()
-    assert isinstance(data, list)
-    assert len(data) == 1
-    item = data[0]
+    # Check envelope shape
+    assert "candidates" in data
+    assert "page" in data
+    assert "page_size" in data
+    assert "total" in data
+    assert "stats" in data
+    assert "issues" in data
+    assert data["page"] == 1
+    assert data["total"] == 1
+    assert isinstance(data["candidates"], list)
+    assert len(data["candidates"]) == 1
+    item = data["candidates"][0]
     # Check all required frontend fields are present
     assert item["cve_id"] == "CVE-2024-11111"
     assert item["score"] == pytest.approx(0.82)
@@ -99,18 +139,35 @@ def test_discover_cves_returns_200_with_candidate_list(coordinator_client):
 
 
 def test_discover_cves_empty_body_returns_200(coordinator_client):
-    """Empty body (all criteria optional) is valid and returns list."""
+    """Empty body (all criteria optional) is valid and returns envelope with empty list."""
     client, c = coordinator_client
-    with patch.object(c, "discover_cves", return_value=[]):
+    with patch.object(c, "discover_cves", return_value=coord_module.DiscoverCVEsResponse(
+        candidates=[],
+        page=1,
+        page_size=25,
+        total=0,
+        stats=coord_module.DiscoveryStatsResponse(scanned=0, resolved=0, rejected=0, returned=0),
+        issues=[],
+    )):
         resp = client.post("/datasets/discover-cves", json={})
     assert resp.status_code == 200
-    assert resp.json() == []
+    data = resp.json()
+    assert data["candidates"] == []
+    assert data["total"] == 0
+    assert data["page"] == 1
 
 
 def test_discover_cves_with_all_criteria_fields(coordinator_client):
     """All optional criteria fields are accepted without error."""
     client, c = coordinator_client
-    with patch.object(c, "discover_cves", return_value=[]):
+    with patch.object(c, "discover_cves", return_value=coord_module.DiscoverCVEsResponse(
+        candidates=[],
+        page=1,
+        page_size=20,
+        total=0,
+        stats=coord_module.DiscoveryStatsResponse(scanned=0, resolved=0, rejected=0, returned=0),
+        issues=[],
+    )):
         resp = client.post("/datasets/discover-cves", json={
             "languages": ["python", "go"],
             "vuln_classes": ["sqli", "xss"],
@@ -129,14 +186,128 @@ def test_discover_cves_fix_commit_url_in_advisory_url(coordinator_client):
     client, c = coordinator_client
     resolved = _make_resolved_cve()
     candidate = _make_candidate(resolved)
-    with patch.object(c, "discover_cves", return_value=[
-        coord_module.CVECandidateResponse.from_candidate(candidate)
-    ]):
+    with patch.object(c, "discover_cves", return_value=coord_module.DiscoverCVEsResponse(
+        candidates=[coord_module.CVECandidateResponse.from_candidate(candidate)],
+        page=1,
+        page_size=25,
+        total=1,
+        stats=coord_module.DiscoveryStatsResponse(scanned=1, resolved=1, rejected=0, returned=1),
+        issues=[],
+    )):
         resp = client.post("/datasets/discover-cves", json={})
     assert resp.status_code == 200
-    item = resp.json()[0]
+    item = resp.json()["candidates"][0]
     assert item["advisory_url"] == "https://github.com/example/repo/commit/abc123def456"
     assert item["fix_commit"] == "abc123def456"
+
+
+# ---------------------------------------------------------------------------
+# POST /datasets/discover-cves — pagination
+# ---------------------------------------------------------------------------
+
+
+def test_discover_cves_pagination_slice(coordinator_client):
+    """page=2, page_size=2 against 5 candidates returns the correct slice."""
+    client, c = coordinator_client
+
+    # 5 candidates with distinct CVE IDs
+    candidates = [
+        _make_candidate(_make_resolved_cve(f"CVE-2024-{i:05d}"))
+        for i in range(1, 6)
+    ]
+
+    def fake_discover_cves(req: coord_module.DiscoverCVEsRequest):
+        # Simulate what the real method does: discover returns all, then paginate
+        total = len(candidates)
+        start = (req.page - 1) * req.page_size
+        page_slice = candidates[start : start + req.page_size]
+        return coord_module.DiscoverCVEsResponse(
+            candidates=[coord_module.CVECandidateResponse.from_candidate(c) for c in page_slice],
+            page=req.page,
+            page_size=req.page_size,
+            total=total,
+            stats=coord_module.DiscoveryStatsResponse(scanned=5, resolved=5, rejected=0, returned=len(page_slice)),
+            issues=[],
+        )
+
+    with patch.object(c, "discover_cves", side_effect=fake_discover_cves):
+        resp = client.post("/datasets/discover-cves", json={"page": 2, "page_size": 2})
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] == 5
+    assert data["page"] == 2
+    assert data["page_size"] == 2
+    assert len(data["candidates"]) == 2
+    # Page 2 is candidates[2] and candidates[3]
+    assert data["candidates"][0]["cve_id"] == "CVE-2024-00003"
+    assert data["candidates"][1]["cve_id"] == "CVE-2024-00004"
+
+
+def test_discover_cves_stats_returned_reflects_page_not_total(coordinator_client):
+    """stats.returned mirrors the slice actually sent back, not the pre-pagination cap.
+
+    Patches CVEDiscovery.discover() (not the coordinator method) so the real
+    discover_cves() path runs and the page slicing is exercised end-to-end.
+    """
+    from sec_review_framework.ground_truth import cve_importer as ci
+
+    client, _ = coordinator_client
+    candidates = [
+        _make_candidate(_make_resolved_cve(f"CVE-2024-{i:05d}"))
+        for i in range(1, 6)
+    ]
+    full_result = DiscoveryResult(
+        candidates=candidates,
+        issues=[],
+        stats=DiscoveryStats(scanned=10, resolved=5, rejected=5, returned=5),
+    )
+    with patch.object(ci.CVEDiscovery, "discover", return_value=full_result):
+        resp = client.post(
+            "/datasets/discover-cves", json={"page": 2, "page_size": 2}
+        )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] == 5
+    assert len(data["candidates"]) == 2
+    # The fix: stats.returned reflects the page slice (2), not the importer's 5.
+    assert data["stats"]["returned"] == 2
+    # And the other stats fields pass through unchanged.
+    assert data["stats"]["scanned"] == 10
+    assert data["stats"]["resolved"] == 5
+    assert data["stats"]["rejected"] == 5
+
+
+# ---------------------------------------------------------------------------
+# POST /datasets/discover-cves — issues propagation
+# ---------------------------------------------------------------------------
+
+
+def test_discover_cves_propagates_issues(coordinator_client):
+    """Route propagates non-empty issues list from discovery."""
+    client, c = coordinator_client
+    with patch.object(c, "discover_cves", return_value=coord_module.DiscoverCVEsResponse(
+        candidates=[],
+        page=1,
+        page_size=25,
+        total=0,
+        stats=coord_module.DiscoveryStatsResponse(scanned=3, resolved=0, rejected=0, returned=0),
+        issues=[
+            coord_module.DiscoveryIssueResponse(
+                level="warning",
+                message="Advisory query failed for ecosystem 'pip'",
+                detail="HTTPStatusError: 401 Unauthorized",
+            ),
+        ],
+    )):
+        resp = client.post("/datasets/discover-cves", json={})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["issues"]) == 1
+    issue = data["issues"][0]
+    assert issue["level"] == "warning"
+    assert "pip" in issue["message"]
+    assert issue["detail"] == "HTTPStatusError: 401 Unauthorized"
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +341,27 @@ def test_discover_cves_no_body_returns_422(coordinator_client):
     client, _ = coordinator_client
     resp = client.post("/datasets/discover-cves")
     assert resp.status_code == 422
+
+
+def test_discover_cves_invalid_page_returns_400(coordinator_client):
+    """page < 1 returns 400."""
+    client, _ = coordinator_client
+    resp = client.post("/datasets/discover-cves", json={"page": 0})
+    assert resp.status_code == 400
+
+
+def test_discover_cves_invalid_page_size_returns_400(coordinator_client):
+    """page_size > 100 returns 400."""
+    client, _ = coordinator_client
+    resp = client.post("/datasets/discover-cves", json={"page_size": 101})
+    assert resp.status_code == 400
+
+
+def test_discover_cves_page_size_zero_returns_400(coordinator_client):
+    """page_size = 0 returns 400."""
+    client, _ = coordinator_client
+    resp = client.post("/datasets/discover-cves", json={"page_size": 0})
+    assert resp.status_code == 400
 
 
 # ---------------------------------------------------------------------------
