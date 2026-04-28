@@ -7,6 +7,7 @@ temp SQLite DB and temp storage root.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -236,6 +237,34 @@ def test_estimate_experiment_larger_matrix(coordinator_client):
     data = client.post("/experiments/estimate", json=payload).json()
     # 2 strategies = 2 runs
     assert data["total_runs"] == 2
+
+
+def test_estimate_experiment_zero_target_kloc_returns_422(coordinator_client):
+    """target_kloc=0 is rejected — would produce a misleading $0.00 estimate."""
+    client, *_ = coordinator_client
+    payload = {
+        "matrix": _minimal_matrix(),
+        "target_kloc": 0,
+    }
+    resp = client.post("/experiments/estimate", json=payload)
+    assert resp.status_code == 422
+    detail = resp.json().get("detail", "")
+    detail_blob = json.dumps(detail) if not isinstance(detail, str) else detail
+    assert "target_kloc" in detail_blob
+
+
+def test_estimate_experiment_negative_target_kloc_returns_422(coordinator_client):
+    """Negative target_kloc is rejected — would produce a negative cost estimate."""
+    client, *_ = coordinator_client
+    payload = {
+        "matrix": _minimal_matrix(),
+        "target_kloc": -100,
+    }
+    resp = client.post("/experiments/estimate", json=payload)
+    assert resp.status_code == 422
+    detail = resp.json().get("detail", "")
+    detail_blob = json.dumps(detail) if not isinstance(detail, str) else detail
+    assert "target_kloc" in detail_blob
 
 
 # ---------------------------------------------------------------------------

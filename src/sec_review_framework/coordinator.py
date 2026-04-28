@@ -17,7 +17,7 @@ from typing import Literal
 from fastapi import FastAPI, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from sec_review_framework.config import ModelProviderConfig, ToolExtensionAvailability
 from sec_review_framework.cost.calculator import CostCalculator
@@ -2943,7 +2943,11 @@ class CompareRequest(BaseModel):
 
 class EstimateRequest(BaseModel):
     matrix: ExperimentMatrix
-    target_kloc: float
+    # Must be strictly positive — a 0 or negative kloc would produce a
+    # misleading $0.00 or negative estimate via tokens = int(target_kloc * AVG_TOKENS_PER_KLOC),
+    # letting a buggy or malicious client trick a real submit into bypassing
+    # the budget check the user thinks they're getting.
+    target_kloc: float = Field(gt=0)
 
 
 class DiscoverCVEsRequest(BaseModel):

@@ -1460,6 +1460,39 @@ under the old formula.
 **Result**: 36/36 dataset-API tests pass; broader 79-test slice
 across dataset routes/security/extra green.
 
+### 50. Estimate endpoint rejects zero / negative target_kloc
+
+**Backend fix:** `src/sec_review_framework/coordinator.py`
+**Backend tests:** `tests/integration/test_coordinator_api.py` (+2)
+
+> As a security researcher previewing experiment cost, I want the
+> API to reject zero or negative target_kloc values so my estimate
+> doesn't return a misleadingly low (or negative) cost that lets me
+> submit a real experiment with no proper budget check.
+
+**The bug**: `EstimateRequest.target_kloc: float` had no
+validation. The endpoint computes
+`tokens = int(target_kloc * AVG_TOKENS_PER_KLOC)` and feeds tokens
+into `cost_calculator.compute(...)` which is a linear function. So:
+- `target_kloc=0` → tokens=0 → estimate `$0.00` (misleading: the
+  experiment will still hit the model with non-zero per-call cost)
+- `target_kloc=-100` → negative tokens → negative cost (nonsensical)
+
+The frontend hardcodes `target_kloc: 10.0` (`ExperimentNew.tsx:124`)
+so users can't trigger this via the UI today, but the API surface
+should be defensive — direct API consumers and any future UI that
+exposes the field would otherwise silently produce wrong numbers.
+
+**The fix**: `target_kloc: float = Field(gt=0)`. Pydantic 422s any
+non-positive value before it reaches the computation. The existing
+3 estimate tests (with positive target_kloc) continue to pass.
+
+**Tests added** (2):
+- 0 → 422, error mentions `target_kloc`
+- -100 → 422, error mentions `target_kloc`
+
+**Result**: 53/53 coordinator-API tests pass on main.
+
 ---
 
 ## Candidate stories for future iterations
