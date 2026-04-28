@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import aiosqlite
 import pytest
 import pytest_asyncio
 
@@ -458,8 +459,6 @@ async def test_cascade_delete_removes_labels(db: Database):
     assert len(await db.list_dataset_labels("linux-cve-2024-0001")) == 1
 
     # Delete the dataset directly via a raw connection (no db.delete_dataset method yet).
-    import aiosqlite
-
     async with aiosqlite.connect(db.db_path) as conn:
         await conn.execute("PRAGMA foreign_keys = ON")
         await conn.execute(
@@ -470,3 +469,285 @@ async def test_cascade_delete_removes_labels(db: Database):
     # Labels must be gone.
     rows = await db.list_dataset_labels("linux-cve-2024-0001")
     assert rows == []
+
+
+# ---------------------------------------------------------------------------
+# 13. dataset_negative_labels — schema, indexes, CASCADE delete
+# ---------------------------------------------------------------------------
+
+_NEG_LABEL_BASE = {
+    "id": "neg-label-001",
+    "dataset_name": "linux-cve-2024-0001",
+    "dataset_version": "v1",
+    "file_path": "kernel/sched/fair.c",
+    "cwe_id": "CWE-416",
+    "vuln_class": "use_after_free",
+    "source": "benchmark",
+    "created_at": "2026-01-01T00:00:00",
+}
+
+
+async def test_negative_labels_table_exists(db: Database):
+    """dataset_negative_labels table is created during init."""
+    async with aiosqlite.connect(db.db_path) as conn:
+        async with conn.execute(
+            "SELECT name FROM sqlite_schema WHERE type='table' AND name='dataset_negative_labels'"
+        ) as cur:
+            row = await cur.fetchone()
+    assert row is not None
+
+
+async def test_negative_labels_indexes_exist(db: Database):
+    """Both indexes on dataset_negative_labels are created."""
+    async with aiosqlite.connect(db.db_path) as conn:
+        async with conn.execute(
+            "SELECT name FROM sqlite_schema WHERE type='index' AND tbl_name='dataset_negative_labels'"
+        ) as cur:
+            names = {r[0] for r in await cur.fetchall()}
+    assert "idx_dataset_negative_labels_dataset" in names
+    assert "idx_dataset_negative_labels_cwe" in names
+
+
+async def test_negative_labels_insert_and_read(db: Database):
+    """A negative label can be inserted and read back."""
+    await _insert_git_dataset(db)
+    async with aiosqlite.connect(db.db_path) as conn:
+        await conn.execute("PRAGMA foreign_keys = ON")
+        await conn.execute(
+            """INSERT INTO dataset_negative_labels
+               (id, dataset_name, dataset_version, file_path, cwe_id, vuln_class, source, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                _NEG_LABEL_BASE["id"],
+                _NEG_LABEL_BASE["dataset_name"],
+                _NEG_LABEL_BASE["dataset_version"],
+                _NEG_LABEL_BASE["file_path"],
+                _NEG_LABEL_BASE["cwe_id"],
+                _NEG_LABEL_BASE["vuln_class"],
+                _NEG_LABEL_BASE["source"],
+                _NEG_LABEL_BASE["created_at"],
+            ),
+        )
+        await conn.commit()
+        async with conn.execute(
+            "SELECT id FROM dataset_negative_labels WHERE dataset_name = ?",
+            ("linux-cve-2024-0001",),
+        ) as cur:
+            rows = await cur.fetchall()
+    assert len(rows) == 1
+    assert rows[0][0] == "neg-label-001"
+
+
+async def test_negative_labels_cascade_delete(db: Database):
+    """Deleting a dataset removes its negative labels via ON DELETE CASCADE."""
+    await _insert_git_dataset(db)
+    async with aiosqlite.connect(db.db_path) as conn:
+        await conn.execute("PRAGMA foreign_keys = ON")
+        await conn.execute(
+            """INSERT INTO dataset_negative_labels
+               (id, dataset_name, dataset_version, file_path, cwe_id, vuln_class, source, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                _NEG_LABEL_BASE["id"],
+                _NEG_LABEL_BASE["dataset_name"],
+                _NEG_LABEL_BASE["dataset_version"],
+                _NEG_LABEL_BASE["file_path"],
+                _NEG_LABEL_BASE["cwe_id"],
+                _NEG_LABEL_BASE["vuln_class"],
+                _NEG_LABEL_BASE["source"],
+                _NEG_LABEL_BASE["created_at"],
+            ),
+        )
+        await conn.execute(
+            "DELETE FROM datasets WHERE name = ?", ("linux-cve-2024-0001",)
+        )
+        await conn.commit()
+        async with conn.execute(
+            "SELECT id FROM dataset_negative_labels WHERE dataset_name = ?",
+            ("linux-cve-2024-0001",),
+        ) as cur:
+            rows = await cur.fetchall()
+    assert rows == []
+
+
+async def test_negative_labels_rejects_invalid_source(db: Database):
+    """Inserting a negative label with an invalid source raises an error."""
+    await _insert_git_dataset(db)
+    with pytest.raises(Exception):
+        async with aiosqlite.connect(db.db_path) as conn:
+            await conn.execute("PRAGMA foreign_keys = ON")
+            await conn.execute(
+                """INSERT INTO dataset_negative_labels
+                   (id, dataset_name, dataset_version, file_path, cwe_id, vuln_class, source, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    "neg-bad",
+                    "linux-cve-2024-0001",
+                    "v1",
+                    "some/file.c",
+                    "CWE-416",
+                    "use_after_free",
+                    "bogus",  # invalid source
+                    "2026-01-01T00:00:00",
+                ),
+            )
+            await conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# 14. dataset_labels.source CHECK extension — accepts 'benchmark', rejects 'bogus'
+# ---------------------------------------------------------------------------
+
+
+async def test_dataset_labels_source_accepts_benchmark(db: Database):
+    """After migration, dataset_labels.source accepts 'benchmark'."""
+    await _insert_git_dataset(db)
+    label = {**_LABEL_BASE, "id": "label-bench", "source": "benchmark"}
+    # Should not raise.
+    await db.append_dataset_labels([label])
+    rows = await db.list_dataset_labels("linux-cve-2024-0001")
+    assert any(r["source"] == "benchmark" for r in rows)
+
+
+async def test_dataset_labels_source_rejects_bogus(db: Database):
+    """dataset_labels.source CHECK still rejects values outside the allowed set.
+
+    Note: append_dataset_labels uses INSERT OR IGNORE, which silences ALL
+    constraint violations (including CHECK) on PK collision.  We test the CHECK
+    directly via a raw INSERT so the enforcement is visible.
+    """
+    await _insert_git_dataset(db)
+    with pytest.raises(Exception):
+        async with aiosqlite.connect(db.db_path) as conn:
+            await conn.execute(
+                """INSERT INTO dataset_labels
+                   (id, dataset_name, dataset_version, file_path, line_start, line_end,
+                    cwe_id, vuln_class, severity, description, source, confidence, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    "label-bogus", "linux-cve-2024-0001", "v1", "some/file.c", 1, 2,
+                    "CWE-416", "use_after_free", "high", "desc",
+                    "bogus",  # invalid — should violate CHECK
+                    "high", "2026-01-01T00:00:00",
+                ),
+            )
+            await conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# 15. Migration idempotency — running init twice does not corrupt data
+# ---------------------------------------------------------------------------
+
+
+async def test_init_twice_is_idempotent(db: Database):
+    """Calling init() on an already-migrated DB is a no-op and preserves data."""
+    await _insert_git_dataset(db)
+    await db.append_dataset_labels([_LABEL_BASE])
+
+    # Second init must not raise or corrupt rows.
+    await db.init()
+
+    rows = await db.list_dataset_labels("linux-cve-2024-0001")
+    assert len(rows) == 1
+    assert rows[0]["id"] == "label-001"
+
+
+# ---------------------------------------------------------------------------
+# 16. Simulated old DB migration — 3-value CHECK → 4-value CHECK, rows preserved
+# ---------------------------------------------------------------------------
+
+
+async def test_migration_from_old_three_value_check(tmp_path):
+    """An old DB (3-value CHECK) is correctly migrated; existing rows survive."""
+    db_path = tmp_path / "old.db"
+
+    # Simulate an old DB: create dataset_labels with the original 3-value CHECK.
+    async with aiosqlite.connect(db_path) as conn:
+        await conn.execute("""
+            CREATE TABLE datasets (
+                name             TEXT PRIMARY KEY,
+                kind             TEXT NOT NULL CHECK (kind IN ('git', 'derived')),
+                origin_url       TEXT,
+                origin_commit    TEXT,
+                origin_ref       TEXT,
+                cve_id           TEXT,
+                base_dataset     TEXT REFERENCES datasets(name),
+                recipe_json      TEXT,
+                metadata_json    TEXT NOT NULL DEFAULT '{}',
+                created_at       TEXT NOT NULL,
+                materialized_at  TEXT,
+                CHECK (
+                    (kind = 'git'     AND origin_url IS NOT NULL AND origin_commit IS NOT NULL)
+                 OR (kind = 'derived' AND base_dataset IS NOT NULL AND recipe_json IS NOT NULL)
+                )
+            )
+        """)
+        await conn.execute("""
+            CREATE TABLE dataset_labels (
+                id                   TEXT PRIMARY KEY,
+                dataset_name         TEXT NOT NULL REFERENCES datasets(name) ON DELETE CASCADE,
+                dataset_version      TEXT NOT NULL,
+                file_path            TEXT NOT NULL,
+                line_start           INTEGER NOT NULL,
+                line_end             INTEGER NOT NULL,
+                cwe_id               TEXT NOT NULL,
+                vuln_class           TEXT NOT NULL,
+                severity             TEXT NOT NULL,
+                description          TEXT NOT NULL,
+                source               TEXT NOT NULL CHECK (source IN ('cve_patch','injected','manual')),
+                source_ref           TEXT,
+                confidence           TEXT NOT NULL,
+                created_at           TEXT NOT NULL,
+                notes                TEXT,
+                introduced_in_diff   INTEGER,
+                patch_lines_changed  INTEGER
+            )
+        """)
+        # Insert a pre-existing row using an old-style source value.
+        await conn.execute(
+            """INSERT INTO datasets (name, kind, origin_url, origin_commit, created_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            ("old-ds", "git", "https://example.com/repo", "abc123", "2025-01-01T00:00:00"),
+        )
+        await conn.execute(
+            """INSERT INTO dataset_labels
+               (id, dataset_name, dataset_version, file_path, line_start, line_end,
+                cwe_id, vuln_class, severity, description, source, confidence, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                "old-label-1", "old-ds", "v1", "src/foo.c", 10, 20,
+                "CWE-79", "xss", "medium", "Cross-site scripting",
+                "manual", "medium", "2025-01-01T00:00:00",
+            ),
+        )
+        await conn.commit()
+
+    # Run init() — should apply the migration transparently.
+    database = Database(db_path)
+    await database.init()
+
+    # Old row must still be present, byte-identical.
+    rows = await database.list_dataset_labels("old-ds")
+    assert len(rows) == 1
+    assert rows[0]["id"] == "old-label-1"
+    assert rows[0]["source"] == "manual"
+    assert rows[0]["cwe_id"] == "CWE-79"
+
+    # New source value must now be accepted.
+    benchmark_label = {
+        **_LABEL_BASE,
+        "id": "new-bench-label",
+        "dataset_name": "old-ds",
+        "source": "benchmark",
+    }
+    await database.append_dataset_labels([benchmark_label])
+    rows = await database.list_dataset_labels("old-ds")
+    assert len(rows) == 2
+
+    # Verify the schema now includes 'benchmark'.
+    async with aiosqlite.connect(db_path) as conn:
+        async with conn.execute(
+            "SELECT sql FROM sqlite_schema WHERE type='table' AND name='dataset_labels'"
+        ) as cur:
+            schema_row = await cur.fetchone()
+    assert "'benchmark'" in schema_row[0]

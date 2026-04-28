@@ -273,27 +273,93 @@ class Database:
                     )
                 )
             """)
-            await db.execute("""
-                CREATE TABLE IF NOT EXISTS dataset_labels (
-                    id                   TEXT PRIMARY KEY,
-                    dataset_name         TEXT NOT NULL REFERENCES datasets(name) ON DELETE CASCADE,
-                    dataset_version      TEXT NOT NULL,
-                    file_path            TEXT NOT NULL,
-                    line_start           INTEGER NOT NULL,
-                    line_end             INTEGER NOT NULL,
-                    cwe_id               TEXT NOT NULL,
-                    vuln_class           TEXT NOT NULL,
-                    severity             TEXT NOT NULL,
-                    description          TEXT NOT NULL,
-                    source               TEXT NOT NULL CHECK (source IN ('cve_patch','injected','manual')),
-                    source_ref           TEXT,
-                    confidence           TEXT NOT NULL,
-                    created_at           TEXT NOT NULL,
-                    notes                TEXT,
-                    introduced_in_diff   INTEGER,
-                    patch_lines_changed  INTEGER
-                )
-            """)
+            # ---------------------------------------------------------------------------
+            # Migration A1: extend dataset_labels.source CHECK to include 'benchmark'.
+            #
+            # SQLite cannot ALTER a CHECK constraint; we must do a table-rebuild.
+            # We detect whether the migration is needed by inspecting sqlite_schema.
+            # ---------------------------------------------------------------------------
+            async with db.execute(
+                "SELECT sql FROM sqlite_schema WHERE type='table' AND name='dataset_labels'"
+            ) as cur:
+                row = await cur.fetchone()
+
+            if row is not None and "'benchmark'" not in row[0]:
+                # The table exists but its CHECK does not yet include 'benchmark'.
+                # Perform the standard rebuild migration.
+                #
+                # aiosqlite manages its own transaction state, so we commit any
+                # pending transaction before running DDL (which implicitly commits
+                # in SQLite) then execute the rebuild steps atomically via a
+                # fresh inner connection in autocommit mode.
+                await db.commit()
+                inner_db_path = self.db_path
+                async with aiosqlite.connect(inner_db_path, isolation_level=None) as mdb:
+                    await mdb.execute("BEGIN")
+                    try:
+                        await mdb.execute(
+                            "ALTER TABLE dataset_labels RENAME TO _dataset_labels_old"
+                        )
+                        await mdb.execute("""
+                            CREATE TABLE dataset_labels (
+                                id                   TEXT PRIMARY KEY,
+                                dataset_name         TEXT NOT NULL REFERENCES datasets(name) ON DELETE CASCADE,
+                                dataset_version      TEXT NOT NULL,
+                                file_path            TEXT NOT NULL,
+                                line_start           INTEGER NOT NULL,
+                                line_end             INTEGER NOT NULL,
+                                cwe_id               TEXT NOT NULL,
+                                vuln_class           TEXT NOT NULL,
+                                severity             TEXT NOT NULL,
+                                description          TEXT NOT NULL,
+                                source               TEXT NOT NULL CHECK (source IN ('cve_patch','injected','manual','benchmark')),
+                                source_ref           TEXT,
+                                confidence           TEXT NOT NULL,
+                                created_at           TEXT NOT NULL,
+                                notes                TEXT,
+                                introduced_in_diff   INTEGER,
+                                patch_lines_changed  INTEGER
+                            )
+                        """)
+                        await mdb.execute("""
+                            INSERT INTO dataset_labels
+                            SELECT id, dataset_name, dataset_version, file_path,
+                                   line_start, line_end, cwe_id, vuln_class,
+                                   severity, description, source, source_ref,
+                                   confidence, created_at, notes,
+                                   introduced_in_diff, patch_lines_changed
+                            FROM _dataset_labels_old
+                        """)
+                        await mdb.execute("DROP TABLE _dataset_labels_old")
+                        await mdb.execute("COMMIT")
+                    except Exception:
+                        await mdb.execute("ROLLBACK")
+                        raise
+            elif row is None:
+                # Fresh DB — create with the extended CHECK from the start.
+                await db.execute("""
+                    CREATE TABLE IF NOT EXISTS dataset_labels (
+                        id                   TEXT PRIMARY KEY,
+                        dataset_name         TEXT NOT NULL REFERENCES datasets(name) ON DELETE CASCADE,
+                        dataset_version      TEXT NOT NULL,
+                        file_path            TEXT NOT NULL,
+                        line_start           INTEGER NOT NULL,
+                        line_end             INTEGER NOT NULL,
+                        cwe_id               TEXT NOT NULL,
+                        vuln_class           TEXT NOT NULL,
+                        severity             TEXT NOT NULL,
+                        description          TEXT NOT NULL,
+                        source               TEXT NOT NULL CHECK (source IN ('cve_patch','injected','manual','benchmark')),
+                        source_ref           TEXT,
+                        confidence           TEXT NOT NULL,
+                        created_at           TEXT NOT NULL,
+                        notes                TEXT,
+                        introduced_in_diff   INTEGER,
+                        patch_lines_changed  INTEGER
+                    )
+                """)
+            # else: table already has 'benchmark' in CHECK — no-op.
+
             await db.execute(
                 "CREATE INDEX IF NOT EXISTS idx_dataset_labels_dataset "
                 "ON dataset_labels(dataset_name, dataset_version)"
@@ -302,6 +368,33 @@ class Database:
                 "CREATE INDEX IF NOT EXISTS idx_dataset_labels_cwe "
                 "ON dataset_labels(cwe_id)"
             )
+
+            # ---------------------------------------------------------------------------
+            # Negative labels — "this file is expected clean of CWE-X"
+            # ---------------------------------------------------------------------------
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS dataset_negative_labels (
+                    id              TEXT PRIMARY KEY,
+                    dataset_name    TEXT NOT NULL REFERENCES datasets(name) ON DELETE CASCADE,
+                    dataset_version TEXT NOT NULL,
+                    file_path       TEXT NOT NULL,
+                    cwe_id          TEXT NOT NULL,
+                    vuln_class      TEXT NOT NULL,
+                    source          TEXT NOT NULL CHECK (source IN ('benchmark','manual')),
+                    source_ref      TEXT,
+                    created_at      TEXT NOT NULL,
+                    notes           TEXT
+                )
+            """)
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_dataset_negative_labels_dataset "
+                "ON dataset_negative_labels(dataset_name, dataset_version)"
+            )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_dataset_negative_labels_cwe "
+                "ON dataset_negative_labels(cwe_id)"
+            )
+
             # Enable foreign key enforcement for cascade deletes on dataset_labels
             await db.execute("PRAGMA foreign_keys = ON")
 
