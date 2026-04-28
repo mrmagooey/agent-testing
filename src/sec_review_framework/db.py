@@ -274,6 +274,59 @@ class Database:
                 )
             """)
             # ---------------------------------------------------------------------------
+            # Migration E1: extend datasets.kind to allow 'archive' plus three
+            # archive_* columns. SQLite cannot ALTER a CHECK constraint, so the
+            # table is rebuilt atomically when the existing DDL doesn't yet
+            # mention 'archive'.
+            # ---------------------------------------------------------------------------
+            async with db.execute(
+                "SELECT sql FROM sqlite_schema WHERE type='table' AND name='datasets'"
+            ) as _cur:
+                _row = await _cur.fetchone()
+            _datasets_ddl: str = _row[0] if _row else ""
+            if "archive" not in _datasets_ddl:
+                await db.execute("PRAGMA foreign_keys = OFF")
+                await db.execute("""
+                    CREATE TABLE datasets_new (
+                        name             TEXT PRIMARY KEY,
+                        kind             TEXT NOT NULL CHECK (kind IN ('git', 'derived', 'archive')),
+                        origin_url       TEXT,
+                        origin_commit    TEXT,
+                        origin_ref       TEXT,
+                        cve_id           TEXT,
+                        base_dataset     TEXT REFERENCES datasets_new(name),
+                        recipe_json      TEXT,
+                        metadata_json    TEXT NOT NULL DEFAULT '{}',
+                        created_at       TEXT NOT NULL,
+                        materialized_at  TEXT,
+                        archive_url      TEXT,
+                        archive_sha256   TEXT,
+                        archive_format   TEXT,
+                        CHECK (
+                            (kind = 'git'     AND origin_url    IS NOT NULL AND origin_commit  IS NOT NULL)
+                         OR (kind = 'derived' AND base_dataset  IS NOT NULL AND recipe_json    IS NOT NULL)
+                         OR (kind = 'archive' AND archive_url   IS NOT NULL AND archive_sha256 IS NOT NULL
+                                              AND archive_format IS NOT NULL)
+                        )
+                    )
+                """)
+                await db.execute("""
+                    INSERT INTO datasets_new (
+                        name, kind, origin_url, origin_commit, origin_ref,
+                        cve_id, base_dataset, recipe_json, metadata_json,
+                        created_at, materialized_at
+                    )
+                    SELECT
+                        name, kind, origin_url, origin_commit, origin_ref,
+                        cve_id, base_dataset, recipe_json, metadata_json,
+                        created_at, materialized_at
+                    FROM datasets
+                """)
+                await db.execute("DROP TABLE datasets")
+                await db.execute("ALTER TABLE datasets_new RENAME TO datasets")
+                await db.execute("PRAGMA foreign_keys = ON")
+                await db.commit()
+            # ---------------------------------------------------------------------------
             # Migration A1: extend dataset_labels.source CHECK to include 'benchmark'.
             #
             # SQLite cannot ALTER a CHECK constraint; we must do a table-rebuild.
@@ -1307,11 +1360,13 @@ class Database:
                 INSERT INTO datasets (
                     name, kind, origin_url, origin_commit, origin_ref,
                     cve_id, base_dataset, recipe_json, metadata_json,
-                    created_at, materialized_at
+                    created_at, materialized_at,
+                    archive_url, archive_sha256, archive_format
                 ) VALUES (
                     :name, :kind, :origin_url, :origin_commit, :origin_ref,
                     :cve_id, :base_dataset, :recipe_json, :metadata_json,
-                    :created_at, :materialized_at
+                    :created_at, :materialized_at,
+                    :archive_url, :archive_sha256, :archive_format
                 )
                 """,
                 {
@@ -1326,6 +1381,9 @@ class Database:
                     "metadata_json": row.get("metadata_json", "{}"),
                     "created_at": row["created_at"],
                     "materialized_at": row.get("materialized_at"),
+                    "archive_url": row.get("archive_url"),
+                    "archive_sha256": row.get("archive_sha256"),
+                    "archive_format": row.get("archive_format"),
                 },
             )
             await db.commit()

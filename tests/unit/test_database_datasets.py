@@ -45,6 +45,15 @@ _DERIVED_ROW = {
     "created_at": "2026-01-02T00:00:00",
 }
 
+_ARCHIVE_ROW = {
+    "name": "nist-sard-2024",
+    "kind": "archive",
+    "archive_url": "https://samate.nist.gov/SARD/downloads/test-suite-202401.tar.gz",
+    "archive_sha256": "abc123" * 10 + "ab",
+    "archive_format": "tar.gz",
+    "created_at": "2026-02-01T00:00:00",
+}
+
 _LABEL_BASE = {
     "id": "label-001",
     "dataset_name": "linux-cve-2024-0001",
@@ -751,3 +760,157 @@ async def test_migration_from_old_three_value_check(tmp_path):
         ) as cur:
             schema_row = await cur.fetchone()
     assert "'benchmark'" in schema_row[0]
+# 13. kind='archive' — happy path and CHECK violations
+# ---------------------------------------------------------------------------
+
+
+async def test_create_dataset_archive_round_trip(db: Database):
+    """create_dataset for kind='archive' persists all three archive columns."""
+    await db.create_dataset(_ARCHIVE_ROW)
+    result = await db.get_dataset("nist-sard-2024")
+    assert result is not None
+    assert result["kind"] == "archive"
+    assert result["archive_url"] == _ARCHIVE_ROW["archive_url"]
+    assert result["archive_sha256"] == _ARCHIVE_ROW["archive_sha256"]
+    assert result["archive_format"] == "tar.gz"
+    # Git-specific columns must be NULL.
+    assert result["origin_url"] is None
+    assert result["origin_commit"] is None
+    # Derived-specific columns must be NULL.
+    assert result["base_dataset"] is None
+    assert result["recipe_json"] is None
+
+
+async def test_create_dataset_archive_missing_sha256_rejected(db: Database):
+    """kind='archive' without archive_sha256 violates CHECK constraint."""
+    row = {
+        "name": "archive-no-sha256",
+        "kind": "archive",
+        "archive_url": "https://example.com/data.tar.gz",
+        "archive_format": "tar.gz",
+        "created_at": "2026-02-01T00:00:00",
+    }
+    with pytest.raises(Exception):
+        await db.create_dataset(row)
+
+
+async def test_create_dataset_archive_missing_url_rejected(db: Database):
+    """kind='archive' without archive_url violates CHECK constraint."""
+    row = {
+        "name": "archive-no-url",
+        "kind": "archive",
+        "archive_sha256": "a" * 64,
+        "archive_format": "tar.gz",
+        "created_at": "2026-02-01T00:00:00",
+    }
+    with pytest.raises(Exception):
+        await db.create_dataset(row)
+
+
+async def test_create_dataset_archive_missing_format_rejected(db: Database):
+    """kind='archive' without archive_format violates CHECK constraint."""
+    row = {
+        "name": "archive-no-format",
+        "kind": "archive",
+        "archive_url": "https://example.com/data.tar.gz",
+        "archive_sha256": "a" * 64,
+        "created_at": "2026-02-01T00:00:00",
+    }
+    with pytest.raises(Exception):
+        await db.create_dataset(row)
+
+
+async def test_create_dataset_git_null_origin_url_still_rejected(db: Database):
+    """Existing kind='git' behaviour: NULL origin_url still rejected after migration."""
+    row = {
+        "name": "git-null-url",
+        "kind": "git",
+        "origin_commit": "abc123",
+        "created_at": "2026-02-01T00:00:00",
+    }
+    with pytest.raises(Exception):
+        await db.create_dataset(row)
+
+
+# ---------------------------------------------------------------------------
+# 14. Migration from a pre-archive DB preserves existing rows
+# ---------------------------------------------------------------------------
+
+
+async def test_migration_from_pre_archive_db_preserves_rows(tmp_path: Path):
+    """Synthesise an old-shaped datasets table, run init(), verify row is preserved
+    and new archive rows can be inserted."""
+    db_path = tmp_path / "old.db"
+
+    # Build the old schema directly (no archive columns, old CHECK).
+    async with aiosqlite.connect(db_path) as conn:
+        await conn.execute("""
+            CREATE TABLE datasets (
+                name             TEXT PRIMARY KEY,
+                kind             TEXT NOT NULL CHECK (kind IN ('git', 'derived')),
+                origin_url       TEXT,
+                origin_commit    TEXT,
+                origin_ref       TEXT,
+                cve_id           TEXT,
+                base_dataset     TEXT REFERENCES datasets(name),
+                recipe_json      TEXT,
+                metadata_json    TEXT NOT NULL DEFAULT '{}',
+                created_at       TEXT NOT NULL,
+                materialized_at  TEXT,
+                CHECK (
+                    (kind = 'git'     AND origin_url IS NOT NULL AND origin_commit IS NOT NULL)
+                 OR (kind = 'derived' AND base_dataset IS NOT NULL AND recipe_json IS NOT NULL)
+                )
+            )
+        """)
+        await conn.execute("""
+            INSERT INTO datasets (name, kind, origin_url, origin_commit, created_at)
+            VALUES ('old-git-ds', 'git', 'https://example.com/repo', 'abc123', '2025-01-01T00:00:00')
+        """)
+        await conn.commit()
+
+    # Running init() on the pre-archive DB triggers the migration.
+    database = Database(db_path)
+    await database.init()
+
+    # Old row must still be present and intact.
+    old = await database.get_dataset("old-git-ds")
+    assert old is not None
+    assert old["kind"] == "git"
+    assert old["origin_url"] == "https://example.com/repo"
+    assert old["origin_commit"] == "abc123"
+
+    # New archive row can be inserted after migration.
+    await database.create_dataset(_ARCHIVE_ROW)
+    new = await database.get_dataset("nist-sard-2024")
+    assert new is not None
+    assert new["kind"] == "archive"
+    assert new["archive_sha256"] == _ARCHIVE_ROW["archive_sha256"]
+
+
+# ---------------------------------------------------------------------------
+# 15. Migration is idempotent across multiple init() calls
+# ---------------------------------------------------------------------------
+
+
+async def test_migration_is_idempotent(tmp_path: Path):
+    """Calling init() multiple times on an already-migrated DB is a no-op."""
+    db_path = tmp_path / "idem.db"
+    database = Database(db_path)
+
+    # First init: creates + migrates the schema.
+    await database.init()
+    await database.create_dataset(_ARCHIVE_ROW)
+
+    # Second init: must not raise or corrupt the archive row.
+    await database.init()
+
+    result = await database.get_dataset("nist-sard-2024")
+    assert result is not None
+    assert result["archive_format"] == "tar.gz"
+
+    # Third init for good measure.
+    await database.init()
+    result2 = await database.get_dataset("nist-sard-2024")
+    assert result2 is not None
+    assert result2["archive_sha256"] == _ARCHIVE_ROW["archive_sha256"]
