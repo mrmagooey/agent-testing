@@ -48,7 +48,11 @@ _BINARY_EXTENSIONS: frozenset[str] = frozenset(
     }
 )
 
-_SKIP_DIRS: frozenset[str] = frozenset({".git", "node_modules", "__pycache__"})
+_SKIP_DIRS: frozenset[str] = frozenset({
+    ".git", "node_modules", "__pycache__",
+    # Java build artefacts — Maven, Gradle, and IDE caches
+    "target", "build", ".gradle",
+})
 
 
 def _detect_language(path: str) -> str | None:

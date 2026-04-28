@@ -56,6 +56,7 @@ _EXT_TO_LANG: dict[str, str] = {
     ".cc": "cpp",
     ".h": "cpp",
     ".hpp": "cpp",
+    ".java": "java",
 }
 
 # (binary, args) for each language_id.
@@ -66,6 +67,7 @@ _LANG_SERVER_CMD: dict[str, list[str]] = {
     "typescript": ["typescript-language-server", "--stdio"],
     "rust": ["rust-analyzer"],
     "cpp": ["clangd"],
+    "java": ["jdtls", "-data", "/tmp/jdtls-workspace"],
 }
 
 
@@ -321,6 +323,7 @@ class LSPSession:
             ".rs": "rust",
             ".c": "c", ".h": "c",
             ".cpp": "cpp", ".cc": "cpp", ".hpp": "cpp",
+            ".java": "java",
         }
         lang_id = lang_id_map.get(ext, self.language_id)
 
@@ -488,7 +491,7 @@ class LSPMultiplexer:
         """Query workspace symbols — picks the first live session (or Python as default)."""
         # Attempt in order of preference; return first success.
         errors = []
-        for lang in ("python", "typescript", "go", "rust", "cpp"):
+        for lang in ("python", "typescript", "go", "rust", "cpp", "java"):
             if lang not in _LANG_SERVER_CMD:
                 continue
             try:
@@ -622,7 +625,7 @@ def build_server(workspace_root: Path) -> tuple[Server, LSPMultiplexer]:
                 description=(
                     "Go to the definition of the symbol at the given position in a file. "
                     "Returns a list of locations (URI + range). "
-                    "Supports: Python, Go, TypeScript/JavaScript, Rust, C/C++."
+                    "Supports: Python, Go, TypeScript/JavaScript, Rust, C/C++, Java."
                 ),
                 inputSchema={
                     "type": "object",
@@ -642,7 +645,7 @@ def build_server(workspace_root: Path) -> tuple[Server, LSPMultiplexer]:
                 description=(
                     "Find all references to the symbol at the given position. "
                     "Returns a list of locations. "
-                    "Supports: Python, Go, TypeScript/JavaScript, Rust, C/C++."
+                    "Supports: Python, Go, TypeScript/JavaScript, Rust, C/C++, Java."
                 ),
                 inputSchema={
                     "type": "object",
@@ -667,7 +670,7 @@ def build_server(workspace_root: Path) -> tuple[Server, LSPMultiplexer]:
                 description=(
                     "Get hover documentation / type signature for the symbol at the given position. "
                     "Returns a markdown string. "
-                    "Supports: Python, Go, TypeScript/JavaScript, Rust, C/C++."
+                    "Supports: Python, Go, TypeScript/JavaScript, Rust, C/C++, Java."
                 ),
                 inputSchema={
                     "type": "object",
@@ -687,7 +690,7 @@ def build_server(workspace_root: Path) -> tuple[Server, LSPMultiplexer]:
                 description=(
                     "List all symbols (functions, classes, variables, …) defined in a file "
                     "as a hierarchical list. "
-                    "Supports: Python, Go, TypeScript/JavaScript, Rust, C/C++."
+                    "Supports: Python, Go, TypeScript/JavaScript, Rust, C/C++, Java."
                 ),
                 inputSchema={
                     "type": "object",

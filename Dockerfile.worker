@@ -51,6 +51,7 @@ RUN apt-get update \
       clangd \
       nodejs npm \
       curl ca-certificates \
+      openjdk-21-jre-headless \
  && rm -rf /var/lib/apt/lists/*
 
 # ---------------------------------------------------------------------------
@@ -86,6 +87,26 @@ RUN curl -fsSL \
  && gunzip -c /tmp/rust-analyzer.gz > /usr/local/bin/rust-analyzer \
  && chmod +x /usr/local/bin/rust-analyzer \
  && rm /tmp/rust-analyzer.gz
+
+# ---------------------------------------------------------------------------
+# jdtls — Eclipse JDT Language Server (Java LSP backend).
+# Pre-compiled tarball; unpacked to /opt/jdtls.
+# Requires openjdk-21-jre-headless (installed above).
+# Pin to a specific release; update SHA-256 when upgrading.
+# Download from https://download.eclipse.org/jdtls/milestones/
+# ---------------------------------------------------------------------------
+ARG JDTLS_VERSION=1.40.0
+ARG JDTLS_TIMESTAMP=202412191435
+ARG JDTLS_SHA256=be93bcebbeaa8da5e76e31bf2abb11a84d574b506f84ee2deba4e7a36df4addb
+RUN curl -fsSL \
+      "https://download.eclipse.org/jdtls/milestones/${JDTLS_VERSION}/jdt-language-server-${JDTLS_VERSION}-${JDTLS_TIMESTAMP}.tar.gz" \
+      -o /tmp/jdtls.tar.gz \
+ && echo "${JDTLS_SHA256}  /tmp/jdtls.tar.gz" | sha256sum -c - \
+ && mkdir -p /opt/jdtls \
+ && tar -xzf /tmp/jdtls.tar.gz -C /opt/jdtls \
+ && rm /tmp/jdtls.tar.gz \
+ && printf '#!/bin/sh\nexec java \\\n  -Declipse.application=org.eclipse.jdt.ls.core.id1 \\\n  -Dosgi.bundles.defaultStartLevel=4 \\\n  -Declipse.product=org.eclipse.jdt.ls.core.product \\\n  -Dlog.level=ALL \\\n  -noverify \\\n  -Xmx1G \\\n  --add-modules=ALL-SYSTEM \\\n  --add-opens java.base/java.util=ALL-UNNAMED \\\n  --add-opens java.base/java.lang=ALL-UNNAMED \\\n  -jar /opt/jdtls/plugins/org.eclipse.equinox.launcher_*.jar \\\n  -configuration /opt/jdtls/config_linux \\\n  "$@"\n' > /usr/local/bin/jdtls \
+ && chmod +x /usr/local/bin/jdtls
 
 # ---------------------------------------------------------------------------
 # semgrep — pipx venv built against Python 3.12 in the semgrep-builder stage

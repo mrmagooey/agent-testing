@@ -47,10 +47,45 @@ class TestDetectLanguage:
         assert self._detect("impl.cc") == "cpp"
         assert self._detect("impl.hpp") == "cpp"
 
+    def test_java(self) -> None:
+        assert self._detect("src/Main.java") == "java"
+        assert self._detect("com/example/Foo.java") == "java"
+
     def test_unknown_returns_none(self) -> None:
         assert self._detect("README.md") is None
         assert self._detect("Makefile") is None
         assert self._detect("data.json") is None
+
+
+# ---------------------------------------------------------------------------
+# Java language-server command
+# ---------------------------------------------------------------------------
+
+class TestJavaLangServerCmd:
+    def test_java_cmd_lookup(self) -> None:
+        from sec_review_framework.tools.extensions.lsp_server import _LANG_SERVER_CMD
+
+        assert "java" in _LANG_SERVER_CMD
+        cmd = _LANG_SERVER_CMD["java"]
+        assert cmd[0] == "jdtls"
+        assert "-data" in cmd
+        assert "/tmp/jdtls-workspace" in cmd
+
+    def test_java_lang_id_in_ensure_open_map(self) -> None:
+        """The lang_id_map inside _ensure_open must include .java → 'java'."""
+        import inspect
+        from sec_review_framework.tools.extensions import lsp_server as mod
+
+        src = inspect.getsource(mod.LSPSession._ensure_open)
+        assert '".java": "java"' in src or "'.java': 'java'" in src
+
+    def test_java_in_workspace_symbols_fallback(self) -> None:
+        """'java' must appear in the workspace_symbols fallback language sequence."""
+        import inspect
+        from sec_review_framework.tools.extensions import lsp_server as mod
+
+        src = inspect.getsource(mod.LSPMultiplexer.workspace_symbols)
+        assert '"java"' in src or "'java'" in src
 
 
 # ---------------------------------------------------------------------------
