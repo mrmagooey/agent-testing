@@ -176,6 +176,20 @@ class ExperimentWorker:
     Entry point for K8s Job pods.
     """
 
+    def _get_coordinator_url(self, run: ExperimentRun) -> str | None:
+        """Derive the coordinator base URL from run config or env var.
+
+        Returns None when no coordinator URL is available (PVC transport,
+        offline tests).
+        """
+        if run.upload_url:
+            import re as _re
+            m = _re.match(r"(https?://[^/]+(?:/[^/]+)*?)/api/internal/runs/", run.upload_url)
+            if m:
+                return m.group(1)
+
+        return os.environ.get("COORDINATOR_INTERNAL_URL", "").rstrip("/") or None
+
     def _fetch_labels(
         self, run: ExperimentRun, datasets_dir: Path
     ) -> list:
@@ -194,20 +208,7 @@ class ExperimentWorker:
         """
         from sec_review_framework.data.evaluation import GroundTruthLabel
 
-        coordinator_url: str | None = None
-
-        if run.upload_url:
-            # Strip the run-specific suffix to get the base URL.
-            # upload_url shape: {base}/api/internal/runs/{id}/result
-            # We want: {base}
-            import re as _re
-            m = _re.match(r"(https?://[^/]+(?:/[^/]+)*?)/api/internal/runs/", run.upload_url)
-            if m:
-                coordinator_url = m.group(1)
-
-        if coordinator_url is None:
-            coordinator_url = os.environ.get("COORDINATOR_INTERNAL_URL", "").rstrip("/") or None
-
+        coordinator_url = self._get_coordinator_url(run)
         if not coordinator_url:
             # No coordinator URL available — return empty labels list (evaluation skipped).
             return []
@@ -233,6 +234,39 @@ class ExperimentWorker:
         raw_labels = resp.json()
         return [GroundTruthLabel.model_validate(lbl) for lbl in raw_labels]
 
+    def _fetch_negative_labels(
+        self, run: ExperimentRun, datasets_dir: Path
+    ) -> list[dict]:
+        """Return negative ground-truth labels for the run's dataset.
+
+        Returns an empty list when no coordinator URL is available (PVC
+        transport, offline tests) or when the dataset has no negative labels
+        (all existing CVE datasets).  An HTTP error surfaces as RuntimeError.
+        """
+        coordinator_url = self._get_coordinator_url(run)
+        if not coordinator_url:
+            return []
+
+        import httpx as _httpx
+
+        params: dict[str, str] = {}
+        if run.dataset_version:
+            params["version"] = run.dataset_version
+
+        try:
+            with _httpx.Client(timeout=30.0) as client:
+                resp = client.get(
+                    f"{coordinator_url}/datasets/{run.dataset_name}/negative-labels",
+                    params=params,
+                )
+                resp.raise_for_status()
+        except _httpx.HTTPError as exc:
+            raise RuntimeError(
+                f"Failed to fetch negative labels for dataset {run.dataset_name!r}: {exc}"
+            ) from exc
+
+        return resp.json()
+
     def run(self, run: ExperimentRun, output_dir: Path, datasets_dir: Path) -> None:
         repo_path = datasets_dir / "targets" / run.dataset_name / "repo"
         if run.target_file is not None:
@@ -240,6 +274,7 @@ class ExperimentWorker:
         else:
             target = TargetCodebase(repo_path)
         labels = self._fetch_labels(run, datasets_dir)
+        negative_labels = self._fetch_negative_labels(run, datasets_dir)
         model = ModelProviderFactory().create(run.model_id, run.provider_kwargs)
 
         start = time.monotonic()
@@ -319,6 +354,21 @@ class ExperimentWorker:
             FileLevelEvaluator().evaluate(findings, labels) if status == RunStatus.COMPLETED else None
         )
 
+        # Benchmark scorecard: only computed when negative labels exist.
+        # Returns None for all CVE datasets (backward-compat).
+        benchmark_scorecard_dict: dict | None = None
+        if status == RunStatus.COMPLETED and negative_labels:
+            from sec_review_framework.evaluation.benchmark_scoring import compute_benchmark_scorecard
+            raw_positive_labels = [lbl.model_dump(mode="json") for lbl in labels]
+            scorecard = compute_benchmark_scorecard(
+                findings=findings,
+                positive_labels=raw_positive_labels,
+                negative_labels=negative_labels,
+                dataset_name=run.dataset_name,
+            )
+            if scorecard is not None:
+                benchmark_scorecard_dict = scorecard.to_dict()
+
         verification_tokens = (
             verification_result.verification_tokens if verification_result else 0
         )
@@ -377,6 +427,7 @@ class ExperimentWorker:
             findings_pre_verification=findings_pre_verification,
             verification_result=verification_result,
             evaluation=evaluation,
+            benchmark_scorecard=benchmark_scorecard_dict,
             strategy_output=strategy_output,
             bundle_snapshot=bundle_snapshot,
             tool_call_count=tool_call_count,

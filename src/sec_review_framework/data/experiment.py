@@ -157,6 +157,9 @@ class RunResult(BaseModel):
     findings_pre_verification: list[Finding] | None = None
     verification_result: VerificationResult | None = None
     evaluation: EvaluationResult | None = None
+    # Populated only for benchmark datasets that have negative labels.
+    # None for all existing CVE datasets (backward-compat).
+    benchmark_scorecard: dict | None = None
     strategy_output: StrategyOutput
     bundle_snapshot: BundleSnapshot
 

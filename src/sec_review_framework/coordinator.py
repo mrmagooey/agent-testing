@@ -2363,6 +2363,16 @@ class ExperimentCoordinator:
             source=source,
         )
 
+    async def get_negative_labels(
+        self,
+        dataset_name: str,
+        version: str | None = None,
+    ) -> list[dict]:
+        return await self.db.list_dataset_negative_labels(
+            dataset_name,
+            dataset_version=version,
+        )
+
     def get_file_tree(self, dataset_name: str) -> dict:
         dataset_dir = self.storage_root / "datasets" / dataset_name
         if not dataset_dir.exists():
@@ -4000,6 +4010,15 @@ async def get_labels(dataset_name: str, request: Request) -> list[dict]:
         cwe=request.query_params.get("cwe"),
         severity=request.query_params.get("severity"),
         source=request.query_params.get("source"),
+    )
+
+
+@app.get("/datasets/{dataset_name}/negative-labels")
+async def get_negative_labels(dataset_name: str, request: Request) -> list[dict]:
+    """View negative ground truth labels for a dataset (benchmark datasets only)."""
+    return await coordinator.get_negative_labels(
+        dataset_name,
+        version=request.query_params.get("version"),
     )
 
 

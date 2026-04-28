@@ -410,8 +410,9 @@ def test_worker_http_transport_uploads_artifacts(base_run, datasets_dir, tmp_pat
             # Don't hit the network for label fetching — the coordinator URL
             # derived from upload_url isn't reachable in the test environment.
             with patch.object(ExperimentWorker, "_fetch_labels", lambda self, r, d: []):
-                worker = ExperimentWorker()
-                worker.run(run, output_dir, datasets_dir)
+                with patch.object(ExperimentWorker, "_fetch_negative_labels", lambda self, r, d: []):
+                    worker = ExperimentWorker()
+                    worker.run(run, output_dir, datasets_dir)
 
     assert len(upload_calls) == 1
     assert "run_result.json" in upload_calls[0]["files"]
