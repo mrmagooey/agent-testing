@@ -907,6 +907,12 @@ class ExperimentCoordinator:
         self._invalidate_trends_cache()
 
     async def cancel_experiment(self, experiment_id: str) -> int:
+        # Guard: do not clobber an already-terminal experiment's status.
+        experiment = await self.db.get_experiment(experiment_id)
+        if experiment is None:
+            return 0
+        if experiment["status"] in ("completed", "failed", "cancelled"):
+            return 0
         cancelled = 0
         if K8S_AVAILABLE and self.k8s_client:
             try:

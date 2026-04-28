@@ -102,6 +102,96 @@ def test_cancel_multiple_times_is_idempotent(coordinator_client):
     assert resp2.status_code == 200
 
 
+@pytest.mark.asyncio
+async def test_cancel_terminal_experiment_is_noop(tmp_path: Path):
+    """Cancelling a completed experiment must not flip its status to cancelled."""
+    db = Database(tmp_path / "test.db")
+    await db.init()
+    c = _make_coordinator(tmp_path, db)
+
+    exp_id = "completed-exp-cancel-noop"
+    await db.create_experiment(
+        experiment_id=exp_id,
+        config_json="{}",
+        total_runs=1,
+        max_cost_usd=None,
+    )
+    await db.update_experiment_status(exp_id, "completed")
+
+    with patch.object(coord_module, "coordinator", c):
+        with patch.object(c, "reconcile", return_value=None):
+            with TestClient(app, raise_server_exceptions=True) as client:
+                resp = client.post(f"/experiments/{exp_id}/cancel")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["cancelled_jobs"] == 0
+
+    experiment = await db.get_experiment(exp_id)
+    assert experiment is not None
+    assert experiment["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_cancel_already_cancelled_is_idempotent(tmp_path: Path):
+    """Cancelling an already-cancelled experiment should not error and status stays cancelled."""
+    db = Database(tmp_path / "test.db")
+    await db.init()
+    c = _make_coordinator(tmp_path, db)
+
+    exp_id = "already-cancelled-exp"
+    await db.create_experiment(
+        experiment_id=exp_id,
+        config_json="{}",
+        total_runs=1,
+        max_cost_usd=None,
+    )
+    await db.update_experiment_status(exp_id, "cancelled")
+
+    with patch.object(coord_module, "coordinator", c):
+        with patch.object(c, "reconcile", return_value=None):
+            with TestClient(app, raise_server_exceptions=True) as client:
+                resp = client.post(f"/experiments/{exp_id}/cancel")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["cancelled_jobs"] == 0
+
+    experiment = await db.get_experiment(exp_id)
+    assert experiment is not None
+    assert experiment["status"] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_cancel_failed_experiment_keeps_failed_status(tmp_path: Path):
+    """Cancelling a failed experiment must not overwrite its status."""
+    db = Database(tmp_path / "test.db")
+    await db.init()
+    c = _make_coordinator(tmp_path, db)
+
+    exp_id = "failed-exp-cancel-noop"
+    await db.create_experiment(
+        experiment_id=exp_id,
+        config_json="{}",
+        total_runs=1,
+        max_cost_usd=None,
+    )
+    await db.update_experiment_status(exp_id, "failed")
+
+    with patch.object(coord_module, "coordinator", c):
+        with patch.object(c, "reconcile", return_value=None):
+            with TestClient(app, raise_server_exceptions=True) as client:
+                resp = client.post(f"/experiments/{exp_id}/cancel")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["cancelled_jobs"] == 0
+
+    experiment = await db.get_experiment(exp_id)
+    assert experiment is not None
+    assert experiment["status"] == "failed"
+
+
 # ---------------------------------------------------------------------------
 # GET /experiments/{experiment_id}/results/download
 # ---------------------------------------------------------------------------

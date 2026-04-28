@@ -1158,6 +1158,51 @@ verified to fail without the fix (the rogue status currently passes
 Pydantic and falls through to a 404 from the run-lookup, not a 422
 — exactly what the validation gap looks like).
 
+### 43. Cancel endpoint preserves terminal experiment status
+
+**Backend fix:** `src/sec_review_framework/coordinator.py`
+**Backend tests:** `tests/integration/test_experiment_lifecycle_api.py` (+3)
+
+> As a researcher whose dashboard briefly shows stale state, or as a
+> direct API consumer, the cancel endpoint must not clobber an
+> already-terminal experiment's status — a completed experiment
+> should remain 'completed' regardless of how many cancel requests
+> arrive.
+
+**The bug**: `coordinator.cancel_experiment` (line ~909) ran
+`update_experiment_status(experiment_id, "cancelled")` unconditionally.
+Even for an experiment already in `completed` or `failed` state, a
+stray `POST /experiments/<id>/cancel` flipped the DB status to
+`cancelled` — silently destroying the result history's labelling.
+
+The frontend gates the Cancel button via `!isTerminal`
+(`ExperimentDetail.tsx`), so the realistic exposure is direct API
+consumers and a brief frontend race during status transitions.
+
+**The fix**: at the top of `cancel_experiment`, look up the
+experiment via `db.get_experiment`. If it doesn't exist, or its
+status is in `{completed, failed, cancelled}`, return `0` early
+and skip the K8s job listing, run-status flips, and experiment-
+status update. Existing non-terminal cancellation still works.
+
+**Tests added** (3, all `pytest.mark.asyncio` since they need to
+seed DB rows directly):
+- `test_cancel_terminal_experiment_is_noop` — seed completed,
+  cancel, verify status stays `completed`
+- `test_cancel_already_cancelled_is_idempotent` — seed cancelled,
+  cancel again, verify status stays `cancelled`
+- `test_cancel_failed_experiment_keeps_failed_status` — seed failed,
+  cancel, verify status stays `failed`
+
+**`delete_experiment` side-effect note**: `delete_experiment` calls
+`cancel_experiment` first then deletes files/DB rows. After the fix,
+terminal experiments skip the status flip in the cancel call but
+deletion proceeds normally — no test relied on the side-effect.
+
+**Result**: 26/26 lifecycle tests pass; broader slice (89 tests
+across lifecycle + routes_extended + coordinator_api) green; tests
+demonstrably fail without the fix.
+
 ---
 
 ## Candidate stories for future iterations
