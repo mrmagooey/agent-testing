@@ -192,6 +192,15 @@ class ExperimentMatrix(BaseModel):
     max_experiment_cost_usd: float | None = None
     verifier_model_id: str | None = None
 
+    language_allowlist: list[str] = Field(
+        default_factory=lambda: ["python", "java"],
+        description=(
+            "Languages this experiment is prepared to evaluate. Datasets whose "
+            "metadata_json.language is not in this list are refused at dispatch "
+            "with a clear error. Empty list disables the gate."
+        ),
+    )
+
     # Submit-time override: when True, skip availability validation.
     # Excluded from serialisation so it never reaches the DB or on-disk config JSON.
     allow_unavailable_models: bool = Field(default=False, exclude=True)

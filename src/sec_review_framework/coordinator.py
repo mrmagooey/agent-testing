@@ -3671,6 +3671,38 @@ async def submit_experiment(matrix: ExperimentMatrix) -> dict:
             },
         )
 
+    # Gate on per-experiment language allowlist.  If the experiment declares a
+    # non-empty language_allowlist, any dataset whose metadata_json.language is
+    # set and not in the list is refused before any work is dispatched.
+    # Datasets with no metadata_json.language are allowed through (backward compat)
+    # with a warning.  An empty allowlist disables the gate entirely.
+    if matrix.language_allowlist:
+        import json as _json_lang
+        dataset_row = await coordinator.db.get_dataset(matrix.dataset_name)
+        if dataset_row is not None:
+            raw_meta = dataset_row.get("metadata_json") or "{}"
+            try:
+                meta = _json_lang.loads(raw_meta) if isinstance(raw_meta, str) else raw_meta
+            except Exception:
+                meta = {}
+            ds_language = meta.get("language")
+            if ds_language is None:
+                logger.warning(
+                    "Dataset %r has no metadata_json.language — skipping language gate "
+                    "(allowlist=%r)",
+                    matrix.dataset_name,
+                    matrix.language_allowlist,
+                )
+            elif ds_language not in matrix.language_allowlist:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Dataset {matrix.dataset_name!r} has language {ds_language!r} "
+                        f"which is not in the experiment's language_allowlist "
+                        f"{matrix.language_allowlist!r}."
+                    ),
+                )
+
     await coordinator.enrich_model_configs(matrix)
     experiment_id = await coordinator.submit_experiment(matrix)
     # total_runs = one run per strategy × num_repetitions (no cross-product axes).
