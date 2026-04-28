@@ -9,11 +9,13 @@ Usage::
 
     from sec_review_framework.ground_truth._source_check_migration import (
         ensure_source_check_includes,
+        ensure_negative_source_check_includes,
     )
 
     await ensure_source_check_includes(db, "crossvul")
+    await ensure_negative_source_check_includes(db, "sard")
 
-The call is idempotent: if the value is already accepted the function
+Both calls are idempotent: if the value is already accepted the function
 returns immediately without touching the schema.
 """
 
@@ -146,6 +148,113 @@ async def ensure_source_check_includes(db: Database, new_source: str) -> None:
             await conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_dataset_labels_cwe "
                 "ON dataset_labels(cwe_id)"
+            )
+
+            await conn.execute("COMMIT")
+        except Exception:
+            await conn.execute("ROLLBACK")
+            raise
+
+        await conn.execute("PRAGMA foreign_keys = ON")
+
+
+# ---------------------------------------------------------------------------
+# Negative labels source CHECK migration
+# ---------------------------------------------------------------------------
+
+#: The current canonical set of allowed source values for dataset_negative_labels.
+_BASE_NEGATIVE_SOURCE_VALUES: tuple[str, ...] = (
+    "benchmark",
+    "manual",
+    "sard",
+)
+
+
+async def ensure_negative_source_check_includes(db: Database, new_source: str) -> None:
+    """Idempotent migration: guarantee that *new_source* is accepted by the
+    ``dataset_negative_labels.source`` CHECK constraint.
+
+    Follows the same probe-then-rebuild pattern as
+    :func:`ensure_source_check_includes`.
+
+    Args:
+        db: Initialised framework :class:`~sec_review_framework.db.Database`.
+        new_source: The source string that must be accepted (e.g. ``"sard"``).
+    """
+    accepted = tuple(sorted(set(_BASE_NEGATIVE_SOURCE_VALUES) | {new_source}))
+    check_sql = _build_check_sql(accepted)
+
+    async with aiosqlite.connect(db.db_path) as conn:
+        await conn.execute("PRAGMA foreign_keys = OFF")
+
+        # --- 1. Probe ---
+        # FK is OFF, so the insert only tests the CHECK constraint.
+        already_ok = False
+        try:
+            await conn.execute("SAVEPOINT _probe_neg_source_check")
+            await conn.execute(
+                f"""
+                INSERT INTO dataset_negative_labels (
+                    id, dataset_name, dataset_version, file_path,
+                    cwe_id, vuln_class, source, created_at
+                ) VALUES (
+                    '_probe_neg_{new_source}', '_probe_ds', 'v0', 'probe.py',
+                    'CWE-0', 'other', '{new_source}', '2000-01-01T00:00:00'
+                )
+                """
+            )
+            await conn.execute("ROLLBACK TO SAVEPOINT _probe_neg_source_check")
+            await conn.execute("RELEASE SAVEPOINT _probe_neg_source_check")
+            already_ok = True
+        except Exception:
+            try:
+                await conn.execute("ROLLBACK TO SAVEPOINT _probe_neg_source_check")
+                await conn.execute("RELEASE SAVEPOINT _probe_neg_source_check")
+            except Exception:
+                pass
+
+        if already_ok:
+            await conn.execute("PRAGMA foreign_keys = ON")
+            return
+
+        # --- 2. Rebuild with wider CHECK ---
+        await conn.execute("BEGIN")
+        try:
+            await conn.execute(
+                f"""
+                CREATE TABLE dataset_negative_labels_new (
+                    id              TEXT PRIMARY KEY,
+                    dataset_name    TEXT NOT NULL REFERENCES datasets(name) ON DELETE CASCADE,
+                    dataset_version TEXT NOT NULL,
+                    file_path       TEXT NOT NULL,
+                    cwe_id          TEXT NOT NULL,
+                    vuln_class      TEXT NOT NULL,
+                    source          TEXT NOT NULL {check_sql},
+                    source_ref      TEXT,
+                    created_at      TEXT NOT NULL,
+                    notes           TEXT
+                )
+                """
+            )
+
+            await conn.execute(
+                "INSERT INTO dataset_negative_labels_new "
+                "SELECT * FROM dataset_negative_labels"
+            )
+
+            await conn.execute("DROP TABLE dataset_negative_labels")
+            await conn.execute(
+                "ALTER TABLE dataset_negative_labels_new RENAME TO dataset_negative_labels"
+            )
+
+            # Recreate indexes
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_dataset_negative_labels_dataset "
+                "ON dataset_negative_labels(dataset_name, dataset_version)"
+            )
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_dataset_negative_labels_cwe "
+                "ON dataset_negative_labels(cwe_id)"
             )
 
             await conn.execute("COMMIT")
