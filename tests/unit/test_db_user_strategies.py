@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
+
+import pytest
 
 from sec_review_framework.data.strategy_bundle import (
     OrchestrationShape,
@@ -13,6 +16,7 @@ from sec_review_framework.data.strategy_bundle import (
     canonical_json,
 )
 from sec_review_framework.db import Database
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -196,11 +200,37 @@ async def test_delete_builtin_at_db_layer_succeeds(temp_database: Database):
 
 
 # ---------------------------------------------------------------------------
-# strategy_is_referenced_by_runs — always False until follow-up agent lands
+# strategy_is_referenced_by_runs — checks experiments.config_json strategy_ids
 # ---------------------------------------------------------------------------
 
 
-async def test_strategy_is_referenced_by_runs_returns_false(temp_database: Database):
-    """Placeholder: always returns False until the runs table gains strategy_id."""
-    result = await temp_database.strategy_is_referenced_by_runs("builtin.single_agent")
-    assert result is False
+async def test_strategy_is_referenced_by_runs_db_method(temp_database: Database):
+    """Direct unit test of db.strategy_is_referenced_by_runs.
+
+    Seeds an experiment with config_json containing a strategy_ids array, then
+    verifies:
+    - matching strategy_id returns True
+    - non-matching strategy_id returns False
+    - a substring of an existing strategy_id returns False (whole-element match)
+    """
+    import json
+
+    strategy = _make_single_agent_strategy("user.foo.abc123")
+    await temp_database.insert_user_strategy(strategy)
+
+    config = json.dumps({"strategy_ids": ["user.foo.abc123"], "name": "test-exp"})
+    await temp_database.create_experiment(
+        experiment_id="exp-ref-test",
+        config_json=config,
+        total_runs=1,
+        max_cost_usd=None,
+    )
+
+    # Exact match → True
+    assert await temp_database.strategy_is_referenced_by_runs("user.foo.abc123") is True
+
+    # Different strategy_id → False
+    assert await temp_database.strategy_is_referenced_by_runs("user.bar.def456") is False
+
+    # Substring of existing id → False (JSON1 whole-element match)
+    assert await temp_database.strategy_is_referenced_by_runs("user.fo") is False

@@ -1012,13 +1012,33 @@ class Database:
             return deleted
 
     async def strategy_is_referenced_by_runs(self, strategy_id: str) -> bool:
-        """Return True if any run references *strategy_id*.
+        """Return True if any experiment's config references *strategy_id*.
 
-        TODO: The runs table does not yet have a strategy_id column — this will
-        be added by a follow-up agent that wires UserStrategy into run creation.
-        Until then this always returns False so DELETE works on all user strategies.
+        Strategies are listed in experiments.config_json under the
+        "strategy_ids" array. We probe that JSON via SQLite's JSON1 extension.
+
+        If the JSON1 path doesn't exist (e.g. config_json doesn't have a
+        ``strategy_ids`` key, or the JSON parse fails), ``json_extract`` returns
+        NULL and ``json_each`` over NULL yields no rows — so the check correctly
+        returns False.
         """
-        return False
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                """
+                SELECT EXISTS(
+                    SELECT 1 FROM experiments
+                    WHERE EXISTS(
+                        SELECT 1 FROM json_each(
+                            json_extract(config_json, '$.strategy_ids')
+                        )
+                        WHERE value = ?
+                    )
+                )
+                """,
+                (strategy_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+                return bool(row[0]) if row else False
 
     # ---------------------------------------------------------------------------
     # Upload tokens (HTTP result transport)

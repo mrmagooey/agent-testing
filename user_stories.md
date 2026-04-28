@@ -1283,6 +1283,65 @@ consistency automatically — no manual rebuild needed.
 The pre-existing test's outdated docstring was also updated to
 reflect the new contract.
 
+### 46. Strategy delete honours frontend's "referenced by runs" warning
+
+**Backend fix:** `src/sec_review_framework/db.py`
+**Backend tests:** `tests/api/test_strategies_api.py` (+3),
+`tests/unit/test_db_user_strategies.py` (replaced placeholder)
+
+> As a strategy author cleaning up old strategies, I expect the API
+> to honour the frontend's claim that 'strategies referenced by
+> existing runs cannot be deleted' — currently the backend rubber-
+> stamps the delete regardless, leaving the frontend's warning a lie.
+
+**The bug**: `Database.strategy_is_referenced_by_runs` was a stub
+that always returned `False` with a TODO ("runs table does not yet
+have a strategy_id column"). The 409 branch in `delete_strategy`
+(`coordinator.py:4011`) was therefore unreachable, so any user
+strategy could be deleted including ones in active use. Meanwhile
+`StrategyViewer.tsx:317` told users:
+> "Strategies referenced by existing runs cannot be deleted."
+
+That message was a lie — and orphaned strategies could leave the
+detail page 404'ing for any user who follows a stale link.
+
+**The fix**: replace the stub with a SQLite JSON1 query against
+`experiments.config_json`:
+
+```sql
+SELECT EXISTS(
+    SELECT 1 FROM experiments
+    WHERE EXISTS(
+        SELECT 1 FROM json_each(json_extract(config_json, '$.strategy_ids'))
+        WHERE value = ?
+    )
+)
+```
+
+The runs table itself doesn't have a strategy_id column, but the
+strategy_ids that the experiment was submitted with are embedded
+in `experiments.config_json["strategy_ids"]` (a list). The function
+name keeps "_by_runs" because that's how users think about it
+(every experiment has runs that USE the strategy).
+
+NULL-safe: if `config_json` lacks a `strategy_ids` key or fails to
+parse, `json_extract` returns NULL → `json_each` yields no rows →
+returns False. JSON1 is shipped with stock CPython 3.9+, so no
+build flag concern.
+
+**Tests added** (3 + 1 unit replacement):
+- API: `test_delete_strategy_referenced_by_experiment_returns_409`
+- API: `test_delete_strategy_unreferenced_succeeds_204`
+- API: `test_delete_strategy_referenced_by_terminal_experiment_returns_409`
+  — completed experiments still hold a historical reference; delete
+  must still 409
+- Unit: replaced the old always-True placeholder with a method test
+  covering exact match, no match, and substring-of-id (proves the
+  JSON1 whole-element match, not LIKE-style substring)
+
+**Result**: 35/35 strategy + DB-strategy tests pass; new tests
+demonstrably fail on the unfixed stub.
+
 ---
 
 ## Candidate stories for future iterations

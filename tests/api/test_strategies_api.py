@@ -6,6 +6,7 @@ tests/integration/test_coordinator_api.py.
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -19,8 +20,16 @@ from sec_review_framework.coordinator import (
     app,
 )
 from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
+from sec_review_framework.data.strategy_bundle import (
+    OrchestrationShape,
+    OverrideRule,
+    StrategyBundleDefault,
+    StrategyBundleOverride,
+    UserStrategy,
+)
 from sec_review_framework.db import Database
 from sec_review_framework.reporting.markdown import MarkdownReportGenerator
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -411,3 +420,105 @@ def test_delete_nonexistent_returns_404(strategy_client):
     client, *_ = strategy_client
     resp = client.delete("/api/strategies/user.ghost.000000")
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# DELETE /strategies/{id} — 409 when referenced by an experiment
+# ---------------------------------------------------------------------------
+
+import json
+
+
+async def test_delete_strategy_referenced_by_experiment_returns_409(strategy_client):
+    """DELETE returns 409 when an experiment's config_json lists the strategy_id."""
+    client, db, _ = strategy_client
+
+    payload = {
+        "name": "Referenced Strategy",
+        "orchestration_shape": "single_agent",
+        "default": _SAMPLE_DEFAULT,
+        "overrides": [],
+    }
+    post_resp = client.post("/api/strategies", json=payload)
+    assert post_resp.status_code == 201
+    created_id = post_resp.json()["id"]
+
+    # Seed an experiment that references the strategy
+    config = json.dumps({"strategy_ids": [created_id], "name": "referencing-exp"})
+    await db.create_experiment(
+        experiment_id="exp-ref-409",
+        config_json=config,
+        total_runs=1,
+        max_cost_usd=None,
+    )
+
+    del_resp = client.delete(f"/api/strategies/{created_id}")
+    assert del_resp.status_code == 409
+
+
+async def test_delete_strategy_unreferenced_succeeds_204(strategy_client):
+    """DELETE returns 204 when no experiment references the strategy."""
+    client, db, _ = strategy_client
+
+    payload = {
+        "name": "Unreferenced Strategy",
+        "orchestration_shape": "single_agent",
+        "default": _SAMPLE_DEFAULT,
+        "overrides": [],
+    }
+    post_resp = client.post("/api/strategies", json=payload)
+    assert post_resp.status_code == 201
+    created_id = post_resp.json()["id"]
+
+    # Seed an experiment that references a DIFFERENT strategy
+    config = json.dumps({"strategy_ids": ["builtin.single_agent"], "name": "unrelated-exp"})
+    await db.create_experiment(
+        experiment_id="exp-unrelated-204",
+        config_json=config,
+        total_runs=1,
+        max_cost_usd=None,
+    )
+
+    del_resp = client.delete(f"/api/strategies/{created_id}")
+    assert del_resp.status_code == 204
+
+    # Confirm it's gone
+    get_resp = client.get(f"/api/strategies/{created_id}")
+    assert get_resp.status_code == 404
+
+
+async def test_delete_strategy_referenced_by_terminal_experiment_returns_409(strategy_client):
+    """DELETE returns 409 even when the referencing experiment is completed.
+
+    A strategy referenced by a finished experiment is still historically
+    referenced and must not be deleted.
+    """
+    client, db, _ = strategy_client
+
+    payload = {
+        "name": "Completed-Exp Strategy",
+        "orchestration_shape": "single_agent",
+        "default": _SAMPLE_DEFAULT,
+        "overrides": [],
+    }
+    post_resp = client.post("/api/strategies", json=payload)
+    assert post_resp.status_code == 201
+    created_id = post_resp.json()["id"]
+
+    # Seed a completed experiment referencing the strategy
+    config = json.dumps({"strategy_ids": [created_id], "name": "done-exp"})
+    await db.create_experiment(
+        experiment_id="exp-completed-409",
+        config_json=config,
+        total_runs=1,
+        max_cost_usd=None,
+    )
+    # Mark experiment as completed
+    await db.update_experiment_status(
+        "exp-completed-409",
+        status="completed",
+        completed_at="2026-01-01T00:00:00+00:00",
+    )
+
+    del_resp = client.delete(f"/api/strategies/{created_id}")
+    assert del_resp.status_code == 409
