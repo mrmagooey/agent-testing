@@ -32,6 +32,7 @@ export default function CVEDiscovery() {
   const [resolveError, setResolveError] = useState<string | null>(null)
   const [importing, setImporting] = useState(false)
   const [importSuccess, setImportSuccess] = useState(false)
+  const [importError, setImportError] = useState<string | null>(null)
 
   const toggleItem = (list: string[], setter: (v: string[]) => void, item: string) => {
     setter(list.includes(item) ? list.filter((i) => i !== item) : [...list, item])
@@ -41,6 +42,7 @@ export default function CVEDiscovery() {
     e.preventDefault()
     setSearching(true)
     setSearchError(null)
+    setImportError(null)
     setHasSearched(true)
     try {
       const criteria: Record<string, unknown> = {}
@@ -66,6 +68,7 @@ export default function CVEDiscovery() {
     setResolveError(null)
     setResolved(null)
     setImportSuccess(false)
+    setImportError(null)
     try {
       const result = await resolveCVE(cveId.trim())
       setResolved(result)
@@ -78,8 +81,11 @@ export default function CVEDiscovery() {
 
   const handleImport = async (cveIds: string[]) => {
     setImporting(true)
+    setImportError(null)
     try {
       await Promise.all(cveIds.map((id) => importCVE(id)))
+    } catch (err) {
+      setImportError(err instanceof Error ? err.message : 'Import failed')
     } finally {
       setImporting(false)
     }
@@ -88,9 +94,12 @@ export default function CVEDiscovery() {
   const handleImportResolved = async () => {
     if (!resolved) return
     setImporting(true)
+    setImportError(null)
     try {
       await importCVE(resolved.cve_id)
       setImportSuccess(true)
+    } catch (err) {
+      setImportError(err instanceof Error ? err.message : 'Import failed')
     } finally {
       setImporting(false)
     }
@@ -114,7 +123,7 @@ export default function CVEDiscovery() {
         {tabs.map((t) => (
           <button
             key={t.key}
-            onClick={() => setActiveTab(t.key)}
+            onClick={() => { setActiveTab(t.key); setImportError(null) }}
             className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
               activeTab === t.key
                 ? 'border-amber-600 text-amber-600 dark:text-amber-400'
@@ -232,6 +241,12 @@ export default function CVEDiscovery() {
             </div>
           )}
 
+          {importError && (
+            <div role="alert" className="p-3 rounded-lg bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 text-sm">
+              {importError}
+            </div>
+          )}
+
           {candidates.length > 0 ? (
             <CVECandidateTable candidates={candidates} onImport={handleImport} />
           ) : hasSearched && !searching && !searchError ? (
@@ -287,6 +302,11 @@ export default function CVEDiscovery() {
                 </dl>
                 {resolved.description && (
                   <p className="text-sm text-gray-600 dark:text-gray-400">{resolved.description}</p>
+                )}
+                {importError && (
+                  <div role="alert" className="p-3 rounded-lg bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 text-sm">
+                    {importError}
+                  </div>
                 )}
                 {importSuccess ? (
                   <p className="text-sm text-green-600 dark:text-green-400 font-medium">Imported successfully.</p>

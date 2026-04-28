@@ -1573,6 +1573,42 @@ that already build a complete spec hit the same code as before.
 **Result**: 62/62 dataset-API + CVE-injection tests pass; new tests
 demonstrably fail on the unfixed code.
 
+### 53. CVE Discovery import buttons surface errors instead of swallowing
+
+**Frontend fix:** `frontend/src/pages/CVEDiscovery.tsx`
+**Frontend tests:** `frontend/e2e/cve-discovery-import-errors.spec.ts` (3)
+
+> As a security researcher importing a CVE, when the resolver fails
+> or the import errors, I want clear feedback in the UI — currently
+> the import buttons silently swallow the error and just stop being
+> 'Importing…' with no indication of what went wrong.
+
+Fourth application of the silent-error UX fix pattern (iters 44, 47,
+48). Both `handleImport` and `handleImportResolved` had `try { … }
+finally { setImporting(false) }` with no catch — so iter 52's
+backend errors (404 unresolvable, 502 resolver-failed, 400 git-
+failure) propagated as unhandled rejections.
+
+**The fix**: same pattern as the prior three iterations.
+`importError: string | null` state; both handlers capture
+`err.message` (fallback `'Import failed'`); reset on tab switch,
+on fresh search, and on Resolve. Render inline `<div role="alert">`
+in both tabs.
+
+**Tests** (3):
+- Resolve tab: 404 with `{detail: "Could not resolve …"}` →
+  `getByRole('alert')` shows detail; "Imported successfully" NOT
+  visible; button re-enables.
+- Tab-switch state reset: error visible → switch to Search → switch
+  back to Resolve → no alert.
+- Search tab: 500 from a row Import → alert visible above the
+  candidate table.
+
+**Result**: 6/6 tests pass on chromium + firefox; typecheck clean.
+
+This iteration completes the matched-pair with iter 52: the backend
+now returns meaningful errors AND the frontend now displays them.
+
 ---
 
 ## Candidate stories for future iterations
