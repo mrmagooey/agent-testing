@@ -884,6 +884,52 @@ agnostic test 3 uses `context.on('request')` as the firefox-safe
 path so the URL contract still has at least one assertion running
 on both browsers.
 
+### 36. Dashboard auto-refreshes the experiments list every 15 seconds
+
+**Spec:** `frontend/e2e/dashboard-polling.spec.ts` (commit pending)
+
+> As a security researcher watching a long-running experiment, I want
+> the Dashboard's experiments list to refresh automatically every 15
+> seconds so I see live progress (running → completed transitions)
+> without manually reloading the page.
+
+Covers `Dashboard.tsx:23` (`POLL_INTERVAL_MS = 15_000`) and the
+`useEffect`/`setInterval` polling loop at lines 228–234. Five tests:
+
+- Initial mount fires GET `/api/experiments` and stabilises before
+  the 15 s interval (assertion uses `toBeGreaterThanOrEqual(1)`
+  because `<StrictMode>` double-mounts `useEffect` in dev — see
+  caveat below)
+- After advancing 15 s of fake clock time, a second GET fires
+- Polled response replaces the table — an experiment whose status
+  flips from `running` → `completed` between fetches disappears
+  from the "Active experiments" section and appears in "Recent
+  experiments" (the page splits experiments into two tables, not
+  one row that mutates)
+- Polling continues — a third GET fires after 30 s total
+- Navigating away from `/` (e.g. to `/findings`) unmounts the
+  page and the cleanup tears down `setInterval`; no further GETs
+  fire even after advancing the fake clock 30 s
+
+**Technique**: Uses Playwright's `page.clock.install({ time })` +
+`page.clock.runFor(15_000)` to deterministically advance time. No
+`waitForTimeout`-based real-time waits — baseline `callCount`
+captures use `expect.poll(() => callCount).toBeGreaterThanOrEqual(1)`
+so they settle on whatever StrictMode's actual call count happens
+to be without racing on slow CI. Test 5 guards against vacuous
+pass with explicit `toHaveURL(/\/findings/)` + Findings-page
+heading visibility before capturing the post-nav baseline.
+
+**StrictMode caveat captured**: dev mode mounts `useEffect` twice
+so the initial `fetchExperiments(true)` fires 2x and 2 setInterval
+instances are created (the first cleared immediately by cleanup).
+Tests treat this as opaque by capturing `baseline` post-mount
+rather than asserting `count == 1`; production users on a
+`vite preview`-style build see only 1 fetch, so the user-visible
+behaviour is unaffected.
+
+**Result**: 10/10 pass on chromium and firefox.
+
 ---
 
 ## Candidate stories for future iterations
