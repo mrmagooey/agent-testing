@@ -1490,11 +1490,13 @@ class Database:
                     INSERT INTO datasets (
                         name, kind, origin_url, origin_commit, origin_ref,
                         cve_id, base_dataset, recipe_json, metadata_json,
-                        created_at, materialized_at
+                        created_at, materialized_at,
+                        archive_url, archive_sha256, archive_format
                     ) VALUES (
                         :name, :kind, :origin_url, :origin_commit, :origin_ref,
                         :cve_id, :base_dataset, :recipe_json, :metadata_json,
-                        :created_at, :materialized_at
+                        :created_at, :materialized_at,
+                        :archive_url, :archive_sha256, :archive_format
                     )
                     """,
                     {
@@ -1509,6 +1511,9 @@ class Database:
                         "metadata_json": r.get("metadata_json", "{}"),
                         "created_at": r["created_at"],
                         "materialized_at": r.get("materialized_at"),
+                        "archive_url": r.get("archive_url"),
+                        "archive_sha256": r.get("archive_sha256"),
+                        "archive_format": r.get("archive_format"),
                     },
                 )
 

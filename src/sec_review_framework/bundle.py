@@ -11,9 +11,13 @@ Bundle layout (ZIP, deflate for JSON/MD, store for .jsonl >1 MiB):
     dataset_labels.json            — dataset_labels rows (descriptor mode only)
     dataset_negative_labels.json   — dataset_negative_labels rows (descriptor mode only)
 
-Schema version is 2.  Importers MUST reject unknown schema_version values.
+Schema version is 3.  Importers MUST reject unknown schema_version values.
 Version 1 bundles (lacking dataset_negative_labels.json) still import cleanly —
 the missing file is treated as an empty array.
+Version 2 bundles (lacking archive_* dataset columns) still import cleanly —
+those fields default to None for non-archive rows.
+Version 3 adds archive_url / archive_sha256 / archive_format columns to
+datasets.json rows for kind='archive' datasets.
 
 dataset_mode values:
   "descriptor" — datasets.json + dataset_labels.json included (default)
@@ -58,7 +62,7 @@ _BUNDLE_UPLOAD_MAX_BYTES: int = int(
     os.environ.get("BUNDLE_UPLOAD_MAX_BYTES", str(2 * 1024 * 1024 * 1024))
 )
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 BUNDLE_KIND = "experiment"
 
 _VALID_DATASET_MODES = frozenset({"reference", "descriptor"})

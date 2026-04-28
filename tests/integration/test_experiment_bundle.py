@@ -519,7 +519,7 @@ async def test_missing_dataset_import_succeeds(tmp_path: Path):
 
 
 def test_unknown_schema_version_rejected(coordinator_client):
-    """Bundles with schema_version != 1 are rejected with 400."""
+    """Bundles with unsupported schema_version (e.g. 99) are rejected with 400."""
     client, c, storage_root, db = coordinator_client
     exp_id = "schema-exp"
 
@@ -1024,6 +1024,9 @@ def _make_dataset_row(
     name: str,
     kind: str = "git",
     base_dataset: str | None = None,
+    archive_url: str | None = None,
+    archive_sha256: str | None = None,
+    archive_format: str | None = None,
 ) -> dict:
     """Build a minimal dataset row suitable for db.create_dataset."""
     row: dict = {
@@ -1039,6 +1042,10 @@ def _make_dataset_row(
     elif kind == "derived":
         row["base_dataset"] = base_dataset
         row["recipe_json"] = json.dumps({"filter": "cve"})
+    elif kind == "archive":
+        row["archive_url"] = archive_url or f"https://example.com/{name}.tar.gz"
+        row["archive_sha256"] = archive_sha256 or ("a" * 64)
+        row["archive_format"] = archive_format or "tar.gz"
     return row
 
 
@@ -1077,6 +1084,9 @@ async def _seed_db_with_dataset(
     dataset_kind: str = "git",
     base_dataset_name: str | None = None,
     label_count: int = 3,
+    archive_url: str | None = None,
+    archive_sha256: str | None = None,
+    archive_format: str | None = None,
 ) -> None:
     """Seed DB with an experiment whose runs reference a dataset, plus label rows."""
     # Create base dataset if needed
@@ -1087,7 +1097,14 @@ async def _seed_db_with_dataset(
             await db.append_dataset_labels([_make_label_row(base_dataset_name, i)])
 
     # Create the main dataset
-    ds_row = _make_dataset_row(dataset_name, kind=dataset_kind, base_dataset=base_dataset_name)
+    ds_row = _make_dataset_row(
+        dataset_name,
+        kind=dataset_kind,
+        base_dataset=base_dataset_name,
+        archive_url=archive_url,
+        archive_sha256=archive_sha256,
+        archive_format=archive_format,
+    )
     await db.create_dataset(ds_row)
     for i in range(label_count):
         await db.append_dataset_labels([_make_label_row(dataset_name, i)])
@@ -1750,3 +1767,361 @@ async def test_old_bundle_without_negative_labels_imports_cleanly(tmp_path: Path
     # Positive labels still imported correctly
     pos_in_target = await target_db.list_dataset_labels(ds_name)
     assert len(pos_in_target) == 2
+
+
+# ---------------------------------------------------------------------------
+# Test 29: Round-trip with kind='archive' dataset (schema_version 3)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_archive_dataset_round_trip(tmp_path: Path):
+    """kind='archive' dataset round-trips through export/import with archive_* fields intact."""
+    ds_name = "sard-archive"
+    exp_id = "archive-exp"
+    run_id = "run-archive-1"
+
+    archive_url = "https://samate.nist.gov/SARD/testcases/sard-v1.tar.gz"
+    archive_sha256 = "b" * 64
+    archive_format = "tar.gz"
+
+    source_storage = tmp_path / "source_storage"
+    source_db = Database(tmp_path / "source.db")
+    await source_db.init()
+
+    await _seed_db_with_dataset(
+        source_db, exp_id, [run_id],
+        dataset_name=ds_name,
+        dataset_kind="archive",
+        label_count=2,
+        archive_url=archive_url,
+        archive_sha256=archive_sha256,
+        archive_format=archive_format,
+    )
+    _create_experiment_on_disk(source_storage, exp_id, run_id)
+
+    out_path = tmp_path / "export.secrev.zip"
+    await async_write_bundle(
+        source_db, source_storage, exp_id,
+        dataset_mode="descriptor", out_path=out_path,
+    )
+
+    # Verify schema_version is 3
+    manifest = read_manifest(out_path)
+    assert manifest["schema_version"] == 3
+
+    # Verify archive_* fields are present in datasets.json
+    with zipfile.ZipFile(out_path, "r") as zf:
+        ds_rows = json.loads(zf.read("datasets.json"))
+
+    assert len(ds_rows) == 1
+    row = ds_rows[0]
+    assert row["name"] == ds_name
+    assert row["kind"] == "archive"
+    assert row["archive_url"] == archive_url
+    assert row["archive_sha256"] == archive_sha256
+    assert row["archive_format"] == archive_format
+    # git/derived fields absent or None
+    assert row.get("origin_url") is None
+    assert row.get("base_dataset") is None
+
+    # Import into a fresh DB
+    target_storage = tmp_path / "target_storage"
+    target_db = Database(tmp_path / "target.db")
+    await target_db.init()
+
+    summary = await async_apply_bundle(target_db, target_storage, out_path, conflict_policy="reject")
+    assert summary["datasets_imported"] == 1
+
+    # Verify the restored row is byte-identical for all archive_* fields
+    restored_ds = await target_db.get_dataset(ds_name)
+    assert restored_ds is not None
+    assert restored_ds["kind"] == "archive"
+    assert restored_ds["archive_url"] == archive_url
+    assert restored_ds["archive_sha256"] == archive_sha256
+    assert restored_ds["archive_format"] == archive_format
+    # materialized_at is cleared on import (re-materialization happens separately)
+    assert restored_ds["materialized_at"] is None
+
+
+# ---------------------------------------------------------------------------
+# Test 30: Old bundle (schema_version 2) without archive_* fields imports cleanly
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_v2_bundle_without_archive_fields_imports_cleanly(tmp_path: Path):
+    """A schema_version 2 bundle without archive_* dataset columns imports without error."""
+    ds_name = "v2-git-ds"
+    exp_id = "v2-compat-exp"
+    run_id = "run-v2-1"
+
+    source_storage = tmp_path / "source_storage"
+    source_db = Database(tmp_path / "source.db")
+    await source_db.init()
+
+    await _seed_db_with_dataset(
+        source_db, exp_id, [run_id],
+        dataset_name=ds_name, dataset_kind="git", label_count=2,
+    )
+    _create_experiment_on_disk(source_storage, exp_id, run_id)
+
+    # Export normally (schema_version 3)
+    out_path = tmp_path / "export.secrev.zip"
+    await async_write_bundle(
+        source_db, source_storage, exp_id,
+        dataset_mode="descriptor", out_path=out_path,
+    )
+
+    # Synthesize a v2 bundle: downgrade schema_version to 2 and strip archive_* from datasets.json
+    v2_bundle = tmp_path / "v2_bundle.secrev.zip"
+    with zipfile.ZipFile(out_path, "r") as zin, zipfile.ZipFile(v2_bundle, "w") as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename == "manifest.json":
+                m = json.loads(data)
+                m["schema_version"] = 2
+                data = json.dumps(m).encode()
+            elif item.filename == "datasets.json":
+                rows = json.loads(data)
+                # Strip archive_* columns (they weren't present in v2)
+                stripped = [
+                    {k: v for k, v in row.items()
+                     if k not in ("archive_url", "archive_sha256", "archive_format")}
+                    for row in rows
+                ]
+                data = json.dumps(stripped).encode()
+            zout.writestr(item, data)
+
+    # Import must succeed without error
+    target_storage = tmp_path / "target_storage"
+    target_db = Database(tmp_path / "target.db")
+    await target_db.init()
+
+    summary = await async_apply_bundle(target_db, target_storage, v2_bundle, conflict_policy="reject")
+    assert summary["experiment_id"] == exp_id
+    assert summary["datasets_imported"] == 1
+
+    # Dataset restored with NULL archive_* fields (tolerated for non-archive rows)
+    restored = await target_db.get_dataset(ds_name)
+    assert restored is not None
+    assert restored["kind"] == "git"
+    assert restored.get("archive_url") is None
+    assert restored.get("archive_sha256") is None
+    assert restored.get("archive_format") is None
+
+
+# ---------------------------------------------------------------------------
+# Test 31: v1 bundle (no negative labels, no archive_* fields) still imports
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_v1_bundle_still_imports(tmp_path: Path):
+    """A schema_version 1 bundle (no negative labels, no archive fields) imports cleanly."""
+    ds_name = "v1-legacy-ds"
+    exp_id = "v1-legacy-exp"
+    run_id = "run-v1-1"
+
+    source_storage = tmp_path / "source_storage"
+    source_db = Database(tmp_path / "source.db")
+    await source_db.init()
+
+    await _seed_db_with_dataset(
+        source_db, exp_id, [run_id],
+        dataset_name=ds_name, dataset_kind="git", label_count=3,
+    )
+    _create_experiment_on_disk(source_storage, exp_id, run_id)
+
+    # Export normally (schema_version 3)
+    out_path = tmp_path / "export.secrev.zip"
+    await async_write_bundle(
+        source_db, source_storage, exp_id,
+        dataset_mode="descriptor", out_path=out_path,
+    )
+
+    # Synthesize a v1 bundle: downgrade schema_version to 1, remove negative labels
+    # file, and strip archive_* from datasets.json
+    v1_bundle = tmp_path / "v1_bundle.secrev.zip"
+    with zipfile.ZipFile(out_path, "r") as zin, zipfile.ZipFile(v1_bundle, "w") as zout:
+        for item in zin.infolist():
+            if item.filename == "dataset_negative_labels.json":
+                continue  # v1 bundles don't have this file
+            data = zin.read(item.filename)
+            if item.filename == "manifest.json":
+                m = json.loads(data)
+                m["schema_version"] = 1
+                m["artifact_counts"].pop("dataset_negative_label_count", None)
+                data = json.dumps(m).encode()
+            elif item.filename == "datasets.json":
+                rows = json.loads(data)
+                # v1 bundles don't have archive_* columns
+                stripped = [
+                    {k: v for k, v in row.items()
+                     if k not in ("archive_url", "archive_sha256", "archive_format")}
+                    for row in rows
+                ]
+                data = json.dumps(stripped).encode()
+            zout.writestr(item, data)
+
+    # Import must succeed
+    target_storage = tmp_path / "target_storage"
+    target_db = Database(tmp_path / "target.db")
+    await target_db.init()
+
+    summary = await async_apply_bundle(target_db, target_storage, v1_bundle, conflict_policy="reject")
+    assert summary["experiment_id"] == exp_id
+    assert summary["datasets_imported"] == 1
+    assert summary["dataset_labels_imported"] == 3
+    assert summary["dataset_negative_labels_imported"] == 0
+
+    # Dataset row correctly restored
+    restored = await target_db.get_dataset(ds_name)
+    assert restored is not None
+    assert restored["kind"] == "git"
+
+
+# ---------------------------------------------------------------------------
+# Test 32: Mixed bundle (git + derived + archive) round-trips correctly
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_mixed_bundle_round_trip(tmp_path: Path):
+    """A bundle with git, derived, and archive datasets round-trips all three correctly."""
+    git_name = "mixed-git-ds"
+    archive_name = "mixed-archive-ds"
+    derived_name = "mixed-derived-ds"
+    exp_id = "mixed-exp"
+    run_id = "run-mixed-1"
+
+    archive_url = "https://example.com/archive.tar.gz"
+    archive_sha256 = "c" * 64
+    archive_format = "tar.gz"
+
+    source_storage = tmp_path / "source_storage"
+    source_db = Database(tmp_path / "source.db")
+    await source_db.init()
+
+    # Create git dataset
+    await source_db.create_dataset(_make_dataset_row(git_name, kind="git"))
+    await source_db.append_dataset_labels([_make_label_row(git_name, 0)])
+
+    # Create archive dataset
+    await source_db.create_dataset(_make_dataset_row(
+        archive_name, kind="archive",
+        archive_url=archive_url,
+        archive_sha256=archive_sha256,
+        archive_format=archive_format,
+    ))
+
+    # Create derived dataset (based on git)
+    await source_db.create_dataset(_make_dataset_row(
+        derived_name, kind="derived", base_dataset=git_name,
+    ))
+    await source_db.append_dataset_labels([_make_label_row(derived_name, 0)])
+
+    # Create experiment referencing archive dataset (just one run for simplicity)
+    await source_db.import_experiment_rows(
+        experiment_row={
+            "id": exp_id,
+            "config_json": json.dumps({"experiment_id": exp_id, "dataset_name": archive_name}),
+            "status": "completed",
+            "total_runs": 1,
+            "max_cost_usd": None,
+            "spent_usd": 0.0,
+            "created_at": "2026-01-01T00:00:00",
+            "completed_at": "2026-01-01T01:00:00",
+        },
+        run_rows=[{
+            "id": run_id,
+            "experiment_id": exp_id,
+            "config_json": json.dumps({"run_id": run_id, "dataset_name": archive_name}),
+            "status": "completed",
+            "model_id": "gpt-4o",
+            "strategy": "single_agent",
+            "tool_variant": "with_tools",
+            "review_profile": "default",
+            "verification_variant": "none",
+            "estimated_cost_usd": 0.01,
+            "duration_seconds": 10.0,
+            "result_path": None,
+            "error": None,
+            "created_at": "2026-01-01T00:00:00",
+            "completed_at": "2026-01-01T01:00:00",
+            "tool_extensions": "",
+        }],
+    )
+    _create_experiment_on_disk(source_storage, exp_id, run_id)
+
+    # Export all three datasets explicitly via descriptor mode
+    # (only archive_name is referenced by runs; add git + derived manually by also
+    #  including them in another run's config or by using a multi-dataset experiment)
+    # For this test, we export then manually patch the bundle to include all three.
+    # Actually: create a second run referencing derived so the exporter collects it.
+    # Simplest: export using _write_bundle_from_rows with all three rows explicitly.
+    from sec_review_framework.bundle import _write_bundle_from_rows
+
+    exp_row = await source_db.get_experiment(exp_id)
+    run_rows = await source_db.list_runs(exp_id)
+    git_ds_row = await source_db.get_dataset(git_name)
+    archive_ds_row = await source_db.get_dataset(archive_name)
+    derived_ds_row = await source_db.get_dataset(derived_name)
+
+    out_path = tmp_path / "export.secrev.zip"
+    _write_bundle_from_rows(
+        exp_row=dict(exp_row),
+        run_rows=[dict(r) for r in run_rows],
+        storage_root=source_storage,
+        dataset_mode="descriptor",
+        out_path=out_path,
+        dataset_rows=[dict(git_ds_row), dict(archive_ds_row), dict(derived_ds_row)],
+        dataset_label_rows=[_make_label_row(git_name, 0), _make_label_row(derived_name, 0)],
+        dataset_negative_label_rows=[],
+    )
+
+    # Verify all three kinds appear in datasets.json
+    with zipfile.ZipFile(out_path, "r") as zf:
+        ds_rows = json.loads(zf.read("datasets.json"))
+
+    rows_by_name = {r["name"]: r for r in ds_rows}
+    assert git_name in rows_by_name
+    assert archive_name in rows_by_name
+    assert derived_name in rows_by_name
+
+    # Archive fields present for archive row
+    arch_row = rows_by_name[archive_name]
+    assert arch_row["kind"] == "archive"
+    assert arch_row["archive_url"] == archive_url
+    assert arch_row["archive_sha256"] == archive_sha256
+    assert arch_row["archive_format"] == archive_format
+
+    # Git row has None archive_* fields
+    git_row = rows_by_name[git_name]
+    assert git_row["kind"] == "git"
+    assert git_row.get("archive_url") is None
+
+    # Import into fresh DB
+    target_storage = tmp_path / "target_storage"
+    target_db = Database(tmp_path / "target.db")
+    await target_db.init()
+
+    summary = await async_apply_bundle(target_db, target_storage, out_path, conflict_policy="reject")
+    assert summary["datasets_imported"] == 3
+
+    # Verify all three kinds restored correctly
+    restored_git = await target_db.get_dataset(git_name)
+    restored_archive = await target_db.get_dataset(archive_name)
+    restored_derived = await target_db.get_dataset(derived_name)
+
+    assert restored_git["kind"] == "git"
+    assert restored_git.get("archive_url") is None
+
+    assert restored_archive["kind"] == "archive"
+    assert restored_archive["archive_url"] == archive_url
+    assert restored_archive["archive_sha256"] == archive_sha256
+    assert restored_archive["archive_format"] == archive_format
+
+    assert restored_derived["kind"] == "derived"
+    assert restored_derived["base_dataset"] == git_name
+    assert restored_derived.get("archive_url") is None
