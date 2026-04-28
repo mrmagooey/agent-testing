@@ -100,7 +100,7 @@ export default function Findings() {
       sort,
       limit,
       offset,
-    })
+    }, abortRef.current.signal)
       .then((res) => {
         setData(res)
         setLoading(false)

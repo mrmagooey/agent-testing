@@ -703,7 +703,7 @@ export interface GlobalFindingsParams {
   offset?: number
 }
 
-export function searchFindingsGlobal(params: GlobalFindingsParams): Promise<GlobalFindingsResponse> {
+export function searchFindingsGlobal(params: GlobalFindingsParams, signal?: AbortSignal): Promise<GlobalFindingsResponse> {
   const qs = new URLSearchParams()
   if (params.q) qs.set('q', params.q)
   for (const key of ['vuln_class', 'severity', 'match_status', 'model_id', 'strategy', 'experiment_id', 'dataset_name'] as const) {
@@ -718,7 +718,7 @@ export function searchFindingsGlobal(params: GlobalFindingsParams): Promise<Glob
   if (params.limit !== undefined) qs.set('limit', String(params.limit))
   if (params.offset !== undefined) qs.set('offset', String(params.offset))
   const query = qs.toString()
-  return apiFetch<GlobalFindingsResponse>(`/findings${query ? `?${query}` : ''}`)
+  return apiFetch<GlobalFindingsResponse>(`/findings${query ? `?${query}` : ''}`, signal ? { signal } : undefined)
 }
 
 // ─── Experiment Import/Export ──────────────────────────────────────────────

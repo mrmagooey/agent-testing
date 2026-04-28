@@ -246,6 +246,7 @@ describe('Findings — URL-param-driven behavior', () => {
     await waitFor(() => {
       expect(mockSearchFindingsGlobal).toHaveBeenCalledWith(
         expect.objectContaining({ q: 'buffer overflow' }),
+        expect.any(AbortSignal),
       )
     })
   })
@@ -258,6 +259,7 @@ describe('Findings — URL-param-driven behavior', () => {
     await waitFor(() => {
       expect(mockSearchFindingsGlobal).toHaveBeenCalledWith(
         expect.objectContaining({ sort: 'severity desc' }),
+        expect.any(AbortSignal),
       )
     })
   })

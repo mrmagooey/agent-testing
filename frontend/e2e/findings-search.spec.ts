@@ -206,3 +206,268 @@ test.describe('FindingsSearch on ExperimentDetail', () => {
     await expect(page.getByRole('row').filter({ hasText: XSS_TITLE })).toBeVisible()
   })
 })
+
+// ---------------------------------------------------------------------------
+// Global Findings page — AbortController cancellation regression
+// ---------------------------------------------------------------------------
+
+test.describe('Global Findings AbortController cancellation', () => {
+  test('stale slow request A does not overwrite faster request B result', async ({ page }) => {
+    const { mockApi } = await import('./helpers/mockApi')
+
+    // Fixture for the initial page load (and any StrictMode double-invocation):
+    // returns 3 items so the page starts in a stable "3 findings" state.
+    const fixtureInitial = {
+      total: 3,
+      limit: 50,
+      offset: 0,
+      facets: { vuln_class: {}, severity: {}, match_status: {}, model_id: {}, strategy: {}, dataset_name: {} },
+      items: [
+        {
+          finding_id: 'init-001',
+          run_id: 'run-001',
+          experiment_id: 'exp-001',
+          title: 'Initial finding one',
+          description: 'Initial',
+          vuln_class: 'sqli',
+          severity: 'critical',
+          match_status: 'tp',
+          file_path: 'src/a.py',
+          line_start: 1,
+          line_end: 2,
+          recommendation: '',
+          evidence_quality: 'strong',
+          matched_label_id: null,
+          experiment_name: 'Exp',
+          model_id: 'gpt-4o',
+          strategy: 'zero_shot',
+          dataset_name: 'ds',
+          created_at: '2026-01-01T00:00:00Z',
+          cwe_ids: [],
+        },
+        {
+          finding_id: 'init-002',
+          run_id: 'run-001',
+          experiment_id: 'exp-001',
+          title: 'Initial finding two',
+          description: 'Initial',
+          vuln_class: 'xss',
+          severity: 'high',
+          match_status: 'fp',
+          file_path: 'src/b.py',
+          line_start: 5,
+          line_end: 6,
+          recommendation: '',
+          evidence_quality: 'adequate',
+          matched_label_id: null,
+          experiment_name: 'Exp',
+          model_id: 'gpt-4o',
+          strategy: 'zero_shot',
+          dataset_name: 'ds',
+          created_at: '2026-01-02T00:00:00Z',
+          cwe_ids: [],
+        },
+        {
+          finding_id: 'init-003',
+          run_id: 'run-001',
+          experiment_id: 'exp-001',
+          title: 'Initial finding three',
+          description: 'Initial',
+          vuln_class: 'ssrf',
+          severity: 'medium',
+          match_status: 'tp',
+          file_path: 'src/c.py',
+          line_start: 10,
+          line_end: 11,
+          recommendation: '',
+          evidence_quality: 'strong',
+          matched_label_id: null,
+          experiment_name: 'Exp',
+          model_id: 'gpt-4o',
+          strategy: 'zero_shot',
+          dataset_name: 'ds',
+          created_at: '2026-01-03T00:00:00Z',
+          cwe_ids: [],
+        },
+      ],
+    }
+
+    // Fixture A (slow/stale): would clobber fresh results if cancellation is broken.
+    const fixtureA = {
+      total: 1,
+      limit: 50,
+      offset: 0,
+      facets: { vuln_class: {}, severity: {}, match_status: {}, model_id: {}, strategy: {}, dataset_name: {} },
+      items: [
+        {
+          finding_id: 'stale-001',
+          run_id: 'run-001',
+          experiment_id: 'exp-001',
+          title: 'STALE result should not appear',
+          description: 'Stale',
+          vuln_class: 'sqli',
+          severity: 'critical',
+          match_status: 'tp',
+          file_path: 'src/stale.py',
+          line_start: 1,
+          line_end: 5,
+          recommendation: '',
+          evidence_quality: 'strong',
+          matched_label_id: null,
+          experiment_name: 'Stale Exp',
+          model_id: 'gpt-4o',
+          strategy: 'zero_shot',
+          dataset_name: 'ds-stale',
+          created_at: '2026-01-01T00:00:00Z',
+          cwe_ids: [],
+        },
+      ],
+    }
+
+    // Fixture B (fast/fresh): the result we expect to see after cancellation.
+    const fixtureB = {
+      total: 2,
+      limit: 50,
+      offset: 0,
+      facets: { vuln_class: {}, severity: {}, match_status: {}, model_id: {}, strategy: {}, dataset_name: {} },
+      items: [
+        {
+          finding_id: 'fresh-001',
+          run_id: 'run-001',
+          experiment_id: 'exp-001',
+          title: 'Fresh XSS result',
+          description: 'Fresh',
+          vuln_class: 'xss',
+          severity: 'high',
+          match_status: 'fp',
+          file_path: 'src/fresh.py',
+          line_start: 10,
+          line_end: 15,
+          recommendation: '',
+          evidence_quality: 'adequate',
+          matched_label_id: null,
+          experiment_name: 'Fresh Exp',
+          model_id: 'gpt-4o',
+          strategy: 'zero_shot',
+          dataset_name: 'ds-fresh',
+          created_at: '2026-01-02T00:00:00Z',
+          cwe_ids: [],
+        },
+        {
+          finding_id: 'fresh-002',
+          run_id: 'run-001',
+          experiment_id: 'exp-001',
+          title: 'Fresh SSRF result',
+          description: 'Fresh',
+          vuln_class: 'ssrf',
+          severity: 'high',
+          match_status: 'tp',
+          file_path: 'src/fresh2.py',
+          line_start: 20,
+          line_end: 25,
+          recommendation: '',
+          evidence_quality: 'strong',
+          matched_label_id: 'label-b',
+          experiment_name: 'Fresh Exp',
+          model_id: 'gpt-4o',
+          strategy: 'zero_shot',
+          dataset_name: 'ds-fresh',
+          created_at: '2026-01-03T00:00:00Z',
+          cwe_ids: [],
+        },
+      ],
+    }
+
+    // Track browser-level request failures (aborted fetches appear here).
+    const abortedFindingsUrls: string[] = []
+    page.on('requestfailed', (req) => {
+      if (req.url().includes('/api/findings')) {
+        abortedFindingsUrls.push(req.url())
+      }
+    })
+
+    // Track all /api/findings request URLs.
+    const findingsUrls: string[] = []
+    page.on('request', (req) => {
+      if (req.url().includes('/api/findings')) {
+        findingsUrls.push(req.url())
+      }
+    })
+
+    await mockApi(page)
+
+    // Route state machine:
+    //   - Requests with no q param (initial loads, including StrictMode re-mount):
+    //     return fixtureInitial immediately.
+    //   - The FIRST request with q=sqli: hold for 1500 ms (slow / stale = request A).
+    //   - The FIRST request with q=xss: return fixtureB immediately (fresh = request B).
+    let slowFired = false
+    await page.route('**/api/findings*', async (route) => {
+      const url = new URL(route.request().url())
+      const q = url.searchParams.get('q') ?? ''
+
+      if (!q) {
+        // Initial / StrictMode loads — fast response with the 3-item fixture.
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(fixtureInitial),
+        })
+      }
+
+      if (q === 'sqli' && !slowFired) {
+        // Request A: slow. Hold for 1500 ms to simulate an in-flight stale request.
+        slowFired = true
+        await new Promise<void>((r) => setTimeout(r, 1500))
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(fixtureA),
+        })
+      }
+
+      // All other queries (including q=xss = request B): respond immediately.
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(fixtureB),
+      })
+    })
+
+    await page.goto('/findings')
+
+    const searchInput = page.locator('input[aria-label="Search findings"]')
+    await searchInput.waitFor({ state: 'visible' })
+
+    // Wait for the initial "3 findings" to render so we know the page is stable.
+    await expect(page.getByText('3 findings')).toBeVisible({ timeout: 5000 })
+
+    // Trigger filter A (q=sqli) — this will be the slow/stale request A.
+    await searchInput.fill('sqli')
+
+    // Before A has responded (it takes 1500 ms), immediately change to q=xss.
+    // The debounce is 350 ms, so we wait just long enough for the first debounce
+    // to fire and the request A to begin, then change the input again.
+    await page.waitForTimeout(450)
+    await searchInput.fill('xss')
+
+    // Request B (q=xss) resolves immediately → "2 findings" should appear.
+    await expect(page.getByText('2 findings')).toBeVisible({ timeout: 5000 })
+
+    // Verify the fresh B content is present.
+    await expect(page.getByText('Fresh XSS result')).toBeVisible()
+    await expect(page.getByText('Fresh SSRF result')).toBeVisible()
+
+    // The stale A title must NOT be visible — cancellation prevented it from
+    // overwriting the fresh B results even though A resolved after B.
+    await expect(page.getByText('STALE result should not appear')).toHaveCount(0)
+
+    // The last /api/findings URL fired should contain q=xss.
+    const latestUrl = findingsUrls[findingsUrls.length - 1]
+    expect(latestUrl).toContain('q=xss')
+
+    // With the fix wired, the browser actually aborts the slow fetch (A), which
+    // registers as a requestfailed event.
+    expect(abortedFindingsUrls.length).toBeGreaterThanOrEqual(1)
+  })
+})
