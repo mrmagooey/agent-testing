@@ -1342,6 +1342,43 @@ build flag concern.
 **Result**: 35/35 strategy + DB-strategy tests pass; new tests
 demonstrably fail on the unfixed stub.
 
+### 47. Strategy delete dialog surfaces 409 + role=alert hardening
+
+**Frontend small-fix:** `frontend/src/pages/StrategyViewer.tsx`
+**Frontend spec:** `frontend/e2e/strategy-delete.spec.ts` (3 tests)
+
+Complementary to iter 46. Now that the backend's
+`strategy_is_referenced_by_runs` returns truthful results and the
+DELETE endpoint can really 409, e2e coverage for the user-facing
+dialog flow.
+
+> As a strategy author, when I try to delete a strategy that's
+> still referenced by an experiment, I want to see a clear error
+> message in the confirmation dialog instead of having the delete
+> silently fail or appear to succeed.
+
+**Source change**: one line — add `role="alert"` to the inline
+deleteError block (`StrategyViewer.tsx:321`). The frontend already
+captured `e.message` from the API error into `deleteError` state
+and rendered it in the dialog; the only gap was screen-reader
+announcement and a stable selector for tests. Mirrors iter 44's
+fix to the cancel dialog.
+
+**Tests** (3):
+- Successful 204 delete navigates to `/strategies`.
+- 409 with `detail` from the backend → exact text visible in
+  `getByRole('alert')`, dialog stays open, Delete button re-enables
+  (no longer "Deleting…").
+- 500 fallback → some error message visible, dialog stays open.
+
+The spec uses an inline `FULL_USER_STRATEGY` with `is_builtin: false`
+so the Delete affordance renders. Per-test DELETE override sits on
+top of `mockApi`'s default GET handler via LIFO routing and
+`route.fallback()` for non-DELETE methods.
+
+**Result**: 6/6 tests pass on chromium and firefox; 140/140 across
+all strategy specs; typecheck clean.
+
 ---
 
 ## Candidate stories for future iterations

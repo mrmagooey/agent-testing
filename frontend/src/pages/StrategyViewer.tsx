@@ -318,7 +318,7 @@ export default function StrategyViewer() {
             </DialogDescription>
           </DialogHeader>
           {deleteError && (
-            <div className="p-3 rounded-lg bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 text-sm">
+            <div role="alert" className="p-3 rounded-lg bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 text-sm">
               {deleteError}
             </div>
           )}
