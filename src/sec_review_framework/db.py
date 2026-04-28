@@ -1540,6 +1540,70 @@ class Database:
                 rows = await cursor.fetchall()
                 return [dict(row) for row in rows]
 
+    # ---------------------------------------------------------------------------
+    # Dataset negative labels
+    # ---------------------------------------------------------------------------
+
+    async def append_dataset_negative_labels(self, rows: list[dict]) -> None:
+        """INSERT OR IGNORE on PK (id). Single transaction. Idempotent."""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("PRAGMA foreign_keys = ON")
+            for row in rows:
+                await db.execute(
+                    """
+                    INSERT OR IGNORE INTO dataset_negative_labels (
+                        id, dataset_name, dataset_version, file_path,
+                        cwe_id, vuln_class, source, source_ref,
+                        created_at, notes
+                    ) VALUES (
+                        :id, :dataset_name, :dataset_version, :file_path,
+                        :cwe_id, :vuln_class, :source, :source_ref,
+                        :created_at, :notes
+                    )
+                    """,
+                    {
+                        "id": row["id"],
+                        "dataset_name": row["dataset_name"],
+                        "dataset_version": row["dataset_version"],
+                        "file_path": row["file_path"],
+                        "cwe_id": row["cwe_id"],
+                        "vuln_class": row["vuln_class"],
+                        "source": row["source"],
+                        "source_ref": row.get("source_ref"),
+                        "created_at": row["created_at"],
+                        "notes": row.get("notes"),
+                    },
+                )
+            await db.commit()
+
+    async def list_dataset_negative_labels(
+        self,
+        dataset_name: str,
+        dataset_version: str | None = None,
+    ) -> list[dict]:
+        """List negative labels for a dataset, optionally filtered by version.
+
+        Returns dict rows keyed by column name. If dataset_version is None,
+        all versions are returned.
+        """
+        where_clauses: list[str] = ["dataset_name = ?"]
+        params: list = [dataset_name]
+
+        if dataset_version is not None:
+            where_clauses.append("dataset_version = ?")
+            params.append(dataset_version)
+
+        where_sql = " AND ".join(where_clauses)
+
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                f"SELECT * FROM dataset_negative_labels WHERE {where_sql}",
+                params,
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
+
 
 def _infer_match_status(finding: dict) -> str | None:
     """Infer match_status from evaluation fields in a raw finding dict."""
