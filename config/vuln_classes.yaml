@@ -74,6 +74,56 @@ vuln_classes:
     cwe_ids: ["CWE-601"]
     owasp_category: "A01:2021"
 
+  pathtraver:
+    display_name: "Path Traversal"
+    cwe_ids: ["CWE-22"]
+    owasp_category: "A01:2021"
+
+  cmdi:
+    display_name: "OS Command Injection"
+    cwe_ids: ["CWE-78"]
+    owasp_category: "A03:2021"
+
+  xpathi:
+    display_name: "XPath Injection"
+    cwe_ids: ["CWE-643"]
+    owasp_category: "A03:2021"
+
+  ldapi:
+    display_name: "LDAP Injection"
+    cwe_ids: ["CWE-90"]
+    owasp_category: "A03:2021"
+
+  codeinj:
+    display_name: "Code Injection"
+    cwe_ids: ["CWE-94"]
+    owasp_category: "A03:2021"
+
+  weakrand:
+    display_name: "Insufficiently Random Values"
+    cwe_ids: ["CWE-330"]
+    owasp_category: "A02:2021"
+
+  hash:
+    display_name: "Use of Broken or Risky Cryptographic Algorithm"
+    cwe_ids: ["CWE-327"]
+    owasp_category: "A02:2021"
+
+  securecookie:
+    display_name: "Insecure Cookie"
+    cwe_ids: ["CWE-614"]
+    owasp_category: "A05:2021"
+
+  redirect:
+    display_name: "Open Redirect"
+    cwe_ids: ["CWE-601"]
+    owasp_category: "A01:2021"
+
+  trustbound:
+    display_name: "Trust Boundary Violation"
+    cwe_ids: ["CWE-501"]
+    owasp_category: "A01:2021"
+
   other:
     display_name: "Other"
     cwe_ids: []
