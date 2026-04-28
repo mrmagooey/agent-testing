@@ -996,6 +996,53 @@ to wait for the post-back/forward re-fetch, then asserts on
 
 **Result**: 10/10 pass across chromium and firefox.
 
+### 39. Severity-sorted findings reflect semantic order, not alphabet
+
+**Backend fix:** `src/sec_review_framework/db.py` (commit pending)
+**Backend tests:** `tests/unit/test_coordinator_findings_search.py` (+4 tests, +2 fixtures)
+
+> As a security researcher reviewing findings on the Findings page,
+> when I sort by "Severity (high→low)" I expect critical findings
+> before high, high before medium, medium before low — matching the
+> semantic order I think in, not the alphabetical order of the
+> string column.
+
+**The bug**: `search_findings_global` used `ORDER BY f.{sort_col} {sort_dir}`
+directly. With `sort_col = severity` SQLite ordered the TEXT column
+alphabetically: `critical < high < low < medium`. So
+`?sort=severity+desc` returned `medium → low → high → critical`,
+which contradicts the dropdown label "Severity (high→low)" the
+frontend exposes (`Findings.tsx:238`).
+
+**The fix**: branch on `sort_col == "severity"` and emit a CASE rank
+in the ORDER BY: `critical=3, high=2, medium=1, low=0, ELSE=-1`. The
+existing `sort_dir` allow-list (`asc`/`desc`) is unchanged. SQL
+injection surface is unchanged — the rank values are SQL constants,
+the column name still allow-listed. Other sortable columns
+(`created_at`, `confidence`, `vuln_class`, etc.) keep direct
+`ORDER BY f.{col}` since their natural ordering is correct.
+
+**Tests added**:
+- Severity-rank desc with critical/high/medium/low seeded → asserts
+  `[critical, high, medium, low]`. Confirmed to fail on pre-fix code
+  (returns `[medium, low, high, critical]`).
+- Severity-rank asc → `[low, medium, high, critical]`.
+- Date-range filter (`created_from` + `created_to`) — first test
+  exercising the previously-uncovered SQL date-range branch.
+  Documents the lexicographic-truncation gotcha: `created_to=YYYY-MM-DD`
+  silently excludes `YYYY-MM-DDT00:00:00+00:00` because `T` > nothing
+  in string comparison; tests use `T23:59:59` to be inclusive.
+- Combined filters AND together: `?severity=high&vuln_class=sqli`
+  returns only the finding satisfying BOTH (intersection, not union).
+
+**Frontend coverage**: already in place. `findings-extended.spec.ts:163`
+verifies the dropdown sends `?sort=severity+desc`; the rendering path
+trusts whatever order the backend returns. The fix here makes the
+backend honour the user-visible promise.
+
+**Result**: 28/28 unit tests pass; broader coordinator-API slice
+(107 tests) green; first cross-stack iteration of this loop.
+
 ---
 
 ## Candidate stories for future iterations

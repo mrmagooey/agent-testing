@@ -1,16 +1,16 @@
 """SQLite-based persistence for the coordinator service. Uses aiosqlite for async access."""
 
+import aiosqlite
 import hashlib
 import hmac
 import json
+import re
 import secrets
 import uuid
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
-
-import aiosqlite
 
 
 class UploadTokenAlreadyExists(Exception):
@@ -247,8 +247,7 @@ class Database:
             """)
             # Ensure the singleton row exists.
             await db.execute("""
-                INSERT OR IGNORE INTO app_settings
-                    (id, allow_unavailable_models, evidence_assessor, evidence_judge_model)
+                INSERT OR IGNORE INTO app_settings (id, allow_unavailable_models, evidence_assessor, evidence_judge_model)
                 VALUES (1, 0, 'heuristic', NULL)
             """)
 
@@ -432,7 +431,7 @@ class Database:
         review_profile: str,
         verification_variant: str,
         estimated_cost_usd: float | None = None,
-        tool_extensions: frozenset | Iterable[str] | None = None,
+        tool_extensions: "frozenset | Iterable[str] | None" = None,
     ) -> None:
         if tool_extensions is None:
             ext_str = ""
@@ -679,12 +678,30 @@ class Database:
         where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
 
         count_sql = f"SELECT COUNT(*) FROM findings f {where_sql}"
+
+        # Build ORDER BY expression.  Severity has a semantic rank that does not
+        # match alphabetical order, so we map it to an integer rank.  The ranks
+        # are assigned so that DESC puts critical (highest severity) first and
+        # ASC puts low (lowest severity) first, matching user expectations:
+        #   critical=3, high=2, medium=1, low=0, unknown/other=-1
+        if sort_col == "severity":
+            order_expr = (
+                f"CASE f.severity "
+                f"WHEN 'critical' THEN 3 "
+                f"WHEN 'high'     THEN 2 "
+                f"WHEN 'medium'   THEN 1 "
+                f"WHEN 'low'      THEN 0 "
+                f"ELSE -1 END {sort_dir}"
+            )
+        else:
+            order_expr = f"f.{sort_col} {sort_dir}"
+
         data_sql = (
             f"SELECT f.*, e.config_json AS _experiment_config_json "
             f"FROM findings f "
             f"LEFT JOIN experiments e ON e.id = f.experiment_id "
             f"{where_sql} "
-            f"ORDER BY f.{sort_col} {sort_dir} "
+            f"ORDER BY {order_expr} "
             f"LIMIT ? OFFSET ?"
         )
 
@@ -925,7 +942,7 @@ class Database:
     # User strategies
     # ---------------------------------------------------------------------------
 
-    async def insert_user_strategy(self, strategy: UserStrategy) -> None:
+    async def insert_user_strategy(self, strategy: "UserStrategy") -> None:
         """Persist a UserStrategy to the database.
 
         Serialises the full UserStrategy via canonical_json so round-trips
@@ -953,7 +970,7 @@ class Database:
             )
             await db.commit()
 
-    async def get_user_strategy(self, strategy_id: str) -> UserStrategy | None:
+    async def get_user_strategy(self, strategy_id: str) -> "UserStrategy | None":
         """Return the UserStrategy with *strategy_id*, or None if not found."""
         from sec_review_framework.data.strategy_bundle import UserStrategy
 
@@ -968,7 +985,7 @@ class Database:
                     return None
                 return UserStrategy.model_validate_json(row["bundle_json"])
 
-    async def list_user_strategies(self) -> list[UserStrategy]:
+    async def list_user_strategies(self) -> "list[UserStrategy]":
         """Return all UserStrategy objects, ordered by created_at then id."""
         from sec_review_framework.data.strategy_bundle import UserStrategy
 

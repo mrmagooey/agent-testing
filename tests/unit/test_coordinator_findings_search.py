@@ -16,6 +16,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
 
@@ -24,6 +25,7 @@ from sec_review_framework.coordinator import ExperimentCoordinator, app
 from sec_review_framework.cost.calculator import CostCalculator, ModelPricing
 from sec_review_framework.db import Database
 from sec_review_framework.reporting.markdown import MarkdownReportGenerator
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -373,3 +375,171 @@ def test_findings_route_serves_spa_for_browser(findings_client):
     )
     assert resp.status_code == 200
     assert "SPA" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# Severity sort — semantic rank (bug fix tests)
+# ---------------------------------------------------------------------------
+
+
+@pytest_asyncio.fixture
+async def severity_sort_client(tmp_path: Path):
+    """TestClient with all four severity levels seeded for sort tests."""
+    db = Database(tmp_path / "test.db")
+    await db.init()
+
+    c = _make_coordinator(tmp_path, db)
+
+    # Seed four findings, one per severity level
+    await db.upsert_findings_for_run(
+        run_id="run-sev",
+        experiment_id="exp-sev",
+        findings=[
+            _make_finding(id="sev-crit", severity="critical", vuln_class="sqli",
+                          title="Critical Finding"),
+            _make_finding(id="sev-high", severity="high", vuln_class="sqli",
+                          title="High Finding"),
+            _make_finding(id="sev-med", severity="medium", vuln_class="sqli",
+                          title="Medium Finding"),
+            _make_finding(id="sev-low", severity="low", vuln_class="sqli",
+                          title="Low Finding"),
+        ],
+        model_id="gpt-4o",
+        strategy="single_agent",
+        dataset_name="ds-sev",
+    )
+
+    dist_dir = tmp_path / "dist"
+    dist_dir.mkdir()
+    (dist_dir / "index.html").write_text("<!DOCTYPE html><html><body>SPA</body></html>")
+
+    with patch.object(coord_module, "FRONTEND_DIST_DIR", dist_dir):
+        with patch.object(coord_module, "coordinator", c):
+            with patch.object(c, "reconcile", return_value=None):
+                with TestClient(app, raise_server_exceptions=True) as client:
+                    yield client
+
+
+def test_severity_sort_rank_desc(severity_sort_client):
+    """sort=severity desc → critical first, then high, medium, low (semantic order).
+
+    This is the bug-fix test: alphabetic ordering would return medium first.
+    The frontend option 'severity desc' is labelled 'Severity (high→low)' so
+    the user expects the highest-severity items first.
+    """
+    resp = severity_sort_client.get("/api/findings?sort=severity+desc")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 4
+    severities = [item["severity"] for item in body["items"]]
+    assert severities == ["critical", "high", "medium", "low"], (
+        f"Expected semantic desc order ['critical','high','medium','low'], got {severities}"
+    )
+
+
+def test_severity_sort_rank_asc(severity_sort_client):
+    """sort=severity asc → low first, then medium, high, critical (semantic ascending)."""
+    resp = severity_sort_client.get("/api/findings?sort=severity+asc")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 4
+    severities = [item["severity"] for item in body["items"]]
+    assert severities == ["low", "medium", "high", "critical"], (
+        f"Expected semantic asc order ['low','medium','high','critical'], got {severities}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Date range filter tests
+# ---------------------------------------------------------------------------
+
+
+@pytest_asyncio.fixture
+async def date_range_client(tmp_path: Path):
+    """TestClient with findings at known timestamps for date-range tests."""
+    import aiosqlite
+
+    db = Database(tmp_path / "test.db")
+    await db.init()
+
+    c = _make_coordinator(tmp_path, db)
+
+    # Seed findings — created_at will be auto-stamped to now.
+    # We then UPDATE them directly with deterministic timestamps.
+    await db.upsert_findings_for_run(
+        run_id="run-dates",
+        experiment_id="exp-dates",
+        findings=[
+            _make_finding(id="date-early", severity="low", title="Early Finding"),
+            _make_finding(id="date-in1",   severity="medium", title="In Range 1"),
+            _make_finding(id="date-in2",   severity="high",   title="In Range 2"),
+            _make_finding(id="date-late",  severity="critical", title="Late Finding"),
+        ],
+        model_id="gpt-4o",
+        strategy="single_agent",
+        dataset_name="ds-dates",
+    )
+
+    # Override created_at to deterministic values so range tests are stable
+    async with aiosqlite.connect(db.db_path) as adb:
+        await adb.execute(
+            "UPDATE findings SET created_at = ? WHERE id = ?",
+            ("2026-04-10T00:00:00+00:00", "date-early"),
+        )
+        await adb.execute(
+            "UPDATE findings SET created_at = ? WHERE id = ?",
+            ("2026-04-15T00:00:00+00:00", "date-in1"),
+        )
+        await adb.execute(
+            "UPDATE findings SET created_at = ? WHERE id = ?",
+            ("2026-04-20T00:00:00+00:00", "date-in2"),
+        )
+        await adb.execute(
+            "UPDATE findings SET created_at = ? WHERE id = ?",
+            ("2026-04-25T00:00:00+00:00", "date-late"),
+        )
+        await adb.commit()
+
+    dist_dir = tmp_path / "dist"
+    dist_dir.mkdir()
+    (dist_dir / "index.html").write_text("<!DOCTYPE html><html><body>SPA</body></html>")
+
+    with patch.object(coord_module, "FRONTEND_DIST_DIR", dist_dir):
+        with patch.object(coord_module, "coordinator", c):
+            with patch.object(c, "reconcile", return_value=None):
+                with TestClient(app, raise_server_exceptions=True) as client:
+                    yield client
+
+
+def test_date_range_filter(date_range_client):
+    """created_from + created_to returns only findings within that range (inclusive).
+
+    The DB stores full ISO-8601 timestamps (e.g. '2026-04-20T00:00:00+00:00').
+    The SQL comparison is lexicographic (TEXT column), so the created_to bound
+    must be at least as large as any timestamp on that day.  We use the end-of-day
+    timestamp '2026-04-20T23:59:59' to include all findings on 2026-04-20.
+    """
+    resp = date_range_client.get(
+        "/api/findings?created_from=2026-04-15&created_to=2026-04-20T23:59:59"
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    ids = {item["id"] for item in body["items"]}
+    assert ids == {"date-in1", "date-in2"}, (
+        f"Expected only in-range findings, got {ids}"
+    )
+    assert body["total"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Combined-filters AND test
+# ---------------------------------------------------------------------------
+
+
+def test_combined_filters_and(findings_client):
+    """severity=high AND vuln_class=sqli → only finding f1 (both conditions)."""
+    resp = findings_client.get("/api/findings?severity=high&vuln_class=sqli")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["items"][0]["id"] == "f1"
