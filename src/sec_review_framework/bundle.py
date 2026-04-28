@@ -1,16 +1,19 @@
 """Experiment bundle helpers: export/import of experiments as portable ZIP archives.
 
 Bundle layout (ZIP, deflate for JSON/MD, store for .jsonl >1 MiB):
-    manifest.json           — metadata and inventory
-    experiment.json         — experiments DB row
-    runs.json               — runs DB rows array
+    manifest.json                  — metadata and inventory
+    experiment.json                — experiments DB row
+    runs.json                      — runs DB rows array
     outputs/matrix_report.{json,md}
-    outputs/runs/<run_id>/  — per-run artifacts
+    outputs/runs/<run_id>/         — per-run artifacts
     config/runs/<run_id>.json
-    datasets.json           — dataset rows (descriptor mode only)
-    dataset_labels.json     — dataset_labels rows (descriptor mode only)
+    datasets.json                  — dataset rows (descriptor mode only)
+    dataset_labels.json            — dataset_labels rows (descriptor mode only)
+    dataset_negative_labels.json   — dataset_negative_labels rows (descriptor mode only)
 
-Schema version is 1.  Importers MUST reject unknown schema_version values.
+Schema version is 2.  Importers MUST reject unknown schema_version values.
+Version 1 bundles (lacking dataset_negative_labels.json) still import cleanly —
+the missing file is treated as an empty array.
 
 dataset_mode values:
   "descriptor" — datasets.json + dataset_labels.json included (default)
@@ -55,7 +58,7 @@ _BUNDLE_UPLOAD_MAX_BYTES: int = int(
     os.environ.get("BUNDLE_UPLOAD_MAX_BYTES", str(2 * 1024 * 1024 * 1024))
 )
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 BUNDLE_KIND = "experiment"
 
 _VALID_DATASET_MODES = frozenset({"reference", "descriptor"})
@@ -124,18 +127,22 @@ def _write_bundle_from_rows(
     *,
     dataset_rows: list[dict] | None = None,
     dataset_label_rows: list[dict] | None = None,
+    dataset_negative_label_rows: list[dict] | None = None,
 ) -> Path:
     """Write a bundle ZIP from already-fetched DB rows.  Pure sync.
 
     Parameters
     ----------
     dataset_mode:
-        "descriptor" — embed datasets.json + dataset_labels.json.
+        "descriptor" — embed datasets.json + dataset_labels.json +
+                       dataset_negative_labels.json.
         "reference"  — record names only in the manifest.
     dataset_rows:
         Pre-fetched dataset DB rows (required when dataset_mode == "descriptor").
     dataset_label_rows:
         Pre-fetched dataset_labels DB rows (required when dataset_mode == "descriptor").
+    dataset_negative_label_rows:
+        Pre-fetched dataset_negative_labels DB rows (descriptor mode only).
     """
     if dataset_mode not in _VALID_DATASET_MODES:
         raise ValueError(
@@ -230,15 +237,19 @@ def _write_bundle_from_rows(
         artifact_counts["run_configs"] = config_count
 
         # Datasets — descriptor mode embeds datasets.json + dataset_labels.json
+        #            + dataset_negative_labels.json
         dataset_count = 0
         dataset_label_count = 0
+        dataset_negative_label_count = 0
 
         if dataset_mode == "descriptor":
             ds_rows = dataset_rows or []
             lbl_rows = dataset_label_rows or []
+            neg_lbl_rows = dataset_negative_label_rows or []
 
             dataset_count = len(ds_rows)
             dataset_label_count = len(lbl_rows)
+            dataset_negative_label_count = len(neg_lbl_rows)
 
             if ds_rows:
                 ds_bytes = json.dumps([dict(r) for r in ds_rows], indent=2).encode()
@@ -250,8 +261,14 @@ def _write_bundle_from_rows(
                 zf.writestr(zipfile.ZipInfo("dataset_labels.json"), lbl_bytes)
                 uncompressed_bytes += len(lbl_bytes)
 
+            if neg_lbl_rows:
+                neg_lbl_bytes = json.dumps([dict(r) for r in neg_lbl_rows], indent=2).encode()
+                zf.writestr(zipfile.ZipInfo("dataset_negative_labels.json"), neg_lbl_bytes)
+                uncompressed_bytes += len(neg_lbl_bytes)
+
         artifact_counts["dataset_count"] = dataset_count
         artifact_counts["dataset_label_count"] = dataset_label_count
+        artifact_counts["dataset_negative_label_count"] = dataset_negative_label_count
 
         # manifest.json — last (counts known)
         manifest = {
@@ -270,6 +287,7 @@ def _write_bundle_from_rows(
                 **artifact_counts,
                 "dataset_count": dataset_count,
                 "dataset_label_count": dataset_label_count,
+                "dataset_negative_label_count": dataset_negative_label_count,
             },
             "uncompressed_bytes": uncompressed_bytes,
             "notes": "",
@@ -289,12 +307,12 @@ def _extract_bundle_files(
     target_experiment_id: str,
     *,
     rename_experiment_id: str | None = None,
-) -> tuple[list[str], list[dict], list[dict]]:
+) -> tuple[list[str], list[dict], list[dict], list[dict]]:
     """Extract bundle files into storage_root.
 
     Returns
     -------
-    (manifest_dataset_names, dataset_rows, dataset_label_rows)
+    (manifest_dataset_names, dataset_rows, dataset_label_rows, dataset_negative_label_rows)
 
     Parameters
     ----------
@@ -307,6 +325,7 @@ def _extract_bundle_files(
     manifest_dataset_names: list[str] = []
     dataset_rows: list[dict] = []
     dataset_label_rows: list[dict] = []
+    dataset_negative_label_rows: list[dict] = []
 
     with zipfile.ZipFile(zip_path, "r") as zf:
         # --- Decompression bomb guard: check aggregate uncompressed size ---
@@ -344,6 +363,14 @@ def _extract_bundle_files(
             except Exception:
                 pass
 
+        # Read dataset_negative_labels.json if present (absent in schema_version 1 bundles)
+        if "dataset_negative_labels.json" in zf.namelist():
+            try:
+                with zf.open("dataset_negative_labels.json") as f:
+                    dataset_negative_label_rows = json.loads(f.read())
+            except Exception:
+                pass
+
         for member in zf.namelist():
             _check_zip_entry(member)
             mp = PurePosixPath(member)
@@ -354,6 +381,7 @@ def _extract_bundle_files(
             if member in (
                 "manifest.json", "experiment.json", "runs.json",
                 "datasets.json", "dataset_labels.json",
+                "dataset_negative_labels.json",
             ):
                 continue
 
@@ -402,7 +430,7 @@ def _extract_bundle_files(
             # uses datasets.json / dataset_labels.json instead (Phase 2C).
             # Any datasets/<name>/... entries in old bundles are silently skipped.
 
-    return manifest_dataset_names, dataset_rows, dataset_label_rows
+    return manifest_dataset_names, dataset_rows, dataset_label_rows, dataset_negative_label_rows
 
 
 def _rewrite_experiment_id_in_result(result_data: dict, new_experiment_id: str) -> None:
@@ -462,14 +490,16 @@ def _validate_bundle_entries(zip_path: Path) -> None:
             _check_zip_entry(member)
 
 
+_MIN_SCHEMA_VERSION = 1  # Oldest bundle format still accepted for import
+
 def _validate_schema(zip_path: Path) -> dict:
     """Read and validate manifest schema_version.  Returns manifest dict."""
     m = read_manifest(zip_path)
     sv = m.get("schema_version")
-    if sv != SCHEMA_VERSION:
+    if not isinstance(sv, int) or not (_MIN_SCHEMA_VERSION <= sv <= SCHEMA_VERSION):
         raise ValueError(
             f"Unsupported bundle schema_version={sv!r}. "
-            f"Only version {SCHEMA_VERSION} is supported."
+            f"Supported range: {_MIN_SCHEMA_VERSION}–{SCHEMA_VERSION}."
         )
     return m
 
@@ -579,6 +609,7 @@ async def async_write_bundle(
 
     dataset_rows: list[dict] = []
     dataset_label_rows: list[dict] = []
+    dataset_negative_label_rows: list[dict] = []
 
     if dataset_mode == "descriptor":
         # Collect unique dataset names from runs + experiment config
@@ -605,12 +636,16 @@ async def async_write_bundle(
         # Recursively collect dataset rows (includes base datasets)
         dataset_rows = await _collect_dataset_rows(db, ds_names)
 
-        # Collect labels for all included datasets
+        # Collect positive and negative labels for all included datasets
         all_labels: list[dict] = []
+        all_neg_labels: list[dict] = []
         for ds_row in dataset_rows:
             labels = await db.list_dataset_labels(ds_row["name"])
             all_labels.extend(labels)
+            neg_labels = await db.list_dataset_negative_labels(ds_row["name"])
+            all_neg_labels.extend(neg_labels)
         dataset_label_rows = all_labels
+        dataset_negative_label_rows = all_neg_labels
 
     return _write_bundle_from_rows(
         exp_row=exp_row,
@@ -620,6 +655,7 @@ async def async_write_bundle(
         out_path=out_path,
         dataset_rows=dataset_rows,
         dataset_label_rows=dataset_label_rows,
+        dataset_negative_label_rows=dataset_negative_label_rows,
     )
 
 
@@ -706,7 +742,7 @@ async def async_apply_bundle(
     rename_id_for_files = target_experiment_id if renamed_from is not None else None
     experiment_outputs_dir = storage_root / "outputs" / target_experiment_id
     try:
-        bundle_dataset_names, bundle_dataset_rows, bundle_label_rows = _extract_bundle_files(
+        bundle_dataset_names, bundle_dataset_rows, bundle_label_rows, bundle_neg_label_rows = _extract_bundle_files(
             zip_path,
             storage_root,
             target_experiment_id,
@@ -779,6 +815,8 @@ async def async_apply_bundle(
                                 f"Failed to rehydrate dataset {name!r}: {exc}"
                             )
 
+    dataset_negative_labels_imported = 0
+
     if bundle_label_rows:
         try:
             # C2: Rewrite dataset_name in label rows to the final (possibly renamed)
@@ -797,6 +835,23 @@ async def async_apply_bundle(
         except Exception as exc:
             warnings.append(f"Dataset labels import warning: {exc}")
             dataset_labels_imported = 0
+
+    # Restore negative labels (absent in schema_version 1 bundles — tolerate gracefully)
+    if bundle_neg_label_rows:
+        try:
+            original_to_final_neg: dict[str, str] = {
+                r["name"]: final
+                for r, final in zip(bundle_dataset_rows, final_names)
+            }
+            rewritten_neg_label_rows = [
+                {**row, "dataset_name": original_to_final_neg.get(row["dataset_name"], row["dataset_name"])}
+                for row in bundle_neg_label_rows
+            ]
+            await db.append_dataset_negative_labels(rewritten_neg_label_rows)
+            dataset_negative_labels_imported = len(rewritten_neg_label_rows)
+        except Exception as exc:
+            warnings.append(f"Dataset negative labels import warning: {exc}")
+            dataset_negative_labels_imported = 0
 
     # Check for missing datasets (referenced in manifest but not in bundle or on disk)
     datasets_dir = storage_root / "datasets"
@@ -836,6 +891,7 @@ async def async_apply_bundle(
         "datasets_rehydrated": datasets_rehydrated,
         "datasets_missing": datasets_missing,
         "dataset_labels_imported": dataset_labels_imported,
+        "dataset_negative_labels_imported": dataset_negative_labels_imported,
         "warnings": warnings,
         "findings_indexed": 0,  # Caller is responsible for indexing
     }
@@ -857,6 +913,7 @@ def write_bundle(
     _run_rows: list[dict] | None = None,
     _dataset_rows: list[dict] | None = None,
     _dataset_label_rows: list[dict] | None = None,
+    _dataset_negative_label_rows: list[dict] | None = None,
 ) -> Path:
     """Sync bundle writer.  Supply *_exp_row*/*_run_rows* to bypass async DB fetch.
 
@@ -866,7 +923,8 @@ def write_bundle(
     Parameters
     ----------
     dataset_mode:
-        "descriptor" (default) — embed datasets.json + dataset_labels.json.
+        "descriptor" (default) — embed datasets.json + dataset_labels.json +
+                                 dataset_negative_labels.json.
         "reference"            — record names only.
     include_datasets:
         Deprecated legacy parameter. Ignored when _exp_row/_run_rows supplied
@@ -887,6 +945,7 @@ def write_bundle(
             out_path=out_path,
             dataset_rows=_dataset_rows,
             dataset_label_rows=_dataset_label_rows,
+            dataset_negative_label_rows=_dataset_negative_label_rows,
         )
 
     return asyncio.run(

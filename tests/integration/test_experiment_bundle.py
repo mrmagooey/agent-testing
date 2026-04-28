@@ -1520,3 +1520,233 @@ def test_reject_embedded_mode_returns_422(coordinator_client):
     assert resp.status_code == 422, f"Expected 422, got {resp.status_code}: {resp.text}"
     body = resp.json()
     assert "embedded" in body.get("detail", "").lower() or "invalid" in body.get("detail", "").lower()
+
+
+# ---------------------------------------------------------------------------
+# Helpers for negative-label tests
+# ---------------------------------------------------------------------------
+
+
+def _make_negative_label_row(
+    dataset_name: str,
+    idx: int,
+    dataset_version: str = "1.0.0",
+) -> dict:
+    """Build a minimal dataset_negative_labels row."""
+    return {
+        "id": f"neglabel-{dataset_name}-{idx:04d}",
+        "dataset_name": dataset_name,
+        "dataset_version": dataset_version,
+        "file_path": f"src/safe_{idx}.py",
+        "cwe_id": "CWE-89",
+        "vuln_class": "sqli",
+        "source": "manual",
+        "source_ref": None,
+        "created_at": "2026-01-01T00:00:00",
+        "notes": None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Test 26: Round-trip with positive AND negative labels
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_negative_labels_round_trip(tmp_path: Path):
+    """Descriptor export includes dataset_negative_labels.json; import restores it byte-identically."""
+    ds_name = "neg-label-ds"
+    exp_id = "neg-label-exp"
+    run_id = "run-neg-1"
+
+    source_storage = tmp_path / "source_storage"
+    source_db = Database(tmp_path / "source.db")
+    await source_db.init()
+
+    # Create dataset with positive labels
+    await _seed_db_with_dataset(
+        source_db, exp_id, [run_id],
+        dataset_name=ds_name, dataset_kind="git", label_count=3,
+    )
+    # Add negative labels
+    neg_rows = [_make_negative_label_row(ds_name, i) for i in range(2)]
+    await source_db.append_dataset_negative_labels(neg_rows)
+
+    _create_experiment_on_disk(source_storage, exp_id, run_id)
+
+    out_path = tmp_path / "export.secrev.zip"
+    await async_write_bundle(
+        source_db, source_storage, exp_id,
+        dataset_mode="descriptor", out_path=out_path,
+    )
+
+    # Verify dataset_negative_labels.json is in the bundle
+    with zipfile.ZipFile(out_path, "r") as zf:
+        namelist = zf.namelist()
+        assert "dataset_negative_labels.json" in namelist, (
+            "dataset_negative_labels.json missing from descriptor bundle"
+        )
+        bundled_neg = json.loads(zf.read("dataset_negative_labels.json"))
+
+    assert len(bundled_neg) == 2
+    assert all(r["dataset_name"] == ds_name for r in bundled_neg)
+
+    # Verify manifest count
+    manifest = read_manifest(out_path)
+    assert manifest["artifact_counts"]["dataset_negative_label_count"] == 2
+
+    # Import into a fresh DB
+    target_storage = tmp_path / "target_storage"
+    target_db = Database(tmp_path / "target.db")
+    await target_db.init()
+
+    summary = await async_apply_bundle(target_db, target_storage, out_path, conflict_policy="reject")
+    assert summary["dataset_labels_imported"] == 3
+    assert summary["dataset_negative_labels_imported"] == 2
+
+    # Verify positive labels restored
+    restored_pos = await target_db.list_dataset_labels(ds_name)
+    assert len(restored_pos) == 3
+
+    # Verify negative labels restored and byte-identical row sets
+    restored_neg = await target_db.list_dataset_negative_labels(ds_name)
+    assert len(restored_neg) == 2
+
+    # IDs must match (order-independent)
+    original_ids = {r["id"] for r in neg_rows}
+    restored_ids = {r["id"] for r in restored_neg}
+    assert original_ids == restored_ids, (
+        f"Negative label IDs mismatch: original={original_ids}, restored={restored_ids}"
+    )
+
+    # Field-level spot check
+    restored_by_id = {r["id"]: r for r in restored_neg}
+    for orig in neg_rows:
+        restored = restored_by_id[orig["id"]]
+        assert restored["file_path"] == orig["file_path"]
+        assert restored["cwe_id"] == orig["cwe_id"]
+        assert restored["vuln_class"] == orig["vuln_class"]
+        assert restored["source"] == orig["source"]
+
+
+# ---------------------------------------------------------------------------
+# Test 27: Round-trip with positives only — no negative file or empty array
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_negative_labels_absent_when_none(tmp_path: Path):
+    """Dataset with only positives produces a bundle without dataset_negative_labels.json;
+    re-import succeeds with zero negatives in the target DB."""
+    ds_name = "pos-only-ds"
+    exp_id = "pos-only-exp"
+    run_id = "run-pos-1"
+
+    source_storage = tmp_path / "source_storage"
+    source_db = Database(tmp_path / "source.db")
+    await source_db.init()
+
+    await _seed_db_with_dataset(
+        source_db, exp_id, [run_id],
+        dataset_name=ds_name, dataset_kind="git", label_count=4,
+    )
+    # Deliberately add NO negative labels
+
+    _create_experiment_on_disk(source_storage, exp_id, run_id)
+
+    out_path = tmp_path / "export.secrev.zip"
+    await async_write_bundle(
+        source_db, source_storage, exp_id,
+        dataset_mode="descriptor", out_path=out_path,
+    )
+
+    # dataset_negative_labels.json should be absent (empty list → not written)
+    with zipfile.ZipFile(out_path, "r") as zf:
+        assert "dataset_negative_labels.json" not in zf.namelist(), (
+            "dataset_negative_labels.json should not be present when there are no negatives"
+        )
+
+    manifest = read_manifest(out_path)
+    assert manifest["artifact_counts"]["dataset_negative_label_count"] == 0
+
+    # Import must succeed
+    target_storage = tmp_path / "target_storage"
+    target_db = Database(tmp_path / "target.db")
+    await target_db.init()
+
+    summary = await async_apply_bundle(target_db, target_storage, out_path, conflict_policy="reject")
+    assert summary["dataset_negative_labels_imported"] == 0
+
+    # Target DB has zero negatives
+    neg_in_target = await target_db.list_dataset_negative_labels(ds_name)
+    assert len(neg_in_target) == 0
+
+
+# ---------------------------------------------------------------------------
+# Test 28: Old bundle (schema_version 1, no dataset_negative_labels.json) imports cleanly
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_old_bundle_without_negative_labels_imports_cleanly(tmp_path: Path):
+    """A schema_version 1 bundle lacking dataset_negative_labels.json imports without error
+    and leaves zero negative labels in the target DB."""
+    import sec_review_framework.bundle as _bundle_module
+
+    ds_name = "old-bundle-ds"
+    exp_id = "old-bundle-exp"
+    run_id = "run-old-1"
+
+    source_storage = tmp_path / "source_storage"
+    source_db = Database(tmp_path / "source.db")
+    await source_db.init()
+
+    await _seed_db_with_dataset(
+        source_db, exp_id, [run_id],
+        dataset_name=ds_name, dataset_kind="git", label_count=2,
+    )
+    # Add negative labels that will be present in the current export
+    neg_rows = [_make_negative_label_row(ds_name, i) for i in range(3)]
+    await source_db.append_dataset_negative_labels(neg_rows)
+
+    _create_experiment_on_disk(source_storage, exp_id, run_id)
+
+    # Export normally (current format with negatives)
+    out_path = tmp_path / "export.secrev.zip"
+    await async_write_bundle(
+        source_db, source_storage, exp_id,
+        dataset_mode="descriptor", out_path=out_path,
+    )
+
+    # Synthesize an "old" bundle: downgrade schema_version to 1 and remove
+    # dataset_negative_labels.json to simulate a pre-schema-version-2 bundle.
+    old_bundle = tmp_path / "old_bundle.secrev.zip"
+    with zipfile.ZipFile(out_path, "r") as zin, zipfile.ZipFile(old_bundle, "w") as zout:
+        for item in zin.infolist():
+            if item.filename == "dataset_negative_labels.json":
+                # Omit the file entirely — simulates old bundle
+                continue
+            data = zin.read(item.filename)
+            if item.filename == "manifest.json":
+                m = json.loads(data)
+                m["schema_version"] = 1  # downgrade
+                m["artifact_counts"].pop("dataset_negative_label_count", None)
+                data = json.dumps(m).encode()
+            zout.writestr(item, data)
+
+    # Import must succeed without error
+    target_storage = tmp_path / "target_storage"
+    target_db = Database(tmp_path / "target.db")
+    await target_db.init()
+
+    summary = await async_apply_bundle(target_db, target_storage, old_bundle, conflict_policy="reject")
+    assert summary["experiment_id"] == exp_id
+    assert summary["dataset_negative_labels_imported"] == 0
+
+    # Target DB has zero negatives (the file was absent)
+    neg_in_target = await target_db.list_dataset_negative_labels(ds_name)
+    assert len(neg_in_target) == 0
+
+    # Positive labels still imported correctly
+    pos_in_target = await target_db.list_dataset_labels(ds_name)
+    assert len(pos_in_target) == 2
