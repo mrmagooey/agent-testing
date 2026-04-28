@@ -12,6 +12,7 @@ import zipfile
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
@@ -2919,7 +2920,11 @@ async def retention_cleanup_loop(
 
 class ReclassifyRequest(BaseModel):
     finding_id: str
-    status: str  # e.g. "unlabeled_real"
+    # Allow-list mirrors the short codes stored in the findings index
+    # (`db._infer_match_status` returns 'tp'/'fp'; `unlabeled_real` is the
+    # only value the reclassify modal currently sends; 'fn' kept for
+    # symmetry with the typed frontend MatchStatus union).
+    status: Literal["tp", "fp", "fn", "unlabeled_real"]
     note: str | None = None
 
 

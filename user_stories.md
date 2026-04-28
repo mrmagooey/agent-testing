@@ -1120,6 +1120,44 @@ not in `db.py` — keeps the DB layer purely mechanical.
 (which used the verbose workaround) continues to pass since full-timestamp
 inputs aren't normalised.
 
+### 42. Reclassify endpoint rejects invalid match_status values
+
+**Backend fix:** `src/sec_review_framework/coordinator.py`
+**Backend test:** `tests/integration/test_experiment_lifecycle_api.py` (+1)
+
+> As a security researcher reclassifying a finding, I want the API
+> to reject invalid status values so a buggy or malicious client
+> can't write arbitrary strings into our findings index — which
+> would silently break the filter UI's match_status chips.
+
+**The bug**: `ReclassifyRequest.status: str` (no validation). A request
+like `{"finding_id": "f1", "status": "pinkflamingos"}` was accepted and
+written verbatim into `findings.match_status`. The filter chips
+(`match_status=tp|fp|fn|unlabeled_real`) would never match the rogue
+row, effectively making it invisible under any filter — silent data
+corruption.
+
+**The fix**: tighten the field to `Literal["tp", "fp", "fn", "unlabeled_real"]`.
+Pydantic 422s any other value before it reaches the coordinator. The
+allow-list mirrors the short codes already stored by `_infer_match_status`
+in `db.py:1392`. The long-form `MatchStatus` enum in
+`data/evaluation.py:43` (`true_positive`, `false_positive`, etc.) is NOT
+what's stored in the DB; that mismatch is intentionally out of scope
+here — the system relies on short codes everywhere.
+
+**Tests**:
+- New: `test_reclassify_invalid_status_returns_422` posts a rogue
+  status value and asserts 422 + that the error mentions the field
+  name and at least one allowed value.
+- Existing 6 reclassify tests continue to pass — the only client
+  (`FindingsExplorer.tsx`) hardcodes `"unlabeled_real"`, which is in
+  the allow-list.
+
+**Result**: 23/23 lifecycle tests pass on main; the new test was
+verified to fail without the fix (the rogue status currently passes
+Pydantic and falls through to a 404 from the run-lookup, not a 422
+— exactly what the validation gap looks like).
+
 ---
 
 ## Candidate stories for future iterations

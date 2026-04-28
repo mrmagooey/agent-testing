@@ -10,6 +10,7 @@ Routes covered:
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -350,3 +351,26 @@ def test_reclassify_unknown_finding_in_existing_run_returns_404(coordinator_clie
         )
     assert resp.status_code == 404
     assert "nonexistent-finding" in resp.json().get("detail", "")
+
+
+def test_reclassify_invalid_status_returns_422(coordinator_client):
+    """Status outside the allow-list (tp/fp/fn/unlabeled_real) is rejected with 422.
+
+    Without the Literal type on ReclassifyRequest.status, an arbitrary value like
+    'pinkflamingos' would be accepted and written into findings.match_status —
+    silently breaking the filter UI's chips since none of them would match the
+    rogue value. The Literal allow-list 422s the request before it reaches the
+    coordinator.
+    """
+    client, *_ = coordinator_client
+    resp = client.post(
+        "/experiments/exp/runs/run/reclassify",
+        json={"finding_id": "f-001", "status": "pinkflamingos"},
+    )
+    assert resp.status_code == 422
+    detail = resp.json().get("detail", [])
+    # Pydantic v2 returns a list of error dicts; surface should mention the field
+    # and at least one of the allowed values.
+    detail_blob = json.dumps(detail) if not isinstance(detail, str) else detail
+    assert "status" in detail_blob
+    assert any(allowed in detail_blob for allowed in ("tp", "fp", "fn", "unlabeled_real"))
