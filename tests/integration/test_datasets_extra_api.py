@@ -393,6 +393,35 @@ def test_get_file_returns_metadata_fields(coordinator_client):
     assert data["language"] == "python"
 
 
+@pytest.mark.parametrize(
+    "content,expected_lines",
+    [
+        ("", 0),              # empty file
+        ("hello", 1),         # single line, no trailing newline
+        ("hello\n", 1),       # single line WITH trailing newline (common case)
+        ("a\nb", 2),          # two lines, no trailing newline
+        ("a\nb\n", 2),        # two lines WITH trailing newline
+        ("a\nb\nc\n", 3),     # three lines with trailing newline
+    ],
+)
+def test_get_file_line_count_handles_trailing_newline(content, expected_lines, coordinator_client, request):
+    client, _, tmp_path = coordinator_client
+    # Use a unique dataset name per parametrized case to avoid collisions.
+    safe_id = request.node.callspec.id.replace(" ", "_").replace("\\n", "NL").replace("\n", "NL")
+    ds_name = f"lc-ds-{safe_id}"
+    filename = f"test_{safe_id}.txt"
+    ds_dir = tmp_path / "storage" / "datasets" / ds_name
+    ds_dir.mkdir(parents=True)
+    (ds_dir / filename).write_text(content, encoding="utf-8")
+
+    resp = client.get(f"/datasets/{ds_name}/file?path={filename}")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["line_count"] == expected_lines, (
+        f"content={content!r}: expected {expected_lines}, got {data['line_count']}"
+    )
+
+
 def test_get_file_nonexistent_file_returns_404(coordinator_client):
     client, _, tmp_path = coordinator_client
     ds_dir = tmp_path / "storage" / "datasets" / "nf-ds"

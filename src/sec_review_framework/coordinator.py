@@ -2223,7 +2223,7 @@ class ExperimentCoordinator:
             "path": path,
             "content": content,
             "language": language,
-            "line_count": content.count("\n") + 1,
+            "line_count": len(content.splitlines()),
             "size_bytes": size_bytes,
             "labels": file_labels,
         }

@@ -1425,6 +1425,41 @@ This iteration also retroactively gives iter 42's
 surface — a buggy client now sees the Pydantic error inline instead
 of the modal silently sticking.
 
+### 49. Dataset file viewer line_count is off-by-one
+
+**Backend fix:** `src/sec_review_framework/coordinator.py`
+**Backend tests:** `tests/integration/test_datasets_extra_api.py` (+1 parametrized, 6 cases)
+
+> As a security researcher viewing a dataset source file, I want
+> the line count to reflect the actual number of lines in the file
+> — currently a typical 2-line file with a trailing newline shows
+> as '3 lines' and an empty file shows '1 line'.
+
+**The bug**: `get_file_content` (`coordinator.py:2226`) computed:
+```python
+"line_count": content.count("\n") + 1,
+```
+This is wrong for the common case of files ending in a trailing
+newline (which most editors add by default):
+- `""` → 1 (should be 0)
+- `"hello\n"` → 2 (should be 1)
+- `"a\nb\n"` → 3 (should be 2)
+- `"a\nb\nc\n"` → 4 (should be 3)
+
+**The fix**: replace with `len(content.splitlines())`. Python's
+`str.splitlines()` correctly treats a trailing `\n` as a terminator
+rather than a separator that introduces a new empty line — the
+canonical line-count idiom.
+
+**Tests added** (1 parametrized, 6 cases): empty file, single line
+with/without trailing newline, two/three lines with/without
+trailing newline. Demonstrably fails on 4 of 6 cases without the
+fix; the two cases without trailing newlines coincidentally passed
+under the old formula.
+
+**Result**: 36/36 dataset-API tests pass; broader 79-test slice
+across dataset routes/security/extra green.
+
 ---
 
 ## Candidate stories for future iterations
