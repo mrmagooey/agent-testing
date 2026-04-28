@@ -231,3 +231,71 @@ test('expanding a TP finding row does NOT show the Reclassify button', async ({ 
     page.getByRole('button', { name: /Reclassify as Unlabeled Real/i })
   ).not.toBeVisible()
 })
+
+// ---------------------------------------------------------------------------
+// 9. Backend rejects reclassify — modal shows error and stays open
+// ---------------------------------------------------------------------------
+
+test('backend rejects reclassify with detail — modal shows error and stays open', async ({ page }) => {
+  await page.route(`**/api/experiments/${EXPERIMENT_ID}/runs/${RUN_ID}/reclassify*`, async (route) => {
+    if (route.request().method() === 'POST') {
+      return route.fulfill({
+        status: 422,
+        contentType: 'application/json',
+        body: JSON.stringify({ detail: 'Reclassification rejected: db unavailable' }),
+      })
+    }
+    return route.fallback()
+  })
+
+  await expandFpRow(page)
+  await page.getByRole('button', { name: /Reclassify as Unlabeled Real/i }).click()
+
+  const modal = getModal(page)
+  await modal.getByRole('button', { name: /Confirm/i }).click()
+
+  // Error message is visible inside the modal
+  await expect(page.getByRole('alert')).toBeVisible()
+  await expect(page.getByRole('alert')).toContainText('Reclassification rejected: db unavailable')
+
+  // Modal heading is still visible — modal did not close
+  await expect(page.getByRole('heading', { name: 'Reclassify Finding' })).toBeVisible()
+
+  // Confirm button is back to its default (not loading) state
+  await expect(modal.getByRole('button', { name: /Confirm/i })).toBeVisible()
+  await expect(modal.getByRole('button', { name: /Confirm/i })).toBeEnabled()
+})
+
+// ---------------------------------------------------------------------------
+// 10. Dismiss after error clears the error state on re-open
+// ---------------------------------------------------------------------------
+
+test('dismiss after error — re-opening the modal shows no error', async ({ page }) => {
+  await page.route(`**/api/experiments/${EXPERIMENT_ID}/runs/${RUN_ID}/reclassify*`, async (route) => {
+    if (route.request().method() === 'POST') {
+      return route.fulfill({
+        status: 422,
+        contentType: 'application/json',
+        body: JSON.stringify({ detail: 'Reclassification rejected: db unavailable' }),
+      })
+    }
+    return route.fallback()
+  })
+
+  // First open — trigger the error
+  await expandFpRow(page)
+  await page.getByRole('button', { name: /Reclassify as Unlabeled Real/i }).click()
+  const modal = getModal(page)
+  await modal.getByRole('button', { name: /Confirm/i }).click()
+  await expect(page.getByRole('alert')).toBeVisible()
+
+  // Cancel to close the modal
+  await modal.getByRole('button', { name: 'Cancel' }).click()
+  await expect(page.getByRole('heading', { name: 'Reclassify Finding' })).not.toBeVisible()
+
+  // Re-open the modal
+  await page.getByRole('button', { name: /Reclassify as Unlabeled Real/i }).click()
+
+  // Error block must NOT be visible — fresh state
+  await expect(page.getByRole('alert')).not.toBeVisible()
+})

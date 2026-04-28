@@ -1379,6 +1379,52 @@ top of `mockApi`'s default GET handler via LIFO routing and
 **Result**: 6/6 tests pass on chromium and firefox; 140/140 across
 all strategy specs; typecheck clean.
 
+### 48. Reclassify modal surfaces errors instead of failing silent
+
+**Frontend fix:** `frontend/src/components/FindingsExplorer.tsx`
+**Frontend tests:** `frontend/e2e/findings-reclassify-modal.spec.ts` (+2)
+
+> As a security researcher reclassifying a finding, when the API
+> rejects my request, I want clear feedback in the modal —
+> currently a 500 or validation error leaves the modal stuck open
+> with no indication of what went wrong.
+
+Third application of the same UX pattern fixed in iter 44 (cancel
+modal) and iter 47 (strategy delete). The reclassify modal had:
+
+```tsx
+try {
+  await reclassifyFinding(...)
+  setReclassifyModal(null)  // close on success only
+} finally {
+  setReclassifyLoading(false)
+}
+```
+
+If the API throws, `setReclassifyModal(null)` is correctly skipped
+(modal stays open) but no error reaches the user — the modal sits
+there with no feedback and the rejected promise propagates as an
+unhandled rejection.
+
+**The fix**: same pattern as iter 44/47 — add `reclassifyError`
+state, capture the message on error, render an inline
+`<div role="alert">` above the modal buttons, reset the error on
+modal open and dismiss so re-opens start fresh.
+
+**Tests** (2 added):
+- 422 from backend with `{"detail": "Reclassification rejected: …"}`
+  → `getByRole('alert')` shows the message, modal heading still
+  visible, Confirm button re-enabled.
+- Dismiss-after-error → re-open shows no alert (state-leak guard).
+
+**Result**: 20/20 reclassify-modal tests pass; broader
+`--grep="reclassify"` slice (36/36) green; typecheck clean.
+
+This iteration also retroactively gives iter 42's
+`Literal["tp","fp","fn","unlabeled_real"]` validation a user-visible
+surface — a buggy client now sees the Pydantic error inline instead
+of the modal silently sticking.
+
 ---
 
 ## Candidate stories for future iterations

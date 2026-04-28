@@ -24,6 +24,7 @@ export default function FindingsExplorer({ experimentId, findings: initialFindin
     note: string
   } | null>(null)
   const [reclassifyLoading, setReclassifyLoading] = useState(false)
+  const [reclassifyError, setReclassifyError] = useState<string | null>(null)
 
   const source = searchResults ?? initialFindings
 
@@ -38,6 +39,7 @@ export default function FindingsExplorer({ experimentId, findings: initialFindin
 
   const handleReclassify = async () => {
     if (!reclassifyModal) return
+    setReclassifyError(null)
     setReclassifyLoading(true)
     try {
       await reclassifyFinding(
@@ -48,6 +50,8 @@ export default function FindingsExplorer({ experimentId, findings: initialFindin
         reclassifyModal.note
       )
       setReclassifyModal(null)
+    } catch (err) {
+      setReclassifyError(err instanceof Error ? err.message : 'Reclassification failed')
     } finally {
       setReclassifyLoading(false)
     }
@@ -176,6 +180,7 @@ export default function FindingsExplorer({ experimentId, findings: initialFindin
                             <button
                               onClick={(e) => {
                                 e.stopPropagation()
+                                setReclassifyError(null)
                                 setReclassifyModal({
                                   findingId: finding.finding_id,
                                   runId: finding.run_id,
@@ -222,9 +227,14 @@ export default function FindingsExplorer({ experimentId, findings: initialFindin
               rows={3}
               className="w-full text-sm rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2 mb-4"
             />
+            {reclassifyError && (
+              <div role="alert" className="p-3 rounded-lg bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 text-sm mb-4">
+                {reclassifyError}
+              </div>
+            )}
             <div className="flex justify-end gap-2">
               <button
-                onClick={() => setReclassifyModal(null)}
+                onClick={() => { setReclassifyModal(null); setReclassifyError(null) }}
                 className="px-4 py-2 text-sm rounded border border-gray-200 dark:border-gray-700"
               >
                 Cancel
