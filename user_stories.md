@@ -1231,6 +1231,58 @@ demonstrably fail without the fix.
 
 **Result**: 8/8 tests pass on chromium and firefox; typecheck clean.
 
+### 45. DELETE experiment actually removes the DB rows
+
+**Backend fix:** `src/sec_review_framework/db.py`,
+`src/sec_review_framework/coordinator.py`
+**Backend tests:** `tests/integration/test_experiment_routes_extended.py` (+3, docstring update)
+
+> As an admin cleaning up old experiments, I want
+> DELETE /experiments/<id> to actually remove the experiment from
+> the database — not just delete its files. Otherwise the
+> experiment continues to appear in the dashboard list with
+> broken/empty data.
+
+**The bug**: `coordinator.delete_experiment` cleaned up files on
+disk and revoked upload tokens but never removed the experiment,
+run, or finding rows from SQLite. After `DELETE /experiments/<id>`:
+- `GET /experiments` still returned the row
+- `GET /experiments/<id>` still returned 200 with metadata
+- `GET /experiments/<id>/results` 404'd (files gone)
+- `GET /findings` still included findings from the deleted experiment
+
+The pre-existing test `test_delete_existing_experiment_removes_it`
+even acknowledged this with a docstring saying "the current
+implementation cancels jobs and removes output files but does not
+purge the DB row." Documented as a known gap.
+
+**The fix**: add `Database.delete_experiment(experiment_id)` that
+deletes child-first within a single connection:
+1. `DELETE FROM findings WHERE experiment_id = ?` (FTS index stays
+   in sync via the existing `findings_fts_ad` trigger)
+2. `DELETE FROM run_upload_tokens WHERE run_id IN (SELECT id FROM
+   runs WHERE experiment_id = ?)`
+3. `DELETE FROM runs WHERE experiment_id = ?`
+4. `DELETE FROM experiments WHERE id = ?`
+
+Wire it in at the END of `coordinator.delete_experiment`, after
+the file cleanup. Pre-existing FTS5 trigger handles findings_fts
+consistency automatically — no manual rebuild needed.
+
+**Tests added** (3 + docstring update):
+- `test_delete_experiment_removes_db_row` — submit, delete, assert
+  not in `GET /experiments` and `GET /experiments/<id>` is 404
+- `test_delete_experiment_removes_runs_and_findings` — seed a
+  finding via `db.upsert_findings_for_run`, delete, assert
+  `db.list_runs` is empty AND `db.query_findings` returns 0
+- `test_delete_experiment_idempotent_for_missing` — DELETE on a
+  nonexistent id returns 204 with no error
+
+**Result**: 15/15 pass on the routes file; broader regression slice
+(118 tests) all green; new tests demonstrably fail without the fix.
+The pre-existing test's outdated docstring was also updated to
+reflect the new contract.
+
 ---
 
 ## Candidate stories for future iterations

@@ -15,16 +15,22 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from fastapi.testclient import TestClient
 
 import sec_review_framework.coordinator as coord_module
 from sec_review_framework.coordinator import app
 from sec_review_framework.data.experiment import (
     ExperimentMatrix,
+    ReviewProfileName,
+    StrategyName,
+    ToolVariant,
+    VerificationVariant,
 )
 from sec_review_framework.db import Database
+from fastapi.testclient import TestClient
+
 from tests.integration.test_coordinator_api import (
     _make_coordinator,
+    _minimal_matrix,
 )
 
 
@@ -135,12 +141,7 @@ def test_delete_nonexistent_experiment_returns_204(coordinator_client):
 
 @pytest.mark.asyncio
 async def test_delete_existing_experiment_removes_it(tmp_path: Path):
-    """DELETE /experiments/{id} returns 204 and cancels all pending jobs.
-
-    Note: the current implementation cancels jobs and removes output files
-    but does not purge the DB row, so the experiment may still appear in GET /experiments.
-    We verify the idempotent 204 response and that cancelled_jobs is non-negative.
-    """
+    """DELETE /experiments/{id} returns 204, cancels jobs, and purges the DB row."""
     db = Database(tmp_path / "test.db")
     await db.init()
     c = _make_coordinator(tmp_path, db)
@@ -214,3 +215,140 @@ def test_search_findings_empty_query_returns_list(coordinator_client):
     resp = client.get("/experiments/b/findings/search?q=")
     assert resp.status_code == 200
     assert isinstance(resp.json(), list)
+
+
+# ---------------------------------------------------------------------------
+# DELETE /experiments/{id} — DB row removal regression tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_delete_experiment_removes_db_row(tmp_path: Path):
+    """DELETE /experiments/{id} removes the experiment row from the DB.
+
+    After deletion, GET /experiments must not list the experiment and
+    GET /experiments/{id} must return 404.
+    """
+    db = Database(tmp_path / "test.db")
+    await db.init()
+    c = _make_coordinator(tmp_path, db)
+
+    from sec_review_framework.coordinator import _seed_builtin_strategies
+    await _seed_builtin_strategies(db)
+
+    matrix = ExperimentMatrix(
+        experiment_id="db-row-del-test",
+        dataset_name="ds",
+        dataset_version="1.0",
+        strategy_ids=["builtin.single_agent"],
+    )
+    await c.submit_experiment(matrix)
+
+    with patch.object(coord_module, "coordinator", c):
+        with patch.object(c, "reconcile", return_value=None):
+            with TestClient(app, raise_server_exceptions=True) as client:
+                # Confirm experiment is visible before deletion
+                list_before = client.get("/experiments").json()
+                ids_before = [e["experiment_id"] for e in list_before]
+                assert "db-row-del-test" in ids_before
+
+                # Delete
+                resp = client.delete("/experiments/db-row-del-test")
+                assert resp.status_code == 204
+
+                # Experiment must NOT appear in list
+                list_after = client.get("/experiments").json()
+                ids_after = [e["experiment_id"] for e in list_after]
+                assert "db-row-del-test" not in ids_after
+
+                # Individual GET must return 404
+                get_resp = client.get("/experiments/db-row-del-test")
+                assert get_resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_delete_experiment_removes_runs_and_findings(tmp_path: Path):
+    """DELETE /experiments/{id} removes associated run and finding rows.
+
+    Seeds an experiment with one run and one finding, then verifies that
+    both db.list_runs and db.query_findings return empty after deletion.
+    """
+    db = Database(tmp_path / "test.db")
+    await db.init()
+    c = _make_coordinator(tmp_path, db)
+
+    from sec_review_framework.coordinator import _seed_builtin_strategies
+    await _seed_builtin_strategies(db)
+
+    exp_id = "findings-del-test"
+    matrix = ExperimentMatrix(
+        experiment_id=exp_id,
+        dataset_name="ds",
+        dataset_version="1.0",
+        strategy_ids=["builtin.single_agent"],
+    )
+    await c.submit_experiment(matrix)
+
+    # Grab the first run ID created by submit_experiment
+    runs = await db.list_runs(exp_id)
+    assert runs, "Expected at least one run to be created by submit_experiment"
+    run_id = runs[0]["id"]
+
+    # Seed a finding for that run
+    await db.upsert_findings_for_run(
+        run_id=run_id,
+        experiment_id=exp_id,
+        findings=[{
+            "id": "finding-001",
+            "file_path": "src/main.py",
+            "line_start": 10,
+            "line_end": 15,
+            "vuln_class": "SQL Injection",
+            "cwe_ids": ["CWE-89"],
+            "severity": "high",
+            "confidence": 0.9,
+            "title": "SQL Injection in query()",
+            "description": "User input not sanitised",
+            "match_status": "true_positive",
+        }],
+        model_id="claude-opus-4-5",
+        strategy="builtin.single_agent",
+        dataset_name="ds",
+    )
+
+    # Verify finding is indexed
+    total_before, _ = await db.query_findings(
+        filters={"experiment_id": [exp_id]},
+    )
+    assert total_before == 1
+
+    # Delete via API
+    with patch.object(coord_module, "coordinator", c):
+        with patch.object(c, "reconcile", return_value=None):
+            with TestClient(app, raise_server_exceptions=True) as client:
+                resp = client.delete(f"/experiments/{exp_id}")
+                assert resp.status_code == 204
+
+    # Runs must be gone
+    runs_after = await db.list_runs(exp_id)
+    assert runs_after == [], f"Expected no runs after deletion, got {runs_after}"
+
+    # Findings must be gone
+    total_after, rows_after = await db.query_findings(
+        filters={"experiment_id": [exp_id]},
+    )
+    assert total_after == 0, f"Expected 0 findings after deletion, got {total_after}"
+    assert rows_after == []
+
+
+@pytest.mark.asyncio
+async def test_delete_experiment_idempotent_for_missing(tmp_path: Path):
+    """DELETE on a nonexistent experiment_id returns 204 with no error."""
+    db = Database(tmp_path / "test.db")
+    await db.init()
+    c = _make_coordinator(tmp_path, db)
+
+    with patch.object(coord_module, "coordinator", c):
+        with patch.object(c, "reconcile", return_value=None):
+            with TestClient(app, raise_server_exceptions=True) as client:
+                resp = client.delete("/experiments/does-not-exist-at-all")
+                assert resp.status_code == 204

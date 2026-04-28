@@ -1132,6 +1132,45 @@ class Database:
             await db.commit()
             return deleted
 
+    async def delete_experiment(self, experiment_id: str) -> None:
+        """Remove all DB rows for *experiment_id* in a single connection.
+
+        Deletes child rows before the parent to satisfy foreign-key ordering:
+          1. findings (references both runs and experiments)
+          2. run_upload_tokens (references runs)
+          3. runs (references experiments)
+          4. experiments
+
+        The findings_fts_ad trigger fires for each deleted finding row, so
+        the FTS index stays consistent without any extra work here.
+
+        Safe to call for a non-existent experiment_id — the DELETEs are
+        no-ops and no error is raised.
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "DELETE FROM findings WHERE experiment_id = ?",
+                (experiment_id,),
+            )
+            await db.execute(
+                """
+                DELETE FROM run_upload_tokens
+                WHERE run_id IN (
+                    SELECT id FROM runs WHERE experiment_id = ?
+                )
+                """,
+                (experiment_id,),
+            )
+            await db.execute(
+                "DELETE FROM runs WHERE experiment_id = ?",
+                (experiment_id,),
+            )
+            await db.execute(
+                "DELETE FROM experiments WHERE id = ?",
+                (experiment_id,),
+            )
+            await db.commit()
+
     # ---------------------------------------------------------------------------
     # Datasets
     # ---------------------------------------------------------------------------

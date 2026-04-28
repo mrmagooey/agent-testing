@@ -950,6 +950,8 @@ class ExperimentCoordinator:
             run_config = config_dir / f"{run['id']}.json"
             if run_config.exists():
                 run_config.unlink()
+        # Remove all DB rows for the experiment (findings → runs → experiment).
+        await self.db.delete_experiment(experiment_id)
 
     # ------------------------------------------------------------------
     # Reconciliation (called at startup)
