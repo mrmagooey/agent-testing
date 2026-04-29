@@ -430,7 +430,18 @@ export default function Dashboard() {
                       <td className="py-2.5 text-xs text-muted-foreground font-mono tabular-nums">
                         {b.completed_at ? formatDate(b.completed_at) : '—'}
                       </td>
-                      <td className="py-2.5 text-right font-mono tabular-nums text-xs">{b.total_runs}</td>
+                      <td className="py-2.5 text-right font-mono tabular-nums text-xs">
+                        {b.total_runs}
+                        {b.failed_runs > 0 && (
+                          <span
+                            data-testid="dashboard-recent-failed-count"
+                            className="ml-2 text-signal-danger font-mono text-[10px] uppercase tracking-wider"
+                            title={`${b.failed_runs} of ${b.total_runs} runs failed`}
+                          >
+                            {b.failed_runs} failed
+                          </span>
+                        )}
+                      </td>
                       <td className="py-2.5 text-right font-mono tabular-nums text-xs">
                         ${b.total_cost_usd.toFixed(2)}
                       </td>

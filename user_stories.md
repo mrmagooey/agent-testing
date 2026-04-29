@@ -1931,6 +1931,22 @@ Covers four Playwright assertions: (1) the Status filter button appears in the `
 
 ---
 
+### 67. Dashboard Recent Experiments row surfaces failed-runs count
+
+**Spec:** `frontend/e2e/dashboard-recent-failed-runs.spec.ts` (NEW)
+**Frontend fix:** `frontend/src/pages/Dashboard.tsx` (Runs cell)
+
+> As a security researcher scanning the Dashboard for experiments
+> that need triage, I want completed experiments with non-zero
+> failed_runs to render a visible "N failed" annotation alongside
+> the total — currently the Runs cell shows just '40' for an
+> experiment with 2 failures, giving no signal that any runs
+> need attention until I drill in.
+
+Covers five Playwright assertions: (1) the `data-testid="dashboard-recent-failed-count"` annotation is visible in the cccccccc row and contains the text "2 failed"; (2) the annotation is absent (`toHaveCount(0)`) in the aaaaaaaa row which has zero failures; (3) the annotation element carries `title="2 of 40 runs failed"` for a hover tooltip; (4) the cccccccc runs cell still visibly contains "40" — confirming the failed annotation is additive, not a replacement for the total; and (5) the annotation element has the `text-signal-danger` class, proving the visual signal uses the correct danger tone.
+
+---
+
 ## Candidate stories for future iterations
 
 Listed roughly in order of estimated value vs implementation effort. Each
