@@ -146,7 +146,7 @@ function OriginCard({
   return (
     <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 space-y-4">
       <h2 className="font-semibold text-sm">
-        {dataset.kind === 'git' ? 'Git origin' : 'Derived from'}
+        {dataset.kind === 'git' ? 'Git origin' : dataset.kind === 'archive' ? 'Archive origin' : 'Derived from'}
       </h2>
 
       {dataset.kind === 'git' ? (
@@ -194,6 +194,56 @@ function OriginCard({
               >
                 {dataset.cve_id}
               </Link>
+            </div>
+          )}
+        </div>
+      ) : dataset.kind === 'archive' ? (
+        <div className="space-y-2 text-sm">
+          {dataset.archive_url ? (
+            <div className="flex items-center gap-2">
+              <span className="text-gray-500 dark:text-gray-400 w-28 shrink-0">URL</span>
+              {/^https?:\/\//.test(dataset.archive_url) ? (
+                <a
+                  href={dataset.archive_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-mono text-amber-600 dark:text-amber-400 hover:underline break-all"
+                  data-testid="archive-url-link"
+                >
+                  {dataset.archive_url}
+                </a>
+              ) : (
+                <span className="font-mono text-gray-800 dark:text-gray-200 break-all">
+                  {dataset.archive_url}
+                </span>
+              )}
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <span className="text-gray-500 dark:text-gray-400 w-28 shrink-0">URL</span>
+              <span className="text-gray-400 dark:text-gray-500">—</span>
+            </div>
+          )}
+          {dataset.archive_sha256 ? (
+            <div className="flex items-center gap-2">
+              <span className="text-gray-500 dark:text-gray-400 w-28 shrink-0">Sha256</span>
+              <span className="font-mono text-gray-800 dark:text-gray-200" data-testid="archive-sha256">
+                {dataset.archive_sha256.slice(0, 12)}
+                <CopyButton text={dataset.archive_sha256} />
+              </span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <span className="text-gray-500 dark:text-gray-400 w-28 shrink-0">Sha256</span>
+              <span className="text-gray-400 dark:text-gray-500">—</span>
+            </div>
+          )}
+          {dataset.archive_format && (
+            <div className="flex items-center gap-2">
+              <span className="text-gray-500 dark:text-gray-400 w-28 shrink-0">Format</span>
+              <span className="font-mono text-gray-800 dark:text-gray-200" data-testid="archive-format">
+                {dataset.archive_format}
+              </span>
             </div>
           )}
         </div>

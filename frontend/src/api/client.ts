@@ -552,7 +552,7 @@ export function getLabels(
 
 export interface DatasetRow {
   name: string
-  kind: 'git' | 'derived'
+  kind: 'git' | 'derived' | 'archive'
   origin_url: string | null
   origin_commit: string | null
   origin_ref: string | null
@@ -562,6 +562,9 @@ export interface DatasetRow {
   metadata: Record<string, unknown>
   created_at: string
   materialized_at: string | null
+  archive_url?: string | null
+  archive_sha256?: string | null
+  archive_format?: string | null
 }
 
 export function getDataset(name: string): Promise<DatasetRow> {
