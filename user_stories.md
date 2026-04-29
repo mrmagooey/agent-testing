@@ -1894,6 +1894,25 @@ Covers five Playwright assertions: (1) the `data-testid="run-error-banner"` elem
 
 ---
 
+### 65. MatrixTable surfaces failed-run status pill and error in the expand row
+
+**Spec:** `frontend/e2e/matrix-table-failed-runs.spec.ts` (NEW)
+**Frontend fix:** `frontend/src/components/MatrixTable.tsx` (status pill on
+non-completed rows + status + error rows in expanded detail)
+
+> As a security researcher scanning an experiment matrix that contains a
+> mix of completed and failed runs, I want failed/cancelled runs to be
+> visually distinct from completed-with-low-metrics runs — currently every
+> failed run renders identically to a row whose metrics happened to be 0
+> (all metric cells show '—'), so I can't tell whether the strategy
+> performed badly or never ran. I also want the run.error to appear in
+> the expand row so I don't have to drill into the run detail page just
+> to triage which failures are framework bugs vs. genuine model failures.
+
+Covers five Playwright assertions: (1) the failed run's table row contains a `data-testid="matrix-row-status-pill"` element with the text "failed" visible in the expand-toggle cell; (2) the cancelled run's row contains the same pill testid with text "cancelled"; (3) completed-run rows contain no status pill at all (`toHaveCount(0)`); (4) clicking the expand toggle on the failed run reveals a `data-testid="matrix-row-error"` block containing the full verbatim error string from the fixture; and (5) clicking the expand toggle on a completed run leaves the error testid absent (`toHaveCount(0)`).
+
+---
+
 ## Candidate stories for future iterations
 
 Listed roughly in order of estimated value vs implementation effort. Each

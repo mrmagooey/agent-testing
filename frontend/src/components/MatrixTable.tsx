@@ -41,12 +41,19 @@ const METRIC_COLS: { key: keyof Run; label: string; kind?: 'lower-is-better' }[]
 ]
 
 const DETAIL_COLS: { key: keyof Run; label: string }[] = [
+  { key: 'status', label: 'Status' },
   { key: 'profile', label: 'Profile' },
   { key: 'verification', label: 'Verif.' },
   { key: 'tp_count', label: 'TP' },
   { key: 'fp_count', label: 'FP' },
   { key: 'fn_count', label: 'FN' },
 ]
+
+const STATUS_PILL_CLASSES: Record<string, string> = {
+  failed: 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300',
+  cancelled: 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300',
+  running: 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300',
+}
 
 const AUX_COLS: { key: keyof Run; label: string }[] = [
   { key: 'cost_usd', label: 'Cost' },
@@ -228,13 +235,26 @@ export default function MatrixTable({ runs, onSelect, selectedIds = [] }: Matrix
                       </TableCell>
                       {/* expand toggle */}
                       <TableCell className={cn(stickyBase, 'left-8 px-2 py-2 z-10', rowBase)}>
-                        <button
-                          onClick={(e) => toggleExpand(run.run_id, e)}
-                          className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 text-xs leading-none focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:outline-none rounded"
-                          title={isExpanded ? 'Collapse details' : 'Expand details'}
-                        >
-                          {isExpanded ? '▲' : '▼'}
-                        </button>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={(e) => toggleExpand(run.run_id, e)}
+                            className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 text-xs leading-none focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:outline-none rounded"
+                            title={isExpanded ? 'Collapse details' : 'Expand details'}
+                          >
+                            {isExpanded ? '▲' : '▼'}
+                          </button>
+                          {run.status !== 'completed' && (
+                            <span
+                              data-testid="matrix-row-status-pill"
+                              className={cn(
+                                'text-[10px] font-mono uppercase px-1.5 py-0.5 rounded whitespace-nowrap',
+                                STATUS_PILL_CLASSES[run.status] ?? 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
+                              )}
+                            >
+                              {run.status}
+                            </span>
+                          )}
+                        </div>
                       </TableCell>
                       {/* sticky identity cols */}
                       {activeStickyColsArray.map((col, i) => {
@@ -306,6 +326,15 @@ export default function MatrixTable({ runs, onSelect, selectedIds = [] }: Matrix
                               </div>
                             ))}
                           </dl>
+                          {run.error && (
+                            <div
+                              data-testid="matrix-row-error"
+                              className="mt-2 rounded border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950 p-2 text-xs text-red-700 dark:text-red-300"
+                            >
+                              <span className="font-mono uppercase tracking-wider mr-2">Error:</span>
+                              <span className="font-mono whitespace-pre-wrap break-words">{run.error}</span>
+                            </div>
+                          )}
                         </TableCell>
                       </TableRow>
                     )}
