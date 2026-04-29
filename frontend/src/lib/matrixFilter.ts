@@ -6,10 +6,11 @@ export interface MatrixFilter {
   tool: string[]
   ext: string[]
   profile: string[]
+  status: string[]
 }
 
 export function clearMatrixFilter(): MatrixFilter {
-  return { model: [], strategy: [], tool: [], ext: [], profile: [] }
+  return { model: [], strategy: [], tool: [], ext: [], profile: [], status: [] }
 }
 
 export function isEmpty(f: MatrixFilter): boolean {
@@ -18,7 +19,8 @@ export function isEmpty(f: MatrixFilter): boolean {
     f.strategy.length === 0 &&
     f.tool.length === 0 &&
     f.ext.length === 0 &&
-    f.profile.length === 0
+    f.profile.length === 0 &&
+    f.status.length === 0
   )
 }
 
@@ -38,12 +40,13 @@ export function parseMatrixFilter(params: URLSearchParams): MatrixFilter {
     tool: splitParam(params.get('tool')),
     ext: splitParam(params.get('ext')),
     profile: splitParam(params.get('profile')),
+    status: splitParam(params.get('status')),
   }
 }
 
 export function serializeMatrixFilter(f: MatrixFilter): URLSearchParams {
   const p = new URLSearchParams()
-  const keys: (keyof MatrixFilter)[] = ['ext', 'model', 'profile', 'strategy', 'tool']
+  const keys: (keyof MatrixFilter)[] = ['ext', 'model', 'profile', 'status', 'strategy', 'tool']
   for (const key of keys) {
     const vals = f[key]
     if (vals.length > 0) {
@@ -66,6 +69,7 @@ export function applyMatrixFilter(runs: Run[], f: MatrixFilter): Run[] {
       if (!hasMatch) return false
     }
     if (f.profile.length > 0 && !f.profile.includes(run.profile)) return false
+    if (f.status.length > 0 && !f.status.includes(run.status)) return false
     return true
   })
 }

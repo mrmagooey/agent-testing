@@ -1913,6 +1913,24 @@ Covers five Playwright assertions: (1) the failed run's table row contains a `da
 
 ---
 
+### 66. MatrixFilterBar adds a Status dimension so users can isolate failed runs
+
+**Spec:** `frontend/e2e/matrix-filter-status.spec.ts` (NEW)
+**Frontend fix:** `frontend/src/lib/matrixFilter.ts`,
+`frontend/src/components/MatrixFilterBar.tsx`,
+`frontend/src/__tests__/lib/matrixFilter.test.ts`
+
+> As a security researcher with a 40-run matrix that contains a mix of
+> completed and failed runs, I want to filter the matrix down to only
+> the failed runs (or only the cancelled runs) — currently the matrix
+> filter offers Model, Strategy, Tools, Extensions, and Profile but
+> not Status, so I can't isolate the failures Story 65's pill made
+> visible.
+
+Covers four Playwright assertions: (1) the Status filter button appears in the `MatrixFilterBar` when the runs fixture contains a mix of completed, failed, and cancelled runs; (2) the Status filter button is absent when all runs share the same status (single-option dimensions are hidden by the existing `allDims.filter` guard); (3) selecting "failed" from the Status popover filters the table so only the `few_shot` (failed) row remains and the `zero_shot` (completed) and `agent` (cancelled) rows are gone; and (4) after applying the status=failed filter the page URL contains `status=failed`, confirming the filter is serialized to the address bar.
+
+---
+
 ## Candidate stories for future iterations
 
 Listed roughly in order of estimated value vs implementation effort. Each

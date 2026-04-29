@@ -30,7 +30,7 @@ function makeRun(overrides: Partial<Run> = {}): Run {
 describe('clearMatrixFilter', () => {
   it('returns an object with all empty arrays', () => {
     const f = clearMatrixFilter()
-    expect(f).toEqual({ model: [], strategy: [], tool: [], ext: [], profile: [] })
+    expect(f).toEqual({ model: [], strategy: [], tool: [], ext: [], profile: [], status: [] })
   })
 })
 
@@ -45,6 +45,7 @@ describe('isEmpty', () => {
     expect(isEmpty({ ...clearMatrixFilter(), tool: ['with_tools'] })).toBe(false)
     expect(isEmpty({ ...clearMatrixFilter(), ext: ['lsp'] })).toBe(false)
     expect(isEmpty({ ...clearMatrixFilter(), profile: ['strict'] })).toBe(false)
+    expect(isEmpty({ ...clearMatrixFilter(), status: ['failed'] })).toBe(false)
   })
 })
 
@@ -87,6 +88,12 @@ describe('parseMatrixFilter', () => {
     expect(f.tool).toEqual([])
     expect(f.ext).toEqual([])
     expect(f.profile).toEqual([])
+    expect(f.status).toEqual([])
+  })
+
+  it('parses status=failed,cancelled', () => {
+    const p = new URLSearchParams('status=failed,cancelled')
+    expect(parseMatrixFilter(p).status).toEqual(['failed', 'cancelled'])
   })
 
   it('parses all dimensions together', () => {
@@ -128,6 +135,18 @@ describe('serializeMatrixFilter', () => {
     expect(p.has('tool')).toBe(false)
     expect(p.has('ext')).toBe(false)
     expect(p.has('profile')).toBe(false)
+    expect(p.has('status')).toBe(false)
+  })
+
+  it('serializes status in alphabetical key order (between profile and strategy)', () => {
+    const f: MatrixFilter = { ...clearMatrixFilter(), model: ['gpt-4o'], status: ['failed'] }
+    const p = serializeMatrixFilter(f)
+    expect(p.get('status')).toBe('failed')
+    // Verify key order: ext < model < profile < status < strategy < tool
+    const keys = [...p.keys()]
+    const modelIdx = keys.indexOf('model')
+    const statusIdx = keys.indexOf('status')
+    expect(statusIdx).toBeGreaterThan(modelIdx)
   })
 
   it('round-trips through parse → serialize', () => {
@@ -137,6 +156,7 @@ describe('serializeMatrixFilter', () => {
       tool: ['with_tools'],
       ext: ['lsp'],
       profile: ['default'],
+      status: ['failed'],
     }
     const serialized = serializeMatrixFilter(original)
     const reparsed = parseMatrixFilter(serialized)
@@ -149,9 +169,9 @@ describe('serializeMatrixFilter', () => {
 describe('applyMatrixFilter', () => {
   const runs = [
     makeRun({ run_id: 'r1', model: 'gpt-4o', strategy: 'zero_shot', tool_variant: 'with_tools', profile: 'default', tool_extensions: ['lsp'] }),
-    makeRun({ run_id: 'r2', model: 'gpt-4o', strategy: 'chain_of_thought', tool_variant: 'without_tools', profile: 'strict', tool_extensions: [] }),
+    makeRun({ run_id: 'r2', model: 'gpt-4o', strategy: 'chain_of_thought', tool_variant: 'without_tools', profile: 'strict', tool_extensions: [], status: 'failed' }),
     makeRun({ run_id: 'r3', model: 'claude-3-5-sonnet', strategy: 'zero_shot', tool_variant: 'with_tools', profile: 'default', tool_extensions: ['tree_sitter', 'lsp'] }),
-    makeRun({ run_id: 'r4', model: 'claude-3-5-sonnet', strategy: 'chain_of_thought', tool_variant: 'without_tools', profile: 'strict', tool_extensions: undefined }),
+    makeRun({ run_id: 'r4', model: 'claude-3-5-sonnet', strategy: 'chain_of_thought', tool_variant: 'without_tools', profile: 'strict', tool_extensions: undefined, status: 'cancelled' }),
   ]
 
   it('returns all runs when filter is empty', () => {
@@ -224,5 +244,25 @@ describe('applyMatrixFilter', () => {
   it('returns all runs unchanged when filter is empty passthrough', () => {
     const result = applyMatrixFilter(runs, clearMatrixFilter())
     expect(result).toBe(runs)
+  })
+
+  it('filters by status: only failed runs survive', () => {
+    const f: MatrixFilter = { ...clearMatrixFilter(), status: ['failed'] }
+    const result = applyMatrixFilter(runs, f)
+    expect(result.map((r) => r.run_id)).toEqual(['r2'])
+  })
+
+  it('filters by status: multiple values (OR within dimension)', () => {
+    const f: MatrixFilter = { ...clearMatrixFilter(), status: ['failed', 'cancelled'] }
+    const result = applyMatrixFilter(runs, f)
+    expect(result.map((r) => r.run_id)).toEqual(['r2', 'r4'])
+  })
+
+  it('filters by status combined with another dimension (AND across dimensions)', () => {
+    // r2 is gpt-4o + failed; r4 is claude-3-5-sonnet + cancelled
+    // model=gpt-4o AND status=failed → only r2
+    const f: MatrixFilter = { ...clearMatrixFilter(), model: ['gpt-4o'], status: ['failed'] }
+    const result = applyMatrixFilter(runs, f)
+    expect(result.map((r) => r.run_id)).toEqual(['r2'])
   })
 })

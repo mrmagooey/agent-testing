@@ -152,6 +152,11 @@ export default function MatrixFilterBar({ runs, value, onChange }: MatrixFilterB
         label: 'Profile',
         values: unique(runs.map((r) => r.profile)),
       },
+      {
+        key: 'status',
+        label: 'Status',
+        values: unique(runs.map((r) => r.status)),
+      },
     ]
 
     // Hide dimensions with ≤1 unique value
