@@ -278,8 +278,6 @@ workerTools:
       - typescript-language-server
       - rust-analyzer
       - clangd
-      # jdtls added by D4 (Java integration); D2 installs the binary in Dockerfile.worker
-      - jdtls
   semgrep:
     enabled: true
   devdocs:
