@@ -1,0 +1,52 @@
+{
+  "run_id": "run-001-aaa",
+  "experiment_id": "aaaaaaaa-0001-0001-0001-000000000001",
+  "model": "gpt-4o",
+  "strategy": "zero_shot",
+  "tool_variant": "with_tools",
+  "profile": "default",
+  "verification": "none",
+  "status": "failed",
+  "error": "run_strategy: pydantic-ai produced an unexpected response for strategy 'builtin.single_agent': Exceeded maximum retries (1) for output validation",
+  "precision": 0,
+  "recall": 0,
+  "f1": 0,
+  "fpr": 0,
+  "tp_count": 0,
+  "fp_count": 0,
+  "fn_count": 0,
+  "cost_usd": 0.312,
+  "duration_seconds": 145,
+  "started_at": "2026-04-17T08:02:00Z",
+  "completed_at": "2026-04-17T08:04:25Z",
+  "findings": [],
+  "tool_calls": [
+    {
+      "tool_name": "read_file",
+      "input": {"path": "src/auth/login.py"},
+      "timestamp": "2026-04-17T08:02:15Z",
+      "flagged": false
+    }
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": "Analyze the codebase for security vulnerabilities.",
+      "timestamp": "2026-04-17T08:02:00Z"
+    },
+    {
+      "role": "assistant",
+      "content": "I'll systematically review the codebase for security issues.",
+      "timestamp": "2026-04-17T08:02:10Z"
+    }
+  ],
+  "prompt_snapshot": {
+    "system_prompt": "You are an expert security code reviewer.",
+    "user_message_template": "You are a security code reviewer. Perform a comprehensive security audit of the following codebase.",
+    "review_profile_modifier": null,
+    "finding_output_format": "Output your findings as a JSON array.",
+    "clean_prompt": null,
+    "injected_prompt": null,
+    "injection_template_id": null
+  }
+}

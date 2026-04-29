@@ -210,6 +210,17 @@ export default function RunDetail() {
           ))}
         </dl>
 
+        {run.error && (
+          <div
+            role="alert"
+            data-testid="run-error-banner"
+            className="rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950 p-4 text-red-700 dark:text-red-300 mt-4"
+          >
+            <p className="font-mono text-xs uppercase tracking-wider mb-2">Run error</p>
+            <p className="font-mono text-sm whitespace-pre-wrap break-words">{run.error}</p>
+          </div>
+        )}
+
         <CostBadge costUsd={run.cost_usd} durationSeconds={run.duration_seconds} />
       </div>
 

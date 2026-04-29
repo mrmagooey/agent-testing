@@ -40,6 +40,7 @@ export interface Run {
   duration_seconds?: number
   started_at?: string
   completed_at?: string
+  error?: string | null
 }
 
 export interface Finding {

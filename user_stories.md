@@ -1877,6 +1877,23 @@ failure mode is still caught and fails the test.
 
 ---
 
+### 64. RunDetail surfaces the worker's error message when status is failed
+
+**Spec:** `frontend/e2e/run-detail-error-banner.spec.ts` (NEW)
+**Frontend fix:** `frontend/src/api/client.ts` (`Run` type + new `error` field),
+`frontend/src/pages/RunDetail.tsx` (error banner)
+
+> As a security researcher whose run failed (e.g. because the local model
+> couldn't produce parseable structured output, the LLM provider returned
+> a 4xx, or the strategy crashed), I want the run-detail page to show the
+> exact error message — currently I see a red 'failed' badge with no
+> explanation, and have to dig into the API response or run_result.json
+> to find out what went wrong.
+
+Covers five Playwright assertions: (1) the `data-testid="run-error-banner"` element is visible for a failed run and contains both the "Run error" heading text and the full error string; (2) the banner carries `role="alert"` for screen-reader accessibility; (3) the banner is absent when the run status is `completed` and `error` is null; (4) the existing "failed" status badge still renders alongside the banner — confirming the banner is additive, not a replacement; and (5) an error string containing a literal newline character is rendered with `whitespace-pre-wrap` so the line break is preserved in the browser's inner text.
+
+---
+
 ## Candidate stories for future iterations
 
 Listed roughly in order of estimated value vs implementation effort. Each
