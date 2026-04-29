@@ -8,7 +8,7 @@ Tests cover:
 - Empty allowlist                                    → all datasets dispatch.
 - Error occurs before any worker invocation (coordinator.submit_experiment
   is never called when the gate fires).
-- Default allowlist is ["python", "java"].
+- Default allowlist is [] (empty = gate disabled, all languages allowed).
 - Round-trip serialization preserves language_allowlist.
 """
 
@@ -143,15 +143,16 @@ def _make_test_client(coordinator: ExperimentCoordinator):
 class TestLanguageAllowlistField:
     """The language_allowlist field on ExperimentMatrix."""
 
-    def test_default_allowlist_is_python_and_java(self):
-        """Default language_allowlist must be ['python', 'java']."""
+    def test_default_allowlist_is_empty(self):
+        """Default language_allowlist must be [] so the gate is disabled and all
+        languages dispatch. Operators can populate it explicitly to restrict."""
         matrix = ExperimentMatrix(
             experiment_id="exp",
             dataset_name="ds",
             dataset_version="1.0",
             strategy_ids=["builtin.single_agent"],
         )
-        assert matrix.language_allowlist == ["python", "java"]
+        assert matrix.language_allowlist == []
 
     def test_custom_allowlist_set_correctly(self):
         """A custom allowlist is stored verbatim."""
@@ -201,7 +202,7 @@ class TestLanguageAllowlistField:
         # Field must be present in serialized output (exclude=False is the default)
         assert "language_allowlist" in data
         restored = ExperimentMatrix.model_validate_json(serialized)
-        assert restored.language_allowlist == ["python", "java"]
+        assert restored.language_allowlist == []
 
     def test_old_experiment_without_allowlist_gets_default_on_load(self):
         """Experiments serialized without language_allowlist get the default on load."""
@@ -213,7 +214,7 @@ class TestLanguageAllowlistField:
             # language_allowlist intentionally absent — simulates pre-this-change serialized data
         })
         restored = ExperimentMatrix.model_validate_json(old_json)
-        assert restored.language_allowlist == ["python", "java"]
+        assert restored.language_allowlist == []
 
 
 # ---------------------------------------------------------------------------

@@ -193,11 +193,12 @@ class ExperimentMatrix(BaseModel):
     verifier_model_id: str | None = None
 
     language_allowlist: list[str] = Field(
-        default_factory=lambda: ["python", "java"],
+        default_factory=list,
         description=(
             "Languages this experiment is prepared to evaluate. Datasets whose "
             "metadata_json.language is not in this list are refused at dispatch "
-            "with a clear error. Empty list disables the gate."
+            "with a clear error. Empty list (the default) disables the gate so "
+            "all languages are allowed; populate explicitly to restrict."
         ),
     )
 
