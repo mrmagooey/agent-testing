@@ -1947,6 +1947,23 @@ Covers five Playwright assertions: (1) the `data-testid="dashboard-recent-failed
 
 ---
 
+### 68. Live LiteLLMEndpointProbe discovers models served by the local OpenAI-compatible provider
+
+**Spec:** `tests/e2e/test_live_endpoint_probe.py` (NEW)
+
+> As a security researcher pointing the framework at my local
+> OpenAI-compatible server (e.g. llama.cpp at `http://192.168.7.100:8080`),
+> I want a live probe to round-trip against the actual /v1/models
+> endpoint and return a `ProviderSnapshot` with `probe_status="fresh"`
+> and the served model IDs — so the framework's model-availability
+> bookkeeping that drives Settings → LLM Providers and the experiment
+> submission gate is verified end-to-end against my real local
+> provider, not just against mocked litellm.get_valid_models calls.
+
+Covers three tests: (1) `test_probe_returns_fresh_status_against_local_provider` — probes the live endpoint and asserts `probe_status="fresh"`, `last_error=None`, at least one model ID, and a non-None `fetched_at`; (2) `test_probe_discovers_at_least_one_known_model` — asserts that at least one returned model ID carries the default `"openai/"` prefix, confirming the prefix-application logic runs against real data; (3) `test_probe_returns_disabled_when_api_base_env_unset` — builds a probe pointed at a guaranteed-absent env var and asserts `probe_status="disabled"` with the var name in `last_error`; this control test runs unconditionally in offline CI.
+
+---
+
 ## Candidate stories for future iterations
 
 Listed roughly in order of estimated value vs implementation effort. Each
