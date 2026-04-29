@@ -482,14 +482,17 @@ async def test_cold_cache_cve_skipped_not_raised(
     )
     csv_path = _write_csv(tmp_path, _SAMPLE_ROWS)
 
-    # Patch the network fetch to simulate no-network
-    import sec_review_framework.ground_truth.crossvul_importer as crossvul_mod
+    # Patch the network fetch to simulate no-network. The big_vul_importer
+    # binds _fetch_github_patch into its own namespace at import time, so
+    # patching the crossvul module's attribute would have no effect — patch
+    # the symbol on the big_vul_importer module instead.
+    import sec_review_framework.ground_truth.big_vul_importer as bigvul_mod
 
     def _no_network(project_url: str, commit_hash: str) -> str:
         raise RuntimeError(f"cache miss: no network for {commit_hash[:8]}")
 
-    original_fetch = crossvul_mod._fetch_github_patch
-    crossvul_mod._fetch_github_patch = _no_network  # type: ignore[assignment]
+    original_fetch = bigvul_mod._fetch_github_patch
+    bigvul_mod._fetch_github_patch = _no_network  # type: ignore[assignment]
     try:
         result = await import_big_vul(
             db,
@@ -497,7 +500,7 @@ async def test_cold_cache_cve_skipped_not_raised(
             fix_clone_root=fix_clone_root,
         )
     finally:
-        crossvul_mod._fetch_github_patch = original_fetch  # type: ignore[assignment]
+        bigvul_mod._fetch_github_patch = original_fetch  # type: ignore[assignment]
 
     # The cold-cache CVE must be skipped, not raised as an error
     assert result.skipped_cves >= 1
