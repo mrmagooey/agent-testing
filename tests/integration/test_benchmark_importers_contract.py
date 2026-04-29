@@ -3,23 +3,16 @@
 Each parametrised case runs an importer end-to-end against an in-memory
 Database and asserts the shared metadata contract.
 
-Importers exercised (6 of 9 run; 3 skipped — see individual skip reasons):
-  RUNS:
-    1. BenchmarkPython   (git, paired-polarity, per-test-file, Python)
-    2. BenchmarkJava     (git, paired-polarity, per-test-file, Java)
-    3. Bandit functional (git, polarity from severity, Python)
-    4. SARD              (archive, paired-polarity, multi-language)
-    5. CodeQL            (git, paired-polarity, multi-language)
-    6. MITRE demo        (archive, code-snippet positives + negatives)
-
-  SKIPPED:
-    7. CVEfixes  — importer expects a real multi-table SQLite with ~5k rows;
-                   creating a conformant synthetic DB is disproportionate
-                   fixture work for an integration-tier test.
-    8. CrossVul  — same reason as CVEfixes: requires pre-populated diff cache
-                   with network-shaped GitHub patch data.
-    9. Big-Vul   — same reason: needs a large synthesised CSV + diff cache;
-                   adequate coverage already provided by the unit tests.
+Importers exercised (9 of 9 run; 0 skipped):
+  1. BenchmarkPython   (git, paired-polarity, per-test-file, Python)
+  2. BenchmarkJava     (git, paired-polarity, per-test-file, Java)
+  3. Bandit functional (git, polarity from severity, Python)
+  4. SARD              (archive, paired-polarity, multi-language)
+  5. CodeQL            (git, paired-polarity, multi-language)
+  6. MITRE demo        (archive, code-snippet positives + negatives)
+  7. CVEfixes          (derived, positives-only, multi-language)
+  8. CrossVul          (derived, positives-only, multi-language)
+  9. Big-Vul           (derived, paired-polarity, C/C++)
 """
 
 from __future__ import annotations
@@ -429,6 +422,58 @@ async def _run_mitre(db: Database, tmp_path: Path) -> list[str]:
     return [result.dataset_name]
 
 
+# ---- CVEfixes --------------------------------------------------------------
+
+async def _run_cvefixes(db: Database, tmp_path: Path) -> list[str]:
+    from tests.unit.test_cvefixes_importer import _make_cvefixes_db
+    from sec_review_framework.ground_truth.cvefixes_importer import import_cvefixes
+
+    fixture_dir = tmp_path / "cvefixes_fixture"
+    fixture_dir.mkdir(parents=True, exist_ok=True)
+    db_path = _make_cvefixes_db(fixture_dir)
+    await import_cvefixes(db, cvefixes_db_path=db_path)
+    all_datasets = await db.list_datasets()
+    return [ds["name"] for ds in all_datasets]
+
+
+# ---- CrossVul --------------------------------------------------------------
+
+async def _run_crossvul(db: Database, tmp_path: Path) -> list[str]:
+    from tests.unit.test_crossvul_importer import (
+        _SAMPLE_RECORDS,
+        _write_manifest,
+        _populate_diff_cache,
+    )
+    from sec_review_framework.ground_truth.crossvul_importer import import_crossvul
+
+    fix_clone_root = tmp_path / "crossvul_cache"
+    fix_clone_root.mkdir(parents=True, exist_ok=True)
+    manifest = _write_manifest(tmp_path, _SAMPLE_RECORDS)
+    _populate_diff_cache(fix_clone_root, _SAMPLE_RECORDS)
+    await import_crossvul(db, manifest_path=manifest, fix_clone_root=fix_clone_root)
+    all_datasets = await db.list_datasets()
+    return [ds["name"] for ds in all_datasets]
+
+
+# ---- Big-Vul ---------------------------------------------------------------
+
+async def _run_big_vul(db: Database, tmp_path: Path) -> list[str]:
+    from tests.unit.test_big_vul_importer import (
+        _SAMPLE_ROWS,
+        _write_csv,
+        _populate_diff_cache,
+    )
+    from sec_review_framework.ground_truth.big_vul_importer import import_big_vul
+
+    fix_clone_root = tmp_path / "bigvul_cache"
+    fix_clone_root.mkdir(parents=True, exist_ok=True)
+    csv_path = _write_csv(tmp_path, _SAMPLE_ROWS)
+    _populate_diff_cache(fix_clone_root, _SAMPLE_ROWS)
+    await import_big_vul(db, csv_path=csv_path, fix_clone_root=fix_clone_root)
+    all_datasets = await db.list_datasets()
+    return [ds["name"] for ds in all_datasets]
+
+
 # ---------------------------------------------------------------------------
 # Parametrize table
 # ---------------------------------------------------------------------------
@@ -507,46 +552,35 @@ _CASES: list[tuple[str, Callable, _BenchmarkExpectation]] = [
     ),
     (
         "cvefixes",
-        None,
+        _run_cvefixes,
         _BenchmarkExpectation(
             label="CVEfixes",
-            expected_kind="derived",
+            expected_kind="git",
             is_paired=False,
             expected_sources={"cvefixes"},
-            skip_reason=(
-                "CVEfixes importer expects a real multi-table SQLite DB; "
-                "creating a conformant synthetic fixture is disproportionate "
-                "for integration-tier testing. Covered by unit tests."
-            ),
+            language_in_meta=True,
         ),
     ),
     (
         "crossvul",
-        None,
+        _run_crossvul,
         _BenchmarkExpectation(
             label="CrossVul",
-            expected_kind="derived",
+            expected_kind="git",
             is_paired=False,
             expected_sources={"crossvul"},
-            skip_reason=(
-                "CrossVul importer requires pre-populated diff cache with "
-                "network-shaped GitHub patch data. Covered by unit tests."
-            ),
+            language_in_meta=True,
         ),
     ),
     (
         "big_vul",
-        None,
+        _run_big_vul,
         _BenchmarkExpectation(
             label="BigVul",
-            expected_kind="derived",
+            expected_kind="git",
             is_paired=True,
             expected_sources={"bigvul"},
-            skip_reason=(
-                "Big-Vul importer needs a large synthesised CSV + diff cache; "
-                "disproportionate fixture work for integration tier. "
-                "Covered by unit tests."
-            ),
+            language_in_meta=True,
         ),
     ),
 ]
