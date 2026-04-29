@@ -11,6 +11,7 @@ dependencies = [
     "numpy>=2.2",
     "scipy>=1.15",
     "boto3>=1.42.93",
+    "defusedxml>=0.7",
 ]
 
 [project.optional-dependencies]
