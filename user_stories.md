@@ -1849,6 +1849,32 @@ the produced `RunResult` carries a non-empty `benchmark_scorecards` list
 with at least one CWE row. Tolerant of TP=0 (model may miss) but strict
 on the schema and that TN+FP+FN+TP equals the file count.
 
+### 63. Live worker run with `with_tools` variant exercises read_file in tool_calls.jsonl
+
+**Spec:** `tests/e2e/test_live_with_tools_run.py` (NEW)
+
+> As a security researcher pointing the framework at my local OpenAI-compatible
+> server (e.g. llama.cpp at `http://192.168.7.100:8080`), I want a live
+> end-to-end run with `tool_variant=WITH_TOOLS` to actually offer the
+> read-file/grep tools to the model AND record any invocations to
+> `tool_calls.jsonl` — so I can validate the tool-calling round-trip works
+> against my local provider before committing to a multi-strategy
+> experiment that depends on tool access.
+
+Skipped unless `LIVE_TEST_API_BASE` and `LIVE_TEST_MODEL_ID` are set. Builds a
+2-file synthetic dataset with a CWE-89 vulnerability in `helpers.py` and a thin
+entry-point in `app.py` that hints the model to inspect helpers; dispatches a
+single-strategy run via `ExperimentWorker` with `WITH_TOOLS`. Asserts the
+WITH_TOOLS plumbing — tools are registered, the model invokes them
+(`tool_call_count ≥ 1` required), and the round-trip is captured in both
+`tool_calls.jsonl` (each entry schema-valid with a registered `tool_name`) and
+`conversation.jsonl` (must contain ≥1 assistant message with a `tool_calls`
+block AND ≥1 `role==tool` result entry). The test is independent of whether
+pydantic-ai's structured-output parse succeeds: small models often fail that
+final step against the framework's typed-Findings schema, so a `FAILED` status
+is acceptable provided the error contains `"output validation"` — any other
+failure mode is still caught and fails the test.
+
 ---
 
 ## Candidate stories for future iterations
