@@ -1731,6 +1731,126 @@ test.
 
 ---
 
+## Benchmark expansion stories
+
+A second batch of stories driven by the multi-source ground-truth corpus
+expansion (Phases 1–7: BenchmarkPython/Java, CVEfixes, CrossVul, SARD,
+Bandit functional, Big-Vul, CodeQL test suites, MITRE Demonstrative
+Examples). These stories cover the new surfaces those importers added —
+multi-language datasets, `kind='archive'` content-addressed datasets,
+paired-polarity ground truth via `dataset_negative_labels`, the
+`language_allowlist` and `allow_benchmark_iteration` matrix gates, and
+the benchmark scorecard the worker computes against negative labels.
+Listed in the order they will be implemented.
+
+### 57. Datasets list surfaces benchmark cards with multi-language tags
+
+**Spec:** `frontend/e2e/benchmark-datasets-listing.spec.ts` (NEW)
+
+> As a security researcher landing on the Datasets page, I want benchmark
+> corpora (BenchmarkPython, BenchmarkJava, SARD-by-language, MITRE
+> Demonstrative Examples) to render alongside CVE/injected datasets with
+> their language tags and label counts visible — so I can pick a dataset
+> whose language matches the strategy I'm about to run without drilling
+> into each row first.
+
+Covers a fixture that adds five benchmark rows (one each: BenchmarkPython,
+BenchmarkJava, SARD-c, MITRE-CWE archive, Big-Vul). Asserts the row
+renders the language pills (one per element of `languages[]`), the
+`label_count`, and that clicking a benchmark row navigates to its
+detail page. Uses `mockApi(page)` plus a per-test override of
+`/api/datasets` returning the expanded list.
+
+### 58. Archive-kind dataset detail surfaces archive origin
+
+**Spec:** `frontend/e2e/benchmark-archive-origin.spec.ts` (NEW)
+**Frontend:** `frontend/src/pages/DatasetDetail.tsx` extension to handle
+`kind === 'archive'` (currently a kind-mismatch falls into the
+"Derived from" branch and shows nothing useful).
+
+> As a security researcher viewing a benchmark dataset that ships as a
+> downloadable archive (MITRE Demonstrative Examples, SARD), I want the
+> origin card to show the archive URL, the sha256 digest, and the format
+> (tar.gz / zip) — so I can independently verify the bytes I'm about to
+> review and cite the exact source in a write-up.
+
+Covers a dataset row with `kind: 'archive'` plus the archive URL, sha256,
+and format from `metadata`. Asserts the origin card heading reads
+"Archive origin" (not "Derived from"), and that all three fields appear
+with the sha256 truncated + copy button identical to the git-commit
+treatment. Verifies a missing sha256 still renders gracefully.
+
+### 59. Language allowlist server-side gates mismatched-language datasets
+
+**Spec:** `tests/integration/test_language_allowlist_endpoint.py` (NEW)
+
+> As a researcher running an experiment with `language_allowlist=['python']`,
+> I want the coordinator to reject the submission when the chosen dataset's
+> declared language is `java` — so I never burn LLM budget on a
+> language-mismatched dispatch that the worker would just refuse anyway.
+
+Covers three cases via the FastAPI test client: (a) allowlist is empty →
+submission accepted regardless of dataset language; (b) allowlist mismatches
+dataset's `metadata_json.language` → 400 with a message naming both the
+dataset language and the allowlist; (c) dataset has no `metadata_json.language`
+→ submission accepted with a logged warning (backward-compat path).
+
+### 60. Per-test-file iteration mode requires explicit cost-gate flag
+
+**Spec:** `tests/integration/test_per_test_file_iteration_endpoint.py` (NEW)
+
+> As a researcher about to run BenchmarkPython (which contains thousands
+> of test files), I want the coordinator to refuse a fan-out submission
+> unless I explicitly opt in via `allow_benchmark_iteration=true` — so I
+> can't accidentally trigger an N-times cost amplifier just by selecting
+> a per-file benchmark.
+
+Covers three cases: (a) dataset declares `iteration: per-test-file` and the
+matrix omits the flag → 400 mentioning `allow_benchmark_iteration`;
+(b) flag set + dataset materialized → submission expands runs to N
+(one per matched file); (c) flag set + dataset NOT materialized → 400
+mentioning materialization. Uses a tiny synthetic dataset (3 test files)
+to keep the fan-out cheap.
+
+### 61. Benchmark scorecard surfaces TN/FP from negative labels
+
+**Spec:** `tests/integration/test_paired_polarity_scorecard.py` (NEW)
+
+> As a researcher running a paired-polarity benchmark (BenchmarkPython,
+> BenchmarkJava, Big-Vul), I want the worker's scorecard to include
+> true-negatives and false-positives drawn from `dataset_negative_labels`
+> alongside the TPs/FNs from `dataset_labels` — so I get an honest
+> precision/recall/FP-rate readout instead of a positives-only
+> approximation.
+
+Covers a synthetic dataset seeded with 30 positive labels (CWE-89 SQLi)
+and 30 negative labels (same CWE), runs the scoring via
+`compute_benchmark_scorecard`, and asserts: TP+FN = 30, TN+FP = 30,
+the per-CWE row appears, and the aggregate `owasp_score = tpr - fpr`
+matches the expected formula. Also asserts the n<25 warning fires for
+a CWE with only 10 positives + 10 negatives.
+
+### 62. Live worker run produces benchmark scorecard against local provider
+
+**Spec:** `tests/e2e/test_live_benchmark_run.py` (NEW)
+
+> As a researcher pointing the framework at my local OpenAI-compatible
+> server (e.g. llama.cpp at `http://192.168.7.100:8080`), I want a small
+> end-to-end run on a benchmark-shaped dataset (positive + negative
+> labels, single CWE) to actually produce a benchmark scorecard with
+> populated TP/FP/TN/FN counts — so I can validate the full pipeline
+> before committing to a multi-thousand-file corpus.
+
+Skipped unless `LIVE_TEST_API_BASE` and `LIVE_TEST_MODEL_ID` are set
+(default config in CI: `LIVE_TEST_API_BASE=http://192.168.7.100:8080/v1`).
+Builds a 4-file synthetic dataset (2 positive, 2 negative) with a single
+CWE, dispatches a single-strategy run via `ExperimentWorker`, and asserts
+the produced `RunResult` carries a non-empty `benchmark_scorecards` list
+with at least one CWE row. Tolerant of TP=0 (model may miss) but strict
+on the schema and that TN+FP+FN+TP equals the file count.
+
+---
+
 ## Candidate stories for future iterations
 
 Listed roughly in order of estimated value vs implementation effort. Each
